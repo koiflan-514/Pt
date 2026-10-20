@@ -1,5 +1,7 @@
 # Accessibility
 
+English | [简体中文](zh-CN/accessibility.md)
+
 Pt exposes a platform-neutral accessibility model and ships an optional AT-SPI2
 bridge for Wayland desktops. The model is the contract: widgets derive a role,
 name, description, state, text and value from their kind and content, and the

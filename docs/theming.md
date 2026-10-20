@@ -1,5 +1,7 @@
 # Theming
 
+English | [简体中文](zh-CN/theming.md)
+
 Pt paints from a semantic token table rather than from per-widget literals.
 A theme is 38 color roles and 10 geometric metrics. Applications change the
 table at two levels:

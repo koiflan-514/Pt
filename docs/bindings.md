@@ -1,5 +1,7 @@
 # Pt language bindings
 
+English | [简体中文](zh-CN/bindings.md)
+
 Pt exposes one flat C ABI. The bindings are thin, hand-written layers over that
 ABI so the behaviour of a widget is identical from every language. The 0.10
 surface adds the combobox widget — modes, item list and per-item data and

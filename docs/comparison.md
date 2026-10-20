@@ -1,5 +1,7 @@
 # Pt and other GUI toolkits
 
+English | [简体中文](zh-CN/comparison.md)
+
 This is a qualitative comparison of Pt 1.0 with GTK 4, Qt Quick, Slint, egui,
 LVGL and Nuklear. It is written from the perspective of a C application on
 Linux/Wayland that wants native-looking windows, a small binding surface and

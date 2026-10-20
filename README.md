@@ -1,5 +1,7 @@
 # Pt
 
+English | [简体中文](README.zh-CN.md)
+
 **Pt** is a small, fast, Wayland-native GUI framework written in modern C23.
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
@@ -99,7 +101,7 @@ function reference and a compatibility policy; see
   accent text, status text and the focus ring clear AA. `test_theme` asserts
   the floors rather than describing them.
 
-## What is new in 1.0
+## What changed in 1.0
 
 1.0 freezes the 0.10 feature set without adding public API: the surface is 412
 functions, the object is `libpt.so.1`, and `api/pt.api` is the reviewed
@@ -559,6 +561,11 @@ continuously, which 0.10.0 fixed. Details, methodology and memory caveats are in
 - [Comparison with other toolkits](docs/comparison.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Release process](docs/release.md)
+
+The quickstart, bindings, theming, accessibility, migration and comparison
+guides also have [Simplified Chinese translations](README.zh-CN.md); the
+generated API reference, release records, roadmap and policy pages remain
+English-only.
 
 ## Limitations in 1.0
 

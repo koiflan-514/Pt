@@ -1,5 +1,7 @@
 # Pt quickstart
 
+English | [简体中文](zh-CN/quickstart.md)
+
 This guide covers the C API. The same object model is exposed by the C++,
 Python and Java bindings; see [bindings.md](bindings.md).
 

@@ -1,5 +1,7 @@
 # Migrating to Pt 1.0
 
+English | [简体中文](zh-CN/migration-1.0.md)
+
 This guide is for applications written against 0.8, 0.9 or 0.10. There is
 exactly **one** source and binary break in 1.0: the two drag helpers that 0.9
 deprecated were removed by the freeze. Everything else in this document is an
