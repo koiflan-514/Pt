@@ -562,9 +562,10 @@ continuously, which 0.10.0 fixed. Details, methodology and memory caveats are in
 - [Roadmap](docs/ROADMAP.md)
 - [Release process](docs/release.md)
 
-The quickstart, bindings, theming, accessibility, migration and comparison
-guides also have [Simplified Chinese translations](README.zh-CN.md); the
-generated API reference, release records, roadmap and policy pages remain
+The quickstart, architecture, bindings, theming, accessibility, RTL plan,
+migration and comparison guides also have
+[Simplified Chinese translations](README.zh-CN.md); the generated API reference,
+release records, roadmap, performance notes and policy pages remain
 English-only.
 
 ## Limitations in 1.0

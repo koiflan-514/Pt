@@ -478,7 +478,7 @@ pt_widget_clear_text_spans(label);
 `pt_widget_set_text` 替换整个字符串会清除它们，因为字节偏移不再描述新
 文本。文本段仅用于样式：它们不携带链接或嵌入对象，完整的双向段落布局仍
 留待 1.0 之后。方向模型、提议的追加式 API、逻辑到视觉偏移映射和一致性
-测试在 [RTL 方案](../rtl.md) 中说明。
+测试在 [RTL 方案](rtl.md) 中说明。
 
 ### 输入用途
 
@@ -1384,6 +1384,6 @@ Sanitizer 矩阵（包括 Python 和 Java 所需的 ASan 预加载）记录在
 ## 下一步
 
 - [绑定](bindings.md)：C++、Python 和 Java。
-- [架构](../architecture.md)：布局、绘制和 Wayland 内部实现。
+- [架构](architecture.md)：布局、绘制和 Wayland 内部实现。
 - [性能](../performance.md)：可复现的基准测试和预算。
 - [比较](../comparison.md)：Pt 与其他工具包的区别。

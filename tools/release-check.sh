@@ -198,8 +198,20 @@ for target in run-combobox run-cpp-combobox run-python-combobox run-java-combobo
     fi
 done
 
+section "Bilingual documentation"
+if python3 tools/check-bilingual-docs.py; then
+    pass "all public guides have Simplified Chinese counterparts"
+else
+    problem "the bilingual documentation check failed"
+fi
+
 section "Items this script cannot decide"
-open_item "freeze commit and annotated tag: left to the repository owner"
+if git -C "$root" rev-parse --verify -q HEAD >/dev/null 2>&1 &&
+    git -C "$root" rev-parse -q --verify "refs/tags/$version" >/dev/null 2>&1; then
+    pass "freeze commit and annotated tag $version are present"
+else
+    open_item "freeze commit and annotated tag: left to the repository owner"
+fi
 if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     open_item "live compositor present: run make check-wayland, make check-typing and the example smoke test"
 else

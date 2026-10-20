@@ -1,5 +1,7 @@
 # Right-to-left and bidirectional text
 
+English | [简体中文](zh-CN/rtl.md)
+
 Status: a post-1.0 plan. Nothing in this document is part of the 1.0.0 public
 surface. The 1.0 limitation is deliberate: the text model, the layout pass and
 the accessibility offsets are already public and cannot be redesigned in a

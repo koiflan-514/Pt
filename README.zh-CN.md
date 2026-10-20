@@ -56,7 +56,7 @@
   回调生命周期、单一错误模型以及若干系列例外：`window.h`/`overlay.h` 中的原生弹出层抓取、
   `dnd.h` 中的数据提供内容与流生命周期、`widget.h` 中三个文本输入状态推送时机，
   以及任意线程的值辅助函数。生成的 [API 参考](docs/api-reference.md)
-  将该块呈现为每个模块的前言，[architecture.md](docs/architecture.md)
+  将该块呈现为每个模块的前言，[架构](docs/zh-CN/architecture.md)
   按入口点类别公布线程表。
 - **只追加 ABI 闸门。** `tests/test_abi.c` 固定每个公共枚举值、
   无障碍状态和修饰键位、哨兵值和限制值、公共结构体的字段顺序以及版本宏一致性，
@@ -71,7 +71,7 @@
 - **文本接口与成文的 RTL 计划。** AT-SPI 桥现在将标签和文本区域视为一等文本对象：
   标签为只读，文本区域可选择且可编辑，两者都保留逻辑字符偏移。
   密码输入框报告其长度，而不暴露任何字符。
-  [RTL 计划](docs/rtl.md)记录了 1.0 之后的 API 形态、UBA 与整形管线、
+  [RTL 计划](docs/zh-CN/rtl.md)记录了 1.0 之后的 API 形态、UBA 与整形管线、
   UI 镜像规则、偏移映射以及一致性和测试义务；它是一项计划，不是 1.0 的承诺。
 - **经对比度校正的调色板。** 1.0 默认值将深色强调色改为 `3568E0`，
   将浅色强调色改为 `2559E6`，并加深浅色主题中的危险、成功和警告角色，
@@ -473,10 +473,10 @@ pkg-config --modversion pt
 - [快速入门](docs/zh-CN/quickstart.md)
 - [C API 参考](docs/api-reference.md)
 - [绑定](docs/zh-CN/bindings.md)
-- [架构](docs/architecture.md)
+- [架构](docs/zh-CN/architecture.md)
 - [主题](docs/zh-CN/theming.md)
 - [无障碍](docs/zh-CN/accessibility.md)
-- [从右到左文本计划](docs/rtl.md)
+- [从右到左文本计划](docs/zh-CN/rtl.md)
 - [迁移到 1.0](docs/zh-CN/migration-1.0.md)
 - [API 兼容性策略](docs/api-policy.md)
 - [性能](docs/performance.md)
@@ -484,8 +484,8 @@ pkg-config --modversion pt
 - [路线图](docs/ROADMAP.md)
 - [发布流程](docs/release.md)
 
-快速入门、绑定、主题、无障碍、迁移和比较指南提供简体中文版；生成的 API
-参考、发布记录、路线图和政策页面保留英文。
+快速入门、架构、绑定、主题、无障碍、RTL 计划、迁移和比较指南提供简体中文版；
+生成的 API 参考、发布记录、路线图、性能说明和政策页面保留英文。
 
 <a id="limitations-in-10"></a>
 
@@ -512,7 +512,7 @@ pkg-config --modversion pt
 - 样式化文本段覆盖标签和文本区域字节范围内的字重、倾斜、颜色、下划线、
   逐段字体族和逐段字号。没有双向文本段落布局，没有内联图像，
   也没有逐段拉伸或光学对齐，文本区域仍以统一的段落几何编辑纯文本。
-  1.0 之后的设计、兼容性规则和测试义务写在 [RTL 计划](docs/rtl.md)中。
+  1.0 之后的设计、兼容性规则和测试义务写在 [RTL 计划](docs/zh-CN/rtl.md)中。
 - 表格列保留应用设置的宽度，这些宽度在重新绑定和行回收后仍然有效；
   列可以隐藏、通过拖动调整大小，也可以由用户重新排序。排序报告最多四个
   按优先级排列的列，单元格编辑加多行选择也已就位，

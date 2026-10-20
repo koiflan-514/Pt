@@ -1,5 +1,7 @@
 # Architecture
 
+English | [简体中文](zh-CN/architecture.md)
+
 ## Goals and non-goals
 
 Pt is a Wayland-native GUI framework for applications whose logic may be
@@ -491,11 +493,6 @@ an unselected row is still a choice. A `SelectionChanged` event is followed by a
 `selected` state event on the row the view treats as its caret, which is the row
 a gesture just moved to rather than the lowest one in the set. Focus, state,
 text, selection, value, name and structure changes emit AT-SPI events.
-The bridge is compiled only when `dbus-1` is available. `pt_app_enable_a11y`
-returns false and `pt_app_get_a11y_status` reports
-`pt_a11y_status_unavailable` when the build or session has no accessibility
-bus; the in-process model and Pt widgets continue to work. Disabling the bridge
-leaves the in-process accessibility model untouched.
 The bridge is compiled only when `dbus-1` is available. `pt_app_enable_a11y`
 returns false and `pt_app_get_a11y_status` reports
 `pt_a11y_status_unavailable` when the build or session has no accessibility
