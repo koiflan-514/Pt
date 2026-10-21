@@ -626,3 +626,11 @@ English-only.
 
 Apache License 2.0. Vendored Wayland protocol XML retains its MIT headers; see
 [NOTICE](NOTICE) and [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Decoration policy
+
+Pt windows ask the compositor for server-side decorations (xdg-decoration
+`set_mode(SERVER_SIDE)`) before falling back to the built-in client-side
+title bar. Desktops that answer with CSD, or that have no decoration manager,
+get Pt's own decorations; borderless CSD windows (`prefer-no-csd`) keep their
+6 px edge hot-zone so they stay mouse-resizable.

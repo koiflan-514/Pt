@@ -511,7 +511,13 @@ static void decoration_configure(void *data,
         return;
     }
     bool client_side = mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+    if (wl->window->csd == client_side) {
+        return;
+    }
     pt_window_set_csd_enabled(wl->window, client_side);
+    if (!client_side) {
+        pt_platform_window_set_min_size(wl->window);
+    }
     pt_wl_window_schedule_frame(wl->window);
 }
 
@@ -616,8 +622,13 @@ bool pt_platform_window_init(pt_window *window) {
         wl->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
             platform->decoration_manager, wl->toplevel);
         zxdg_toplevel_decoration_v1_add_listener(wl->decoration, &decoration_listener, wl);
+        /* Ask the compositor for server-side decorations first. Desktops such
+         * as niri then draw native shadows, resize borders and title bars, and
+         * the window follows the platform style. The configure listener falls
+         * back to Pt's client-side decorations when the compositor answers
+         * with CSD (or no decoration manager exists at all). */
         zxdg_toplevel_decoration_v1_set_mode(
-            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
     if (platform->fractional_scale_manager) {
         wl->fractional_scale =
@@ -754,9 +765,11 @@ void pt_platform_window_set_size_hint(pt_window *window) {
 
 void pt_platform_window_set_decorated(pt_window *window) {
     pt_wayland_window *wl = pt_wl_window_for(window);
+    /* Decoration mode follows the initial request; the configure listener
+     * owns any switch between server-side and client-side. */
     if (wl && wl->decoration) {
         zxdg_toplevel_decoration_v1_set_mode(
-            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
     if (!wl && window->app && window->app->platform) {
         pt_platform *platform = (pt_platform *)window->app->platform;

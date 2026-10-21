@@ -12,6 +12,7 @@
 #include <pt/a11y.h>
 #include <pt/app.h>
 #include <pt/base.h>
+#include <pt/custom.h>
 #include <pt/dnd.h>
 #include <pt/interaction.h>
 #include <pt/motion.h>

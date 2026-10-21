@@ -8,6 +8,7 @@
 #define pt_internal_h
 
 #include <math.h>
+#include <poll.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -314,6 +315,12 @@ struct pt_canvas {
     int clip_depth;
     uint32_t visit_count;
     bool owns_pixels;
+};
+
+/* Custom-widget paint context (see include/pt/custom.h). */
+struct pt_paint_context {
+    pt_canvas *canvas;
+    pt_widget *widget;
 };
 
 void pt_canvas_init(pt_canvas *canvas, uint32_t *pixels, int width, int height, int stride,
@@ -720,6 +727,9 @@ typedef struct pt_widget {
     void *on_select_data;
     pt_index_callback on_activate;
     void *on_activate_data;
+
+    pt_paint_callback paint_callback;
+    void *paint_callback_data;
 } pt_widget;
 
 static inline bool pt_widget_kind_is_text_input(pt_widget_kind kind) {
@@ -949,6 +959,13 @@ void pt_a11y_bridge_announce(pt_widget *widget, int politeness, const char *text
 
 /* ---------- app / window ---------- */
 
+/* fd-watch integration used by the platform dispatch loop. The prepare call
+ * fills the pollfd entries starting at offset; dispatch reports ready events
+ * back to the callbacks. */
+size_t pt_app_fd_watch_count(const pt_app *app);
+void pt_app_fd_watch_prepare(const pt_app *app, struct pollfd *fds, size_t offset);
+void pt_app_fd_watch_dispatch(pt_app *app, const struct pollfd *fds, size_t offset);
+
 typedef struct pt_theme_data {
     pt_color colors[pt_theme_token_count];
     float metrics[pt_theme_metric_count];
@@ -964,12 +981,23 @@ typedef struct pt_timer {
     struct pt_timer *next;
 } pt_timer;
 
+typedef struct pt_fd_watch {
+    uint64_t id;
+    int fd;
+    uint32_t events;
+    pt_fd_callback callback;
+    void *user_data;
+    struct pt_fd_watch *next;
+} pt_fd_watch;
+
 struct pt_app {
     char *app_id;
     pt_theme_data theme;
     pt_window *first_window;
     pt_timer *timers;
+    pt_fd_watch *fd_watches;
     uint64_t next_timer_id;
+    uint64_t next_fd_watch_id;
     bool running;
     bool quit_requested;
     bool quit_on_last_window_close;
@@ -1038,6 +1066,7 @@ struct pt_window {
     float last_click_y;
     uint32_t click_count;
     uint32_t pointer_serial;
+    uint32_t pointer_buttons;
     int32_t touch_id;
     bool touch_active;
 #define pt_touch_max 10
@@ -1058,6 +1087,22 @@ struct pt_window {
     void *resize_data;
     pt_key_callback key_callback;
     void *key_data;
+    pt_key_event_callback key_event_callback;
+    void *key_event_data;
+    pt_focus_callback focus_callback;
+    void *focus_data;
+    pt_pointer_callback pointer_callback;
+    void *pointer_data;
+
+    bool custom_ime_enabled;
+    pt_ime_commit_callback custom_ime_commit;
+    pt_ime_preedit_callback custom_ime_preedit;
+    void *custom_ime_data;
+    int custom_ime_x;
+    int custom_ime_y;
+    int custom_ime_width;
+    int custom_ime_height;
+    bool custom_ime_rect_valid;
 
     pt_popup_policy popup_policy;
 
@@ -1259,6 +1304,8 @@ void pt_window_set_maximized(pt_window *window, bool maximized);
 void pt_window_set_csd_enabled(pt_window *window, bool enabled);
 void pt_window_update_caret_timer(pt_window *window);
 bool pt_window_has_editable_focus(const pt_window *window);
+bool pt_window_wants_ime(const pt_window *window);
+void pt_window_restore_ime(pt_window *window);
 
 void pt_theme_init(pt_theme_data *theme, pt_color_scheme scheme);
 void pt_theme_set_defaults(pt_theme_data *theme, pt_color_scheme scheme);

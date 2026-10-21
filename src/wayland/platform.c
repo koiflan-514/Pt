@@ -1157,7 +1157,7 @@ static void text_input_enter(void *data, struct zwp_text_input_v3 *text_input,
     pt_window *window = window_for_surface(platform, surface);
     platform->text_input_window = window;
     platform->text_input_enabled = false;
-    if (window && pt_window_has_editable_focus(window)) {
+    if (window && pt_window_wants_ime(window)) {
         pt_platform_ime_set_enabled(window, true);
     }
 }
@@ -1336,6 +1336,12 @@ static void ime_request_surrounding_text(pt_platform *platform, pt_window *windo
 
 static void ime_request_state(pt_platform *platform, pt_window *window) {
     if (!platform || !platform->text_input || !window) {
+        return;
+    }
+    if (window->custom_ime_enabled && !pt_window_has_editable_focus(window)) {
+        zwp_text_input_v3_set_content_type(platform->text_input,
+                                           ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+                                           ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_TERMINAL);
         return;
     }
     zwp_text_input_v3_set_content_type(platform->text_input, ime_content_hint(window->focused),
@@ -2622,13 +2628,28 @@ int pt_platform_dispatch(pt_app *app, int timeout_ms) {
     pt_platform *platform = (pt_platform *)app->platform;
     int a11y_fd = pt_a11y_bridge_fd(app);
     if (platform->headless) {
-        struct pollfd pfd = {.fd = a11y_fd, .events = POLLIN};
-        int result = poll(&pfd, a11y_fd >= 0 ? 1 : 0, timeout_ms);
+        size_t base = a11y_fd >= 0 ? 1 : 0;
+        size_t extra = pt_app_fd_watch_count(app);
+        nfds_t count = (nfds_t)(base + extra);
+        struct pollfd stack_fds[8];
+        struct pollfd *fds = count <= 8 ? stack_fds : pt_alloc(count * sizeof(*fds));
+        if (base > 0) {
+            fds[0] = (struct pollfd){.fd = a11y_fd, .events = POLLIN};
+        }
+        pt_app_fd_watch_prepare(app, fds, base);
+        int result = poll(fds, count, timeout_ms);
         if (result < 0 && errno != EINTR) {
+            if (fds != stack_fds) {
+                free(fds);
+            }
             return -1;
         }
         if (a11y_fd >= 0) {
             pt_a11y_bridge_dispatch(app);
+        }
+        pt_app_fd_watch_dispatch(app, fds, base);
+        if (fds != stack_fds) {
+            free(fds);
         }
         return 0;
     }
@@ -2654,14 +2675,22 @@ int pt_platform_dispatch(pt_app *app, int timeout_ms) {
         wl_display_cancel_read(display);
         return -1;
     }
-    struct pollfd fds[2] = {
-        {.fd = wl_display_get_fd(display), .events = POLLIN},
-        {.fd = a11y_fd, .events = POLLIN},
-    };
-    nfds_t count = a11y_fd >= 0 ? 2 : 1;
+    size_t base = a11y_fd >= 0 ? 2 : 1;
+    size_t extra = pt_app_fd_watch_count(app);
+    nfds_t count = (nfds_t)(base + extra);
+    struct pollfd stack_fds[10];
+    struct pollfd *fds = count <= 10 ? stack_fds : pt_alloc(count * sizeof(*fds));
+    fds[0] = (struct pollfd){.fd = wl_display_get_fd(display), .events = POLLIN};
+    if (a11y_fd >= 0) {
+        fds[1] = (struct pollfd){.fd = a11y_fd, .events = POLLIN};
+    }
+    pt_app_fd_watch_prepare(app, fds, base);
     int ready = poll(fds, count, timeout_ms);
     if (ready < 0) {
         wl_display_cancel_read(display);
+        if (fds != stack_fds) {
+            free(fds);
+        }
         if (errno == EINTR) {
             return 0;
         }
@@ -2669,20 +2698,33 @@ int pt_platform_dispatch(pt_app *app, int timeout_ms) {
     }
     if (ready == 0) {
         wl_display_cancel_read(display);
+        if (fds != stack_fds) {
+            free(fds);
+        }
         return 0;
     }
     if (fds[0].revents & POLLIN) {
         if (wl_display_read_events(display) < 0) {
+            if (fds != stack_fds) {
+                free(fds);
+            }
             return -1;
         }
     } else {
         wl_display_cancel_read(display);
         if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            if (fds != stack_fds) {
+                free(fds);
+            }
             return -1;
         }
     }
-    if (count > 1 && (fds[1].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))) {
+    if (a11y_fd >= 0 && (fds[1].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))) {
         pt_a11y_bridge_dispatch(app);
+    }
+    pt_app_fd_watch_dispatch(app, fds, base);
+    if (fds != stack_fds) {
+        free(fds);
     }
     if (wl_display_dispatch_pending(display) < 0) {
         return -1;

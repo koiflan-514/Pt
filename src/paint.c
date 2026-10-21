@@ -2004,6 +2004,13 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
         break;
     }
 
+    if (widget->paint_callback) {
+        pt_canvas_push_clip(canvas, widget->x, widget->y, widget->width, widget->height);
+        pt_paint_context custom = {.canvas = canvas, .widget = widget};
+        widget->paint_callback(widget, &custom, widget->paint_callback_data);
+        pt_canvas_pop_clip(canvas);
+    }
+
     if (widget->kind == pt_widget_scroll) {
         pt_canvas_push_clip(canvas, widget->x + widget->padding_left,
                             widget->y + widget->padding_top,

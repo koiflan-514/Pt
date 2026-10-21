@@ -54,6 +54,116 @@ void pt_app_cancel_timeout(pt_app *app, uint64_t timer_id) {
     }
 }
 
+uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events, pt_fd_callback callback,
+                         void *user_data) {
+    if (!app || fd < 0 || !callback || events == 0) {
+        return 0;
+    }
+    pt_fd_watch *watch = pt_alloc_zeroed(1, sizeof(*watch));
+    watch->id = app->next_fd_watch_id++;
+    if (app->next_fd_watch_id == 0) {
+        app->next_fd_watch_id = 1;
+    }
+    watch->fd = fd;
+    watch->events = events;
+    watch->callback = callback;
+    watch->user_data = user_data;
+    watch->next = app->fd_watches;
+    app->fd_watches = watch;
+    return watch->id;
+}
+
+void pt_app_unwatch_fd(pt_app *app, uint64_t watch_id) {
+    if (!app || watch_id == 0) {
+        return;
+    }
+    pt_fd_watch **link = &app->fd_watches;
+    while (*link) {
+        pt_fd_watch *watch = *link;
+        if (watch->id == watch_id) {
+            *link = watch->next;
+            free(watch);
+            return;
+        }
+        link = &watch->next;
+    }
+}
+
+size_t pt_app_fd_watch_count(const pt_app *app) {
+    size_t count = 0;
+    for (const pt_fd_watch *watch = app ? app->fd_watches : NULL; watch; watch = watch->next) {
+        ++count;
+    }
+    return count;
+}
+
+static short fd_poll_events(uint32_t events) {
+    short poll_events = 0;
+    if (events & pt_fd_event_read) {
+        poll_events |= POLLIN;
+    }
+    if (events & pt_fd_event_write) {
+        poll_events |= POLLOUT;
+    }
+    return poll_events;
+}
+
+static uint32_t fd_event_mask(short revents) {
+    uint32_t mask = 0;
+    if (revents & (POLLIN | POLLPRI)) {
+        mask |= pt_fd_event_read;
+    }
+    if (revents & POLLOUT) {
+        mask |= pt_fd_event_write;
+    }
+    if (revents & POLLERR) {
+        mask |= pt_fd_event_error;
+    }
+    if (revents & (POLLHUP | POLLNVAL)) {
+        mask |= pt_fd_event_hangup;
+    }
+    return mask;
+}
+
+void pt_app_fd_watch_prepare(const pt_app *app, struct pollfd *fds, size_t offset) {
+    if (!app || !fds) {
+        return;
+    }
+    size_t index = offset;
+    for (const pt_fd_watch *watch = app->fd_watches; watch; watch = watch->next) {
+        fds[index].fd = watch->fd;
+        fds[index].events = fd_poll_events(watch->events);
+        fds[index].revents = 0;
+        ++index;
+    }
+}
+
+void pt_app_fd_watch_dispatch(pt_app *app, const struct pollfd *fds, size_t offset) {
+    if (!app || !fds || !app->fd_watches) {
+        return;
+    }
+    size_t count = pt_app_fd_watch_count(app);
+    uint64_t *ids = pt_alloc(count * sizeof(*ids));
+    size_t index = 0;
+    for (const pt_fd_watch *watch = app->fd_watches; watch; watch = watch->next) {
+        ids[index++] = watch->id;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        short revents = fds[offset + i].revents;
+        if (revents == 0) {
+            continue;
+        }
+        pt_fd_watch *watch = app->fd_watches;
+        while (watch && watch->id != ids[i]) {
+            watch = watch->next;
+        }
+        if (watch) {
+            watch->callback(app, fd_event_mask(revents), watch->user_data);
+        }
+    }
+    free(ids);
+}
+
 static bool run_due_timers(pt_app *app, int64_t now) {
     bool any = false;
     pt_timer **link = &app->timers;
@@ -232,6 +342,7 @@ pt_app *pt_app_create(const char *app_id) {
     pt_app *app = pt_alloc_zeroed(1, sizeof(*app));
     app->app_id = pt_strdup(app_id && *app_id ? app_id : "pt.application");
     app->next_timer_id = 1;
+    app->next_fd_watch_id = 1;
     app->quit_on_last_window_close = true;
     const char *reduced = getenv("PT_REDUCED_MOTION");
     app->reduced_motion = reduced &&
@@ -276,6 +387,11 @@ void pt_app_destroy(pt_app *app) {
         pt_timer *next = app->timers->next;
         free(app->timers);
         app->timers = next;
+    }
+    while (app->fd_watches) {
+        pt_fd_watch *next = app->fd_watches->next;
+        free(app->fd_watches);
+        app->fd_watches = next;
     }
     pt_a11y_bridge_stop(app);
     while (app->first_window) {

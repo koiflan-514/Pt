@@ -55,6 +55,24 @@ pt_api uint64_t pt_app_add_timeout(pt_app *app, uint32_t milliseconds,
                                    pt_timer_callback callback, void *user_data);
 pt_api void pt_app_cancel_timeout(pt_app *app, uint64_t timer_id);
 
+/* File-descriptor watches integrate application descriptors into Pt's poll
+ * loop. The callback runs on the UI thread when the descriptor is ready; it
+ * must not block. events is a mask of pt_fd_event values. The id returned by
+ * pt_app_watch_fd can be passed to pt_app_unwatch_fd; watching the same fd
+ * twice is allowed and each watch fires independently. */
+typedef enum pt_fd_event {
+    pt_fd_event_read = 1u << 0,
+    pt_fd_event_write = 1u << 1,
+    pt_fd_event_error = 1u << 2,
+    pt_fd_event_hangup = 1u << 3
+} pt_fd_event;
+
+typedef void (*pt_fd_callback)(pt_app *app, uint32_t events, void *user_data);
+
+pt_api uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events,
+                                pt_fd_callback callback, void *user_data);
+pt_api void pt_app_unwatch_fd(pt_app *app, uint64_t watch_id);
+
 pt_api void pt_app_set_color_scheme(pt_app *app, pt_color_scheme scheme);
 pt_api pt_color_scheme pt_app_get_color_scheme(const pt_app *app);
 pt_api void pt_app_set_accent_color(pt_app *app, pt_color color);

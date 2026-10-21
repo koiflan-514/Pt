@@ -454,6 +454,30 @@ void pt_window_set_key_callback(pt_window *window, pt_key_callback callback, voi
     }
 }
 
+void pt_window_set_key_event_callback(pt_window *window, pt_key_event_callback callback,
+                                      void *user_data) {
+    if (window) {
+        window->key_event_callback = callback;
+        window->key_event_data = user_data;
+    }
+}
+
+void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callback callback,
+                                    void *user_data) {
+    if (window) {
+        window->pointer_callback = callback;
+        window->pointer_data = user_data;
+    }
+}
+
+void pt_window_set_focus_callback(pt_window *window, pt_focus_callback callback,
+                                  void *user_data) {
+    if (window) {
+        window->focus_callback = callback;
+        window->focus_data = user_data;
+    }
+}
+
 void pt_window_apply_configure(pt_window *window, int width, int height) {
     if (!window) {
         return;
@@ -504,6 +528,33 @@ void pt_window_set_maximized(pt_window *window, bool maximized) {
 bool pt_window_has_editable_focus(const pt_window *window) {
     return window && window->focused && window->focused->enabled &&
            pt_widget_kind_is_text_input(window->focused->kind);
+}
+
+bool pt_window_wants_ime(const pt_window *window) {
+    return window && (pt_window_has_editable_focus(window) || window->custom_ime_enabled);
+}
+
+void pt_window_restore_ime(pt_window *window) {
+    if (!window) {
+        return;
+    }
+    bool wanted = pt_window_wants_ime(window);
+    pt_platform_ime_set_enabled(window, wanted);
+    if (!wanted) {
+        return;
+    }
+    if (pt_window_has_editable_focus(window)) {
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        pt_widget_ime_rect(window->focused, &x, &y, &width, &height);
+        pt_platform_ime_set_cursor_rect(window, x, y, width, height);
+    } else if (window->custom_ime_rect_valid) {
+        pt_platform_ime_set_cursor_rect(window, window->custom_ime_x, window->custom_ime_y,
+                                        window->custom_ime_width,
+                                        window->custom_ime_height);
+    }
 }
 
 void pt_window_update_caret_timer(pt_window *window) {
@@ -617,9 +668,12 @@ static pt_csd_part csd_button_at(const pt_window *window, float x, float y) {
 }
 
 static pt_csd_part csd_part_at(const pt_window *window, float x, float y) {
-    if (!window->csd || window->header_height <= 0.0f) {
+    if (!window->csd) {
         return pt_csd_part_none;
     }
+    /* Borderless client-side windows (prefer-no-csd desktops fall back here
+     * with header_height == 0) still need their edges to be resizable; only
+     * the titlebar and buttons require an actual header. */
     float margin = pt_resize_margin;
     if (window->resizable && !window->maximized && !window->fullscreen) {
         bool left = x < margin;
@@ -651,7 +705,7 @@ static pt_csd_part csd_part_at(const pt_window *window, float x, float y) {
             return pt_csd_part_edge_right;
         }
     }
-    if (y < window->header_height) {
+    if (window->header_height > 0.0f && y < window->header_height) {
         pt_csd_part button = csd_button_at(window, x, y);
         if (button != pt_csd_part_none) {
             return button;
@@ -925,16 +979,21 @@ static void set_hovered_csd(pt_window *window, pt_csd_part part) {
 }
 
 static void update_ime_rect(pt_window *window) {
-    if (!window || !window->focused ||
-        !pt_widget_kind_is_text_input(window->focused->kind)) {
+    if (!window) {
         return;
     }
-    int x = 0;
-    int y = 0;
-    int w = 0;
-    int h = 0;
-    pt_widget_ime_rect(window->focused, &x, &y, &w, &h);
-    pt_platform_ime_set_cursor_rect(window, x, y, w, h);
+    if (pt_window_has_editable_focus(window)) {
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+        pt_widget_ime_rect(window->focused, &x, &y, &w, &h);
+        pt_platform_ime_set_cursor_rect(window, x, y, w, h);
+    } else if (window->custom_ime_rect_valid) {
+        pt_platform_ime_set_cursor_rect(window, window->custom_ime_x, window->custom_ime_y,
+                                        window->custom_ime_width,
+                                        window->custom_ime_height);
+    }
 }
 
 static void update_hover(pt_window *window, float x, float y) {
@@ -983,6 +1042,25 @@ static void clear_entry_drag(pt_window *window) {
     window->drag_text = NULL;
 }
 
+static bool emit_pointer_event(pt_window *window, pt_pointer_phase phase, float x, float y,
+                               float delta_x, float delta_y, uint32_t button) {
+    if (!window || !window->pointer_callback) {
+        return false;
+    }
+    pt_pointer_event event = {
+        .phase = phase,
+        .x = x,
+        .y = y,
+        .delta_x = delta_x,
+        .delta_y = delta_y,
+        .button = button,
+        .modifiers = window->modifiers,
+        .click_count = window->click_count,
+        .pressed = window->pointer_buttons != 0,
+    };
+    return window->pointer_callback(window, &event, window->pointer_data);
+}
+
 void pt_window_input_pointer_enter(pt_window *window, float x, float y) {
     if (!window) {
         return;
@@ -990,6 +1068,7 @@ void pt_window_input_pointer_enter(pt_window *window, float x, float y) {
     window->pointer_inside = true;
     window->pointer_x = x;
     window->pointer_y = y;
+    (void)emit_pointer_event(window, pt_pointer_phase_enter, x, y, 0.0f, 0.0f, 0);
     update_hover(window, x, y);
 }
 
@@ -998,10 +1077,18 @@ void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_
     if (!window) {
         return;
     }
+    float delta_x = x - window->pointer_x;
+    float delta_y = y - window->pointer_y;
     window->pointer_inside = true;
     window->pointer_x = x;
     window->pointer_y = y;
     pt_window_press_motion(window, x, y);
+    bool custom = emit_pointer_event(window, pt_pointer_phase_motion, x, y, delta_x, delta_y,
+                                     0);
+    if (custom) {
+        update_hover(window, x, y);
+        return;
+    }
     if (window->drag_pending && window->drag_widget) {
         float dx = x - window->drag_start_x;
         float dy = y - window->drag_start_y;
@@ -1046,6 +1133,9 @@ void pt_window_input_pointer_leave(pt_window *window) {
     if (!window) {
         return;
     }
+    (void)emit_pointer_event(window, pt_pointer_phase_leave, window->pointer_x,
+                             window->pointer_y, 0.0f, 0.0f, 0);
+    window->pointer_buttons = 0;
     window->pointer_inside = false;
     clear_entry_drag(window);
     pt_window_press_cancel(window);
@@ -1102,7 +1192,7 @@ void pt_window_stylus_input(pt_window *window, pt_stylus_phase phase, pt_stylus_
 
 void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pressed, float x,
                                     float y, uint32_t serial, uint32_t time) {
-    if (!window || button != 0x110u) {
+    if (!window || button == 0) {
         return;
     }
     window->pointer_x = x;
@@ -1110,18 +1200,8 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
     if (serial != 0) {
         window->pointer_serial = serial;
     }
-    if (!pressed) {
-        pt_window_press_end(window, x, y);
-    } else {
-        pt_window_momentum_stop(window);
-    }
-    if (pt_window_overlays_pointer(window, button, pressed, x, y, serial, time)) {
-        update_hover(window, x, y);
-        window->needs_draw = true;
-        pt_platform_window_schedule_draw(window);
-        return;
-    }
     if (pressed) {
+        window->pointer_buttons |= 1u << (button & 31u);
         uint32_t event_time = time ? time : (uint32_t)pt_now_ms();
         bool same_spot = fabsf(x - window->last_click_x) <= 6.0f &&
                          fabsf(y - window->last_click_y) <= 6.0f;
@@ -1135,7 +1215,30 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
         window->last_click_time = event_time;
         window->last_click_x = x;
         window->last_click_y = y;
-
+    } else {
+        window->pointer_buttons &= ~(1u << (button & 31u));
+        pt_window_press_end(window, x, y);
+    }
+    if (pressed) {
+        pt_window_momentum_stop(window);
+    }
+    if (pt_window_overlays_pointer(window, button, pressed, x, y, serial, time)) {
+        update_hover(window, x, y);
+        window->needs_draw = true;
+        pt_platform_window_schedule_draw(window);
+        return;
+    }
+    if (emit_pointer_event(window, pressed ? pt_pointer_phase_down : pt_pointer_phase_up, x,
+                           y, 0.0f, 0.0f, button)) {
+        update_hover(window, x, y);
+        window->needs_draw = true;
+        pt_platform_window_schedule_draw(window);
+        return;
+    }
+    if (button != 0x110u) {
+        return;
+    }
+    if (pressed) {
         pt_csd_part part = csd_part_at(window, x, y);
         if (part == pt_csd_part_titlebar) {
             pt_platform_window_begin_move(window, serial);
@@ -1237,6 +1340,11 @@ void pt_window_input_axis(pt_window *window, float x, float y, float delta) {
     }
     pt_window_momentum_stop(window);
     if (pt_window_overlays_axis(window, x, y, delta)) {
+        return;
+    }
+    if (emit_pointer_event(window, pt_pointer_phase_axis, x, y, 0.0f, delta, 0)) {
+        window->needs_draw = true;
+        pt_platform_window_schedule_draw(window);
         return;
     }
     pt_widget *hit = window->hovered;
@@ -1458,12 +1566,11 @@ void pt_window_input_keyboard_focus(pt_window *window, bool focused, uint32_t se
         return;
     }
     window->keyboard_focused = focused;
+    if (window->focus_callback) {
+        window->focus_callback(window, focused, window->focus_data);
+    }
     if (focused) {
-        bool editable = pt_window_has_editable_focus(window);
-        pt_platform_ime_set_enabled(window, editable);
-        if (editable) {
-            update_ime_rect(window);
-        }
+        pt_window_restore_ime(window);
     } else {
         pt_platform_ime_set_enabled(window, false);
     }
@@ -1501,7 +1608,11 @@ void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
         return;
     }
     bool consumed = false;
-    if (window->key_callback) {
+    if (window->key_event_callback) {
+        consumed = window->key_event_callback(window, keysym, modifiers, utf8,
+                                              window->key_event_data);
+    }
+    if (!consumed && window->key_callback) {
         consumed = window->key_callback(window, keysym, modifiers, window->key_data);
     }
     if (!consumed && keysym == 0xFF09u) {
@@ -1535,7 +1646,36 @@ void pt_window_input_ime_preedit(pt_window *window, const char *text) {
 void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
                                  int32_t cursor_begin, int32_t cursor_end,
                                  uint32_t delete_before, uint32_t delete_after) {
-    if (!window || !window->focused ||
+    if (!window) {
+        return;
+    }
+    if (window->custom_ime_enabled && !pt_window_has_editable_focus(window)) {
+        /* Custom text input owns insertion. Delete requests carry no meaning for
+         * a terminal, but they are still acknowledged by clearing preedit. */
+        bool changed = (commit && *commit) || (preedit && *preedit);
+        if (commit && *commit && window->custom_ime_commit) {
+            window->custom_ime_commit(window, commit, window->custom_ime_data);
+        }
+        if (window->custom_ime_preedit) {
+            const char *current = preedit ? preedit : "";
+            bool present = *current != '\0';
+            window->custom_ime_preedit(window, current, present ? cursor_begin : -1,
+                                       present ? cursor_end : -1,
+                                       window->custom_ime_data);
+        }
+        (void)delete_before;
+        (void)delete_after;
+        /* An empty done is an acknowledgement of the caret rectangle we pushed.
+         * Repainting for it would make an idle custom surface ask for another
+         * acknowledgement in a loop. The callback already requests a redraw when
+         * ending a visible composition. */
+        if (changed) {
+            window->needs_draw = true;
+            pt_platform_window_schedule_draw(window);
+        }
+        return;
+    }
+    if (!window->focused ||
         !pt_widget_kind_is_text_input(window->focused->kind)) {
         return;
     }
@@ -1564,4 +1704,57 @@ void pt_window_input_ime_compose(pt_window *window, const char *commit, const ch
     update_ime_rect(window);
     window->needs_draw = true;
     pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_set_ime_callbacks(pt_window *window, pt_ime_commit_callback commit_callback,
+                                 pt_ime_preedit_callback preedit_callback, void *user_data) {
+    if (!window) {
+        return;
+    }
+    window->custom_ime_commit = commit_callback;
+    window->custom_ime_preedit = preedit_callback;
+    window->custom_ime_data = user_data;
+    if (!commit_callback && !preedit_callback) {
+        pt_window_set_ime_enabled(window, false);
+    }
+}
+
+void pt_window_set_ime_enabled(pt_window *window, bool enabled) {
+    if (!window || window->custom_ime_enabled == enabled) {
+        return;
+    }
+    if (!enabled) {
+        bool editable = pt_window_has_editable_focus(window);
+        if (window->custom_ime_enabled && !editable) {
+            pt_window_input_ime_preedit(window, "");
+        }
+        window->custom_ime_enabled = false;
+        if (editable) {
+            /* A text-entry widget still owns IME; disabling the custom surface
+             * must not switch it off for the widget. */
+            pt_window_restore_ime(window);
+        } else {
+            pt_platform_ime_set_enabled(window, false);
+        }
+        return;
+    }
+    window->custom_ime_enabled = true;
+    if (window->keyboard_focused) {
+        pt_window_restore_ime(window);
+    }
+}
+
+void pt_window_set_ime_cursor_rect(pt_window *window, int x, int y, int width, int height) {
+    if (!window) {
+        return;
+    }
+    window->custom_ime_x = x;
+    window->custom_ime_y = y;
+    window->custom_ime_width = width;
+    window->custom_ime_height = height;
+    window->custom_ime_rect_valid = true;
+    if (window->custom_ime_enabled && window->keyboard_focused &&
+        !pt_window_has_editable_focus(window)) {
+        pt_platform_ime_set_cursor_rect(window, x, y, width, height);
+    }
 }

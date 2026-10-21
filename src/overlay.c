@@ -193,6 +193,7 @@ static void overlay_restore_focus(pt_overlay *overlay) {
     if (previous && pt_widget_window(previous) == window) {
         pt_widget_focus(previous);
     }
+    pt_window_restore_ime(window);
 }
 
 static void overlay_detach_panel(pt_overlay *overlay) {

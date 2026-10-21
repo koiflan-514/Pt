@@ -2992,16 +2992,7 @@ bool pt_widget_focus(pt_widget *widget) {
     window->needs_draw = true;
     pt_window_update_caret_timer(window);
 
-    bool editable = pt_window_has_editable_focus(window);
-    pt_platform_ime_set_enabled(window, editable);
-    if (editable) {
-        int x = 0;
-        int y = 0;
-        int width = 0;
-        int height = 0;
-        pt_widget_ime_rect(widget, &x, &y, &width, &height);
-        pt_platform_ime_set_cursor_rect(window, x, y, width, height);
-    }
+    pt_window_restore_ime(window);
     pt_platform_window_schedule_draw(window);
     return true;
 }
@@ -4439,11 +4430,17 @@ bool pt_widget_update_animations(pt_widget *widget, float dt) {
         return false;
     }
     bool changed = false;
-    animate_value(widget, &widget->hover_mix, widget->hovered && widget->enabled ? 1.0f : 0.0f,
-                  dt, &changed);
-    animate_value(widget, &widget->press_mix, widget->pressed && widget->enabled ? 1.0f : 0.0f,
-                  dt, &changed);
-    animate_value(widget, &widget->checked_mix, widget->checked ? 1.0f : 0.0f, dt, &changed);
+    /* Plain boxes and cards do not paint hover/press/checked state. Animating
+     * those values anyway makes static custom-painted containers (terminal
+     * views, canvases, tab strips) request frames forever. */
+    if (widget->kind != pt_widget_box && widget->kind != pt_widget_card) {
+        animate_value(widget, &widget->hover_mix,
+                      widget->hovered && widget->enabled ? 1.0f : 0.0f, dt, &changed);
+        animate_value(widget, &widget->press_mix,
+                      widget->pressed && widget->enabled ? 1.0f : 0.0f, dt, &changed);
+        animate_value(widget, &widget->checked_mix, widget->checked ? 1.0f : 0.0f, dt,
+                      &changed);
+    }
     if (widget->kind == pt_widget_spinner) {
         widget->phase += dt * 0.85f;
         if (widget->phase >= 1.0f) {

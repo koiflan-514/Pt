@@ -88,6 +88,57 @@ pt_api void pt_window_set_resize_callback(pt_window *window, pt_resize_callback 
 pt_api void pt_window_set_key_callback(pt_window *window, pt_key_callback callback,
                                        void *user_data);
 
+/* Called when the compositor gives or takes keyboard focus. The callback runs
+ * on the UI thread and may request a redraw. */
+typedef void (*pt_focus_callback)(pt_window *window, bool focused, void *user_data);
+pt_api void pt_window_set_focus_callback(pt_window *window, pt_focus_callback callback,
+                                         void *user_data);
+
+/* Extended key callback. It runs after overlay key handling and before the
+ * legacy key callback and focused-widget handling. Returning true consumes the
+ * key. `utf8` is the xkb UTF-8 text for the key (may be NULL or empty for
+ * non-text keys) and is valid only during the call. */
+typedef bool (*pt_key_event_callback)(pt_window *window, uint32_t key, uint32_t modifiers,
+                                      const char *utf8, void *user_data);
+pt_api void pt_window_set_key_event_callback(pt_window *window,
+                                             pt_key_event_callback callback,
+                                             void *user_data);
+
+/* Pointer phases for the window-level pointer callback. */
+typedef enum pt_pointer_phase {
+    pt_pointer_phase_enter = 0,
+    pt_pointer_phase_leave,
+    pt_pointer_phase_motion,
+    pt_pointer_phase_down,
+    pt_pointer_phase_up,
+    pt_pointer_phase_axis,
+    pt_pointer_phase_cancel
+} pt_pointer_phase;
+
+/* A normalized pointer event in logical window coordinates. For axis events,
+ * delta_y is positive downward and is expressed in the compositor's axis units
+ * (typically 15 per wheel notch). `button` is a Linux BTN_* code for down/up and
+ * 0 otherwise. `pressed` reports whether any pointer button is held. */
+typedef struct pt_pointer_event {
+    pt_pointer_phase phase;
+    float x;
+    float y;
+    float delta_x;
+    float delta_y;
+    uint32_t button;
+    uint32_t modifiers;
+    uint32_t click_count;
+    bool pressed;
+} pt_pointer_event;
+
+/* Runs before overlay/widget pointer dispatch. Returning true consumes the
+ * event. Enter, leave and motion callbacks are advisory: the return value is
+ * ignored for them so hover tracking keeps working. */
+typedef bool (*pt_pointer_callback)(pt_window *window, const pt_pointer_event *event,
+                                    void *user_data);
+pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callback callback,
+                                           void *user_data);
+
 /* Text clipboard backed by the seat's wl_data_device. The getter returns
  * malloc'd UTF-8 memory owned by the caller; release it with pt_free().
  * Returns NULL when the clipboard is empty or unavailable. */

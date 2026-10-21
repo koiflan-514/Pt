@@ -210,6 +210,88 @@ static void test_empty_done_is_noop(pt_window *window) {
     pt_app_set_a11y_callback(window->app, NULL, NULL);
 }
 
+
+typedef struct custom_ime_state {
+    char commit[128];
+    char preedit[128];
+    int32_t cursor_begin;
+    int32_t cursor_end;
+    int commits;
+    int preedits;
+} custom_ime_state;
+
+static void custom_commit(pt_window *window, const char *text, void *user_data) {
+    (void)window;
+    custom_ime_state *state = user_data;
+    snprintf(state->commit, sizeof(state->commit), "%s", text ? text : "");
+    state->commits++;
+}
+
+static void custom_preedit(pt_window *window, const char *text, int32_t cursor_begin,
+                           int32_t cursor_end, void *user_data) {
+    (void)window;
+    custom_ime_state *state = user_data;
+    snprintf(state->preedit, sizeof(state->preedit), "%s", text ? text : "");
+    state->cursor_begin = cursor_begin;
+    state->cursor_end = cursor_end;
+    state->preedits++;
+}
+
+static void test_custom_surface(pt_app *app) {
+    pt_window *window = pt_window_create(app, "custom-ime", 320, 220);
+    pt_check(window != NULL);
+    custom_ime_state state = {0};
+    pt_window_set_ime_callbacks(window, custom_commit, custom_preedit, &state);
+    pt_window_set_ime_enabled(window, true);
+    pt_check(window->custom_ime_enabled);
+    pt_check(pt_window_wants_ime(window));
+
+    pt_window_set_ime_cursor_rect(window, 5, 6, 7, 8);
+    pt_check(window->custom_ime_rect_valid);
+    pt_check(window->custom_ime_x == 5 && window->custom_ime_y == 6);
+    pt_check(window->custom_ime_width == 7 && window->custom_ime_height == 8);
+
+    pt_window_input_ime_compose(window, NULL, "ni", 1, 1, 0, 0);
+    pt_check(strcmp(state.preedit, "ni") == 0);
+    pt_check(state.cursor_begin == 1 && state.cursor_end == 1);
+    pt_check(state.commits == 0);
+    pt_check(window->needs_draw);
+
+    /* Empty done is only an acknowledgement; don't schedule a repaint. */
+    window->needs_draw = false;
+    int preedits = state.preedits;
+    pt_window_input_ime_compose(window, "", "", -1, -1, 0, 0);
+    pt_check(state.preedits == preedits + 1);
+    pt_check(state.preedit[0] == '\0');
+    pt_check(!window->needs_draw);
+
+    pt_window_input_ime_compose(window, "\xE5\xA5\xBD", "", -1, -1, 0, 0);
+    pt_check(strcmp(state.commit, "\xE5\xA5\xBD") == 0);
+    pt_check(state.commits == 1);
+    pt_check(state.preedit[0] == '\0');
+    pt_check(window->needs_draw);
+
+    /* A real text-entry widget keeps precedence over custom routing. */
+    pt_widget *entry = pt_entry_create(pt_window_root(window), "entry");
+    pt_widget_set_text(entry, "");
+    pt_check(pt_widget_focus(entry));
+    pt_window_input_ime_compose(window, "x", "", -1, -1, 0, 0);
+    pt_check(strcmp(pt_widget_get_text(entry), "x") == 0);
+    pt_check(state.commits == 1);
+
+    /* Disabling the custom surface does not turn IME off for a focused text
+     * entry, and its caret rectangle must not steal the widget's position. */
+    pt_window_set_ime_cursor_rect(window, 100, 120, 2, 18);
+    pt_window_set_ime_enabled(window, false);
+    pt_check(!window->custom_ime_enabled);
+    pt_check(pt_window_wants_ime(window));
+    pt_check(window->custom_ime_x == 100 && window->custom_ime_y == 120);
+
+    pt_window_set_ime_callbacks(window, NULL, NULL, NULL);
+    pt_check(!window->custom_ime_enabled);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.ime");
@@ -225,6 +307,7 @@ int main(void) {
     test_delete_surrounding(window);
     test_scripted_sequence(window);
     test_empty_done_is_noop(window);
+    test_custom_surface(app);
 
     pt_window_free(window);
     pt_app_destroy(app);
