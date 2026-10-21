@@ -145,6 +145,15 @@ pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callbac
 pt_api bool pt_window_clipboard_set(pt_window *window, const char *text);
 pt_api char *pt_window_clipboard_get(pt_window *window);
 
+/* Primary selection (middle-click paste), backed by
+ * wp_primary_selection_unstable_v1 when the compositor offers it. Without the
+ * protocol, or headless, both sides fall back to an in-process buffer so the
+ * API stays usable everywhere. Ownership and error contract match the
+ * clipboard pair: the setter copies, the getter returns malloc'd UTF-8 owned
+ * by the caller (release with pt_free()), NULL when empty or unavailable. */
+pt_api bool pt_window_primary_set(pt_window *window, const char *text);
+pt_api char *pt_window_primary_get(pt_window *window);
+
 #ifdef __cplusplus
 }
 #endif

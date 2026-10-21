@@ -14,10 +14,17 @@ callback pt_drop_motion_callback void(pt_widget*widget,floatx,floaty,void*user_d
 callback pt_drop_offer_drop_callback void(pt_widget*widget,pt_drop_offer*offer,constchar*mime_type,floatx,floaty,void*user_data)
 callback pt_drop_offer_enter_callback constchar*(pt_widget*widget,pt_drop_offer*offer,void*user_data)
 callback pt_drop_stream_callback void(pt_widget*widget,pt_drop_stream*stream,pt_drop_stream_statestate,constchar*data,size_tsize,void*user_data)
+callback pt_fd_callback void(pt_app*app,uint32_tevents,void*user_data)
+callback pt_focus_callback void(pt_window*window,boolfocused,void*user_data)
 callback pt_gesture_callback void(pt_window*window,constpt_gesture_event*event,void*user_data)
+callback pt_ime_commit_callback void(pt_window*window,constchar*text,void*user_data)
+callback pt_ime_preedit_callback void(pt_window*window,constchar*text,int32_tcursor_begin,int32_tcursor_end,void*user_data)
 callback pt_index_callback void(pt_widget*widget,uint32_tindex,void*user_data)
 callback pt_key_callback bool(pt_window*window,uint32_tkey,uint32_tmodifiers,void*user_data)
+callback pt_key_event_callback bool(pt_window*window,uint32_tkey,uint32_tmodifiers,constchar*utf8,void*user_data)
 callback pt_list_bind_callback void(pt_widget*list,pt_widget*row,uint32_tindex,void*user_data)
+callback pt_paint_callback void(pt_widget*widget,pt_paint_context*context,void*user_data)
+callback pt_pointer_callback bool(pt_window*window,constpt_pointer_event*event,void*user_data)
 callback pt_resize_callback void(pt_window*window,intwidth,intheight,void*user_data)
 callback pt_row_key_callback uint64_t(pt_widget*view,uint32_trow,void*user_data)
 callback pt_row_text_callback constchar*(pt_widget*view,uint32_trow,void*user_data)
@@ -129,6 +136,10 @@ enum pt_easing_linear = 0
 enum pt_easing_out_back = 6
 enum pt_easing_out_cubic = 4
 enum pt_easing_out_quad = 2
+enum pt_fd_event_error = 4
+enum pt_fd_event_hangup = 8
+enum pt_fd_event_read = 1
+enum pt_fd_event_write = 2
 enum pt_font_slant_italic = 1
 enum pt_font_slant_oblique = 2
 enum pt_font_slant_upright = 0
@@ -182,6 +193,13 @@ enum pt_key_modifier_alt = 4
 enum pt_key_modifier_ctrl = 2
 enum pt_key_modifier_logo = 8
 enum pt_key_modifier_shift = 1
+enum pt_pointer_phase_axis = 5
+enum pt_pointer_phase_cancel = 6
+enum pt_pointer_phase_down = 3
+enum pt_pointer_phase_enter = 0
+enum pt_pointer_phase_leave = 1
+enum pt_pointer_phase_motion = 2
+enum pt_pointer_phase_up = 4
 enum pt_popup_policy_auto = 0
 enum pt_popup_policy_native = 1
 enum pt_popup_policy_window = 2
@@ -320,6 +338,8 @@ func pt_app_set_quit_on_last_window_close voidpt_app_set_quit_on_last_window_clo
 func pt_app_set_reduced_motion voidpt_app_set_reduced_motion(pt_app*app,boolreduced)
 func pt_app_set_theme_color voidpt_app_set_theme_color(pt_app*app,pt_theme_tokentoken,pt_colorcolor)
 func pt_app_set_theme_metric voidpt_app_set_theme_metric(pt_app*app,pt_theme_metricmetric,floatvalue)
+func pt_app_unwatch_fd voidpt_app_unwatch_fd(pt_app*app,uint64_twatch_id)
+func pt_app_watch_fd uint64_tpt_app_watch_fd(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
 func pt_box_create pt_widget*pt_box_create(pt_widget*parent,pt_directiondirection)
 func pt_box_set_align voidpt_box_set_align(pt_widget*box,pt_alignalign)
 func pt_box_set_direction voidpt_box_set_direction(pt_widget*box,pt_directiondirection)
@@ -442,6 +462,20 @@ func pt_menu_dismiss voidpt_menu_dismiss(pt_menu*menu)
 func pt_menu_is_open boolpt_menu_is_open(constpt_menu*menu)
 func pt_menu_show_at voidpt_menu_show_at(pt_menu*menu,floatx,floaty)
 func pt_menu_show_below voidpt_menu_show_below(pt_menu*menu,pt_widget*anchor)
+func pt_paint_clip_rect boolpt_paint_clip_rect(constpt_paint_context*context,float*x,float*y,float*width,float*height)
+func pt_paint_draw_line voidpt_paint_draw_line(pt_paint_context*context,floatx0,floaty0,floatx1,floaty1,floatline_width,pt_colorcolor)
+func pt_paint_draw_text voidpt_paint_draw_text(pt_paint_context*context,constchar*family,floatsize,intweight,intslant,floatx,floatbaseline,constchar*text,size_tlength,pt_colorcolor)
+func pt_paint_fill_rect voidpt_paint_fill_rect(pt_paint_context*context,floatx,floaty,floatwidth,floatheight,pt_colorcolor)
+func pt_paint_fill_rounded_rect voidpt_paint_fill_rounded_rect(pt_paint_context*context,floatx,floaty,floatwidth,floatheight,floatradius,pt_colorcolor)
+func pt_paint_font_has_glyph boolpt_paint_font_has_glyph(pt_paint_context*context,constchar*family,floatsize,uint32_tcodepoint)
+func pt_paint_font_metrics boolpt_paint_font_metrics(pt_paint_context*context,constchar*family,floatsize,intweight,intslant,float*ascent,float*descent,float*line_height,float*cell_width)
+func pt_paint_height floatpt_paint_height(constpt_paint_context*context)
+func pt_paint_measure_text floatpt_paint_measure_text(pt_paint_context*context,constchar*family,floatsize,intweight,intslant,constchar*text,size_tlength)
+func pt_paint_pop_clip voidpt_paint_pop_clip(pt_paint_context*context)
+func pt_paint_push_clip voidpt_paint_push_clip(pt_paint_context*context,floatx,floaty,floatwidth,floatheight)
+func pt_paint_scale floatpt_paint_scale(constpt_paint_context*context)
+func pt_paint_stroke_rect voidpt_paint_stroke_rect(pt_paint_context*context,floatx,floaty,floatwidth,floatheight,floatline_width,pt_colorcolor)
+func pt_paint_width floatpt_paint_width(constpt_paint_context*context)
 func pt_progress_create pt_widget*pt_progress_create(pt_widget*parent)
 func pt_progress_get_indeterminate boolpt_progress_get_indeterminate(constpt_widget*progress)
 func pt_progress_get_value floatpt_progress_get_value(constpt_widget*progress)
@@ -602,6 +636,7 @@ func pt_tree_set_selected voidpt_tree_set_selected(pt_widget*tree,pt_tree_node*n
 func pt_uri_list_count uint32_tpt_uri_list_count(constchar*text)
 func pt_uri_list_get char*pt_uri_list_get(constchar*text,uint32_tindex)
 func pt_widget_clear_children voidpt_widget_clear_children(pt_widget*widget)
+func pt_widget_clear_paint_callback voidpt_widget_clear_paint_callback(pt_widget*widget)
 func pt_widget_clear_text_spans voidpt_widget_clear_text_spans(pt_widget*widget)
 func pt_widget_destroy voidpt_widget_destroy(pt_widget*widget)
 func pt_widget_focus boolpt_widget_focus(pt_widget*widget)
@@ -625,6 +660,8 @@ func pt_widget_get_text_span boolpt_widget_get_text_span(constpt_widget*widget,u
 func pt_widget_get_text_span_count uint32_tpt_widget_get_text_span_count(constpt_widget*widget)
 func pt_widget_has_focus boolpt_widget_has_focus(constpt_widget*widget)
 func pt_widget_parent pt_widget*pt_widget_parent(constpt_widget*widget)
+func pt_widget_request_redraw voidpt_widget_request_redraw(pt_widget*widget)
+func pt_widget_request_redraw_rect voidpt_widget_request_redraw_rect(pt_widget*widget,floatx,floaty,floatwidth,floatheight)
 func pt_widget_set_a11y_description voidpt_widget_set_a11y_description(pt_widget*widget,constchar*description)
 func pt_widget_set_a11y_name voidpt_widget_set_a11y_name(pt_widget*widget,constchar*name)
 func pt_widget_set_a11y_role voidpt_widget_set_a11y_role(pt_widget*widget,pt_a11y_rolerole)
@@ -654,6 +691,7 @@ func pt_widget_set_min_height voidpt_widget_set_min_height(pt_widget*widget,floa
 func pt_widget_set_min_width voidpt_widget_set_min_width(pt_widget*widget,floatwidth)
 func pt_widget_set_on_checked voidpt_widget_set_on_checked(pt_widget*widget,pt_value_callbackcallback,void*user_data)
 func pt_widget_set_padding voidpt_widget_set_padding(pt_widget*widget,floattop,floatright,floatbottom,floatleft)
+func pt_widget_set_paint_callback voidpt_widget_set_paint_callback(pt_widget*widget,pt_paint_callbackcallback,void*user_data)
 func pt_widget_set_radius voidpt_widget_set_radius(pt_widget*widget,floatradius)
 func pt_widget_set_size voidpt_widget_set_size(pt_widget*widget,floatwidth,floatheight)
 func pt_widget_set_text voidpt_widget_set_text(pt_widget*widget,constchar*text)
@@ -685,6 +723,8 @@ func pt_window_get_theme_metric floatpt_window_get_theme_metric(constpt_window*w
 func pt_window_get_width intpt_window_get_width(constpt_window*window)
 func pt_window_hide voidpt_window_hide(pt_window*window)
 func pt_window_is_open boolpt_window_is_open(constpt_window*window)
+func pt_window_primary_get char*pt_window_primary_get(pt_window*window)
+func pt_window_primary_set boolpt_window_primary_set(pt_window*window,constchar*text)
 func pt_window_request_redraw voidpt_window_request_redraw(pt_window*window)
 func pt_window_root pt_widget*pt_window_root(pt_window*window)
 func pt_window_set_close_callback voidpt_window_set_close_callback(pt_window*window,pt_close_callbackcallback,void*user_data)
@@ -692,11 +732,17 @@ func pt_window_set_decorated voidpt_window_set_decorated(pt_window*window,boolde
 func pt_window_set_drag_finished_callback voidpt_window_set_drag_finished_callback(pt_window*window,pt_drag_finished_callbackcallback,void*user_data)
 func pt_window_set_drag_image voidpt_window_set_drag_image(pt_window*window,constpt_color*pixels,intwidth,intheight)
 func pt_window_set_drag_timeout voidpt_window_set_drag_timeout(pt_window*window,uint32_tmilliseconds)
+func pt_window_set_focus_callback voidpt_window_set_focus_callback(pt_window*window,pt_focus_callbackcallback,void*user_data)
 func pt_window_set_gesture_callback voidpt_window_set_gesture_callback(pt_window*window,pt_gesture_callbackcallback,void*user_data)
+func pt_window_set_ime_callbacks voidpt_window_set_ime_callbacks(pt_window*window,pt_ime_commit_callbackcommit_callback,pt_ime_preedit_callbackpreedit_callback,void*user_data)
+func pt_window_set_ime_cursor_rect voidpt_window_set_ime_cursor_rect(pt_window*window,intx,inty,intwidth,intheight)
+func pt_window_set_ime_enabled voidpt_window_set_ime_enabled(pt_window*window,boolenabled)
 func pt_window_set_key_callback voidpt_window_set_key_callback(pt_window*window,pt_key_callbackcallback,void*user_data)
+func pt_window_set_key_event_callback voidpt_window_set_key_event_callback(pt_window*window,pt_key_event_callbackcallback,void*user_data)
 func pt_window_set_long_press_delay voidpt_window_set_long_press_delay(pt_window*window,uint32_tmilliseconds)
 func pt_window_set_min_size voidpt_window_set_min_size(pt_window*window,intwidth,intheight)
 func pt_window_set_momentum_scrolling voidpt_window_set_momentum_scrolling(pt_window*window,boolenabled)
+func pt_window_set_pointer_callback voidpt_window_set_pointer_callback(pt_window*window,pt_pointer_callbackcallback,void*user_data)
 func pt_window_set_popup_policy voidpt_window_set_popup_policy(pt_window*window,pt_popup_policypolicy)
 func pt_window_set_resizable voidpt_window_set_resizable(pt_window*window,boolresizable)
 func pt_window_set_resize_callback voidpt_window_set_resize_callback(pt_window*window,pt_resize_callbackcallback,void*user_data)
@@ -714,6 +760,7 @@ opaque pt_dialog
 opaque pt_drop_offer
 opaque pt_drop_stream
 opaque pt_menu
+opaque pt_paint_context
 opaque pt_toast
 opaque pt_tree_node
 opaque pt_widget
@@ -721,6 +768,7 @@ opaque pt_window
 struct pt_drag_data constchar*mime_type|constchar*data|size_tsize
 struct pt_drop_target pt_drop_enter_callbackenter|pt_drop_motion_callbackmotion|pt_drop_leave_callbackleave|pt_drop_callbackdrop|void*user_data|pt_drop_offer_enter_callbackenter_offer|pt_drop_offer_drop_callbackdrop_offer
 struct pt_gesture_event pt_gesture_kindkind|pt_gesture_phasephase|uint32_tfingers|floatx|floaty|floatdx|floatdy|floatscale|floatrotation|pt_widget*target
+struct pt_pointer_event pt_pointer_phasephase|floatx|floaty|floatdelta_x|floatdelta_y|uint32_tbutton|uint32_tmodifiers|uint32_tclick_count|boolpressed
 struct pt_stylus_event pt_stylus_phasephase|pt_stylus_tooltool|floatx|floaty|floatpressure|floatdistance|floattilt_x|floattilt_y|floatrotation|uint32_tbuttons
 struct pt_text_span uint32_tstart|uint32_tlength|pt_font_weightweight|pt_font_slantslant|pt_colorcolor|uint32_tflags|charfamily[64]|floatsize
 struct pt_transition floatvalue|floatstart|floattarget|floatelapsed|floatduration|pt_easingeasing|boolactive

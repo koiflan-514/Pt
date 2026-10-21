@@ -2129,6 +2129,227 @@ char *pt_platform_clipboard_get(pt_window *window) {
     return offer_read_text(platform, platform->selection, mime, pt_clipboard_timeout_ms);
 }
 
+/* ---------- primary selection (middle-click paste) ----------
+ *
+ * The wp_primary_selection_unstable_v1 protocol mirrors wl_data_device for the
+ * X11-style primary selection: a device per seat, a source the owner serves
+ * mime types from, and an offer the reader pulls UTF-8 text from. Without the
+ * protocol, or headless, both sides keep an in-process buffer so the API stays
+ * usable everywhere. */
+
+static void primary_source_send(void *data, struct zwp_primary_selection_source_v1 *source,
+                                const char *mime_type, int32_t fd) {
+    (void)source;
+    pt_platform *platform = data;
+    const char *payload = platform->primary_text;
+    if (!payload || !mime_is_text(mime_type)) {
+        close(fd);
+        return;
+    }
+    size_t size = strlen(payload);
+    pt_wl_source_write *write = pt_alloc_zeroed(1, sizeof(*write));
+    char *copy = malloc(size ? size : 1u);
+    if (!write || !copy) {
+        free(write);
+        free(copy);
+        close(fd);
+        return;
+    }
+    if (size > 0) {
+        memcpy(copy, payload, size);
+    }
+    write->fd = fd;
+    write->data = copy;
+    write->size = size;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+    if (!source_write_pump_one(write)) {
+        write->next = platform->source_writes;
+        platform->source_writes = write;
+        return;
+    }
+    close(fd);
+    free(copy);
+    free(write);
+}
+
+static void primary_source_cancelled(void *data,
+                                     struct zwp_primary_selection_source_v1 *source) {
+    pt_platform *platform = data;
+    if (platform->primary_source == source) {
+        platform->primary_source = NULL;
+        zwp_primary_selection_source_v1_destroy(source);
+        free(platform->primary_text);
+        platform->primary_text = NULL;
+    }
+}
+
+static const struct zwp_primary_selection_source_v1_listener primary_source_listener = {
+    .send = primary_source_send,
+    .cancelled = primary_source_cancelled,
+};
+
+static void primary_offer_offer(void *data, struct zwp_primary_selection_offer_v1 *offer,
+                                const char *mime_type) {
+    (void)offer;
+    pt_platform *platform = data;
+    if (!mime_is_text(mime_type)) {
+        return;
+    }
+    free(platform->primary_mime);
+    platform->primary_mime = pt_strdup(mime_type);
+}
+
+static const struct zwp_primary_selection_offer_v1_listener primary_offer_listener = {
+    .offer = primary_offer_offer,
+};
+
+static void primary_device_data_offer(void *data,
+                                      struct zwp_primary_selection_device_v1 *device,
+                                      struct zwp_primary_selection_offer_v1 *offer) {
+    (void)device;
+    pt_platform *platform = data;
+    if (platform->primary_offer) {
+        zwp_primary_selection_offer_v1_destroy(platform->primary_offer);
+    }
+    platform->primary_offer = offer;
+    if (offer) {
+        zwp_primary_selection_offer_v1_add_listener(offer, &primary_offer_listener, platform);
+    }
+}
+
+static void primary_device_selection(void *data,
+                                     struct zwp_primary_selection_device_v1 *device,
+                                     struct zwp_primary_selection_offer_v1 *offer) {
+    (void)device;
+    pt_platform *platform = data;
+    if (!offer) {
+        free(platform->primary_mime);
+        platform->primary_mime = NULL;
+        return;
+    }
+    /* Keep the announced mime; the offer stays readable until replaced. */
+    if (platform->primary_offer != offer) {
+        primary_device_data_offer(data, device, offer);
+    }
+}
+
+static const struct zwp_primary_selection_device_v1_listener primary_device_listener = {
+    .data_offer = primary_device_data_offer,
+    .selection = primary_device_selection,
+};
+
+void pt_platform_primary_set(pt_window *window, const char *text) {
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform) {
+        return;
+    }
+    free(platform->primary_text);
+    platform->primary_text = text ? pt_strdup(text) : NULL;
+    if (platform->headless || !platform->primary_device || !platform->primary_manager) {
+        return;
+    }
+    if (platform->primary_source) {
+        zwp_primary_selection_source_v1_destroy(platform->primary_source);
+        platform->primary_source = NULL;
+    }
+    if (!platform->primary_text) {
+        zwp_primary_selection_device_v1_set_selection(platform->primary_device, NULL,
+                                                      platform->serial);
+        return;
+    }
+    struct zwp_primary_selection_source_v1 *source =
+        zwp_primary_selection_device_manager_v1_create_source(platform->primary_manager);
+    if (!source) {
+        return;
+    }
+    platform->primary_source = source;
+    zwp_primary_selection_source_v1_add_listener(source, &primary_source_listener, platform);
+    zwp_primary_selection_source_v1_offer(source, "text/plain;charset=utf-8");
+    zwp_primary_selection_source_v1_offer(source, "text/plain");
+    zwp_primary_selection_source_v1_offer(source, "UTF8_STRING");
+    zwp_primary_selection_source_v1_offer(source, "STRING");
+    zwp_primary_selection_device_v1_set_selection(platform->primary_device, source,
+                                                  platform->serial);
+}
+
+char *pt_platform_primary_get(pt_window *window) {
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform) {
+        return NULL;
+    }
+    if (platform->headless) {
+        return platform->primary_text ? pt_strdup(platform->primary_text) : NULL;
+    }
+    if (platform->primary_source && platform->primary_text) {
+        return pt_strdup(platform->primary_text);
+    }
+    if (!platform->primary_offer || !platform->primary_mime) {
+        return NULL;
+    }
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) < 0) {
+        return NULL;
+    }
+    zwp_primary_selection_offer_v1_receive(platform->primary_offer, platform->primary_mime,
+                                           fds[1]);
+    close(fds[1]);
+    wl_display_flush(platform->display);
+    size_t capacity = 4096;
+    size_t length = 0;
+    char *buffer = pt_alloc(capacity);
+    int64_t deadline = pt_now_ms() + pt_clipboard_timeout_ms;
+    for (;;) {
+        int64_t now = pt_now_ms();
+        int wait = (int)(deadline - now);
+        if (wait < 0) {
+            break;
+        }
+        struct pollfd pfd = {.fd = fds[0], .events = POLLIN};
+        int ready = poll(&pfd, 1, wait);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (ready == 0) {
+            break;
+        }
+        if (length + 1 >= capacity) {
+            if (capacity >= pt_clipboard_max_bytes) {
+                break;
+            }
+            capacity *= 2;
+            buffer = pt_realloc_mem(buffer, capacity);
+        }
+        ssize_t got = read(fds[0], buffer + length, capacity - length - 1);
+        if (got > 0) {
+            length += (size_t)got;
+            if (length >= pt_clipboard_max_bytes) {
+                break;
+            }
+            continue;
+        }
+        if (got == 0) {
+            break;
+        }
+        if (errno == EINTR || errno == EAGAIN) {
+            continue;
+        }
+        break;
+    }
+    close(fds[0]);
+    if (length == 0) {
+        free(buffer);
+        return NULL;
+    }
+    buffer[length] = '\0';
+    return buffer;
+}
+
 static void ensure_seat_devices(pt_platform *platform);
 
 static bool platform_offer_start_read(pt_drop_offer *drop, const char *mime_type, int fd) {
@@ -2317,6 +2538,14 @@ static void ensure_seat_devices(pt_platform *platform) {
             wl_data_device_add_listener(platform->data_device, &data_device_listener, platform);
         }
     }
+    if (platform->primary_manager && !platform->primary_device) {
+        platform->primary_device = zwp_primary_selection_device_manager_v1_get_device(
+            platform->primary_manager, platform->seat);
+        if (platform->primary_device) {
+            zwp_primary_selection_device_v1_add_listener(platform->primary_device,
+                                                         &primary_device_listener, platform);
+        }
+    }
     if (platform->text_input_manager && !platform->text_input) {
         platform->text_input =
             zwp_text_input_manager_v3_get_text_input(platform->text_input_manager,
@@ -2442,6 +2671,11 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
         platform->data_device_manager =
             wl_registry_bind(registry, name, &wl_data_device_manager_interface, bound);
         ensure_seat_devices(platform);
+    } else if (strcmp(interface,
+                      zwp_primary_selection_device_manager_v1_interface.name) == 0) {
+        platform->primary_manager = wl_registry_bind(
+            registry, name, &zwp_primary_selection_device_manager_v1_interface, 1);
+        ensure_seat_devices(platform);
     } else if (strcmp(interface, zwp_tablet_manager_v2_interface.name) == 0) {
         platform->tablet_manager =
             wl_registry_bind(registry, name, &zwp_tablet_manager_v2_interface, 1);
@@ -2522,6 +2756,8 @@ void pt_platform_stop(pt_app *app) {
         pt_app_cancel_timeout(app, platform->repeat_timer);
     }
     free(platform->clipboard_text);
+    free(platform->primary_text);
+    free(platform->primary_mime);
     free(platform->pending_preedit);
     free(platform->pending_commit);
     if (platform->drag_types) {
@@ -2555,6 +2791,18 @@ void pt_platform_stop(pt_app *app) {
     }
     if (platform->data_device) {
         wl_data_device_destroy(platform->data_device);
+    }
+    if (platform->primary_offer) {
+        zwp_primary_selection_offer_v1_destroy(platform->primary_offer);
+    }
+    if (platform->primary_source) {
+        zwp_primary_selection_source_v1_destroy(platform->primary_source);
+    }
+    if (platform->primary_device) {
+        zwp_primary_selection_device_v1_destroy(platform->primary_device);
+    }
+    if (platform->primary_manager) {
+        zwp_primary_selection_device_manager_v1_destroy(platform->primary_manager);
     }
     drag_icon_destroy(platform);
     if (platform->text_input) {

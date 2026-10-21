@@ -1380,6 +1380,8 @@ void pt_platform_window_set_cursor(pt_window *window, pt_cursor cursor);
 void pt_platform_window_set_size_hint(pt_window *window);
 void pt_platform_clipboard_set(pt_window *window, const char *text);
 char *pt_platform_clipboard_get(pt_window *window);
+void pt_platform_primary_set(pt_window *window, const char *text);
+char *pt_platform_primary_get(pt_window *window);
 bool pt_platform_begin_drag_types(pt_window *window, const pt_drag_data *types,
                                   uint32_t count);
 void pt_platform_cancel_drag(pt_window *window);

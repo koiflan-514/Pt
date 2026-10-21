@@ -193,6 +193,36 @@ int main(void) {
     test_window_properties(app);
     test_scroll_painting(app);
     test_animation(app);
+
+    /* Primary selection (middle-click paste) API. Headless runs keep an
+     * in-process buffer, so the round trip must behave like the clipboard. */
+    pt_window *pwin = pt_window_create(app, "primary", 320, 240);
+    pt_check(pwin != NULL);
+    pt_check(pt_window_primary_get(pwin) == NULL);
+    pt_check(pt_window_primary_set(pwin, "middle-click text"));
+    char *primary = pt_window_primary_get(pwin);
+    pt_check(primary != NULL && strcmp(primary, "middle-click text") == 0);
+    pt_free(primary);
+    /* The clipboard and the primary selection stay independent. */
+    pt_check(pt_window_clipboard_set(pwin, "control-c text"));
+    primary = pt_window_primary_get(pwin);
+    pt_check(primary != NULL && strcmp(primary, "middle-click text") == 0);
+    pt_free(primary);
+    char *clipboard = pt_window_clipboard_get(pwin);
+    pt_check(clipboard != NULL && strcmp(clipboard, "control-c text") == 0);
+    pt_free(clipboard);
+    /* Overwriting and clearing. */
+    pt_check(pt_window_primary_set(pwin, "second"));
+    primary = pt_window_primary_get(pwin);
+    pt_check(primary != NULL && strcmp(primary, "second") == 0);
+    pt_free(primary);
+    pt_check(pt_window_primary_set(pwin, NULL));
+    pt_check(pt_window_primary_get(pwin) == NULL);
+    /* NULL-window error contract matches the clipboard pair. */
+    pt_check(!pt_window_primary_set(NULL, "nope"));
+    pt_check(pt_window_primary_get(NULL) == NULL);
+    pt_window_free(pwin);
+
     pt_app_destroy(app);
     return pt_test_finish("window");
 }

@@ -15,6 +15,7 @@
 
 #include "fractional-scale-v1-client-protocol.h"
 #include "pointer-gestures-unstable-v1-client-protocol.h"
+#include "primary-selection-unstable-v1-client-protocol.h"
 #include "tablet-unstable-v2-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol.h"
 #include "viewporter-client-protocol.h"
@@ -146,6 +147,12 @@ struct pt_platform {
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
     struct wl_data_source *data_source;
+    struct zwp_primary_selection_device_manager_v1 *primary_manager;
+    struct zwp_primary_selection_device_v1 *primary_device;
+    struct zwp_primary_selection_source_v1 *primary_source;
+    struct zwp_primary_selection_offer_v1 *primary_offer;
+    char *primary_mime;
+    char *primary_text;
     struct wl_data_source *drag_source;
     pt_window *drag_source_window;
     pt_wl_drag_type *drag_types;

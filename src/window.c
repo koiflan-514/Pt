@@ -303,6 +303,21 @@ char *pt_window_clipboard_get(pt_window *window) {
     return pt_platform_clipboard_get(window);
 }
 
+bool pt_window_primary_set(pt_window *window, const char *text) {
+    if (!window) {
+        return false;
+    }
+    pt_platform_primary_set(window, text);
+    return true;
+}
+
+char *pt_window_primary_get(pt_window *window) {
+    if (!window) {
+        return NULL;
+    }
+    return pt_platform_primary_get(window);
+}
+
 void pt_window_set_size(pt_window *window, int width, int height) {
     if (!window) {
         return;
