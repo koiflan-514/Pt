@@ -6,17 +6,16 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **1.0.0**. The frozen release: a combobox with select-only and
-filterable modes, native popup surfaces and keyboard and type-ahead navigation;
-one multi-row selection model across lists, tables and trees — range and toggle
-primitives, shift-click, Ctrl-click, Shift+arrow, Ctrl+A and a geometric rubber
-band in every view; the AT-SPI roles and states a screen reader needs to drive
-them; per-header ownership, lifetime, error and threading contracts backed by an
-append-only ABI test; and `tools/release-check.sh`, which turns the 1.0 readiness
-checklist into a report — on a 412-function C ABI wrapped in C++/Python/Java with
-binding parity enforced. The API is tracked by a reviewed baseline, a generated
-function reference and a compatibility policy; see
-[docs/api-reference.md](docs/api-reference.md),
+Status: **1.1.0**. The contract-hardening release: explicit client-side
+decoration by default with requested and effective modes tracked separately,
+side-effect-free offscreen snapshots with an explicit stride/scale/format
+descriptor, primary selection sourced from the triggering event's serial, and
+hardened paint, IME, fd-watch and raw-input callback contracts — an append-only
+extension surface on a 448-function C ABI wrapped in C++/Python/Java with
+binding parity enforced. The release record is written and the annotated tag is
+created after the final gate run; see [docs/release.md](docs/release.md). The API
+is tracked by a reviewed baseline, a generated function reference and a
+compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 [docs/api-policy.md](docs/api-policy.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why Pt
@@ -61,36 +60,60 @@ function reference and a compatibility policy; see
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
 
-## What is new in 1.1 (in progress)
+## What is new in 1.1.0
 
-1.1 keeps every 1.0 signature and adds an extension surface for applications
-that draw their own content, own input or talk to the compositor directly. The
-release is not cut yet; the sections below describe the extension API in the
-work-in-progress tree.
+1.1.0 keeps every 1.0 signature and adds an append-only extension surface for
+applications that draw their own content, own input or talk to the compositor
+directly. The source tree, tests, examples and documentation are complete; the
+annotated tag is created after the final gate run recorded in
+[release.md](docs/release.md).
 
 - **Decoration negotiation.** The default is explicit client-side decoration.
-  `pt_window_set_decorated(false)` now means only "Pt draws no header"; it never
-  requests server-side decoration. `pt_window_set_decoration_mode` chooses
-  `auto`, `client` or `server`, and the compositor's `configure` answer remains
-  authoritative. See [Decoration policy](#decoration-policy).
+  The enum is `pt_decoration_mode {pt_decoration_auto, pt_decoration_client,
+  pt_decoration_server}`. `pt_window_set_decorated(false)` now means only "Pt
+  draws no header"; it never requests server-side decoration.
+  `pt_window_set_decoration_mode` chooses the request,
+  `pt_window_get_decoration_mode` returns it, and
+  `pt_window_get_effective_decoration_mode` returns what `configure` made
+  authoritative. `pt_window_maximize` returns false when the compositor did not
+  advertise the maximize capability, and the header button is disabled in the
+  same case. See [Decoration policy](#decoration-policy).
 - **Primary selection.** `pt_window_primary_set` and `pt_window_primary_get`
   back middle-click paste through `wp_primary_selection_unstable_v1` with the
   serial of the triggering event, and fall back to an in-process buffer off
-  Wayland.
+  Wayland. `pt_window_primary_set_serial` passes an explicit serial from inside
+  an event callback; a programmatic selection with no trigger serial returns
+  false and sends nothing.
 - **Custom paint.** `pt_widget_set_paint_callback` hands a widget a borrowed
   `pt_paint_context` with clip, rectangle, line, rounded-rectangle and text
-  helpers (`pt_paint_*`), plus widget-scoped redraw requests.
+  helpers (`pt_paint_*`), plus widget-scoped redraw requests. The callback is
+  pure and idempotent, and the clip and reentrancy guards are always active, not
+  behind a debug switch.
 - **Offscreen snapshots.** `pt_window_paint_pixels` renders a full frame into a
   caller-owned `0xAARRGGBB` buffer without damage, redraw bookkeeping or overlay
   collection, so custom paint is testable headless.
+  `pt_window_paint_pixels_ex` takes a `pt_paint_pixels_desc` with stride, scale
+  and `pt_pixel_format` (only `pt_pixel_format_argb8888_premultiplied`) for
+  fractional-scale and padded buffers.
 - **Custom IME.** `pt_window_set_ime_callbacks`, `pt_window_set_ime_enabled` and
   `pt_window_set_ime_cursor_rect` let a terminal or canvas receive composed text
   without pretending to be an entry.
 - **Descriptor watches.** `pt_app_watch_fd` folds pipes, eventfds and timerfds
-  into the app's poll loop with borrowed-descriptor semantics.
+  into the app's poll loop with borrowed-descriptor semantics;
+  `pt_app_watch_fd_owned` transfers the descriptor and closes it on unwatch or
+  app destroy. A second watch of the same descriptor is rejected, and
+  `POLLHUP`/`POLLERR`/`POLLNVAL` always reach the callback as an error event.
 - **Raw input callbacks.** A focus callback, a key callback that carries the xkb
   UTF-8 text and a normalized pointer-event callback run before widget
-  dispatch, with a defined consume scope.
+  dispatch, with a defined consume scope. Returning true consumes keys and
+  pointer down/up/axis; enter, leave and motion are advisory and their return
+  value is ignored.
+- **Behaviour changes.** The default decoration request moved from server-side
+  to explicit client-side; `pt_window_set_decorated(false)` no longer sends a
+  decoration mode; snapshots no longer consume damage or deferred overlays;
+  repeated fd watches are rejected; and paint-callback self-destruction, clip
+  imbalance and reentrant snapshots have defined outcomes. The complete list is
+  in the [1.1.0 release record](docs/release.md#110-validation-record-2026-11-22).
 
 ## What is new in 1.0
 
@@ -412,7 +435,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` runs headless and needs no compositor. It includes the C test
 suites, the C++/Python/Java binding suites, the exported-symbol and API
-baseline audit, the hard 412/412 binding-parity gate, the per-round 0.6–0.10
+baseline audit, the hard 448/448 binding-parity gate, the per-round 0.6–0.10
 surface audits, a check that `docs/api-reference.md` matches the headers, and
 the randomized property suite for text editing, URI parsing, data-view indices
 and damage rectangles.
@@ -602,13 +625,13 @@ migration and comparison guides also have
 release records, roadmap, performance notes and policy pages remain
 English-only.
 
-## Limitations in 1.0
+## Limitations in 1.1
 
 - Wayland only; there is no X11, Windows or macOS backend.
-- The 1.0 ABI is frozen: additions after 1.0 are append-only and removals
-  require a major release and a SONAME bump. The checked-in baseline, symbol
-  audit and `tests/test_abi.c` make any drift explicit. Layout, painting and
-  the event loop run on the calling thread only.
+- The 1.x ABI is append-only: removals require a major release and a SONAME
+  bump. The checked-in baseline, symbol audit and `tests/test_abi.c` make any
+  drift explicit. Layout, painting and the event loop run on the calling
+  thread only.
 - The renderer is CPU-only. Dense full-window animation is comfortable on
   desktop-sized windows but is not a 4K/120 Hz GPU path; an accelerated backend
   is a post-1.0 candidate.
@@ -674,7 +697,9 @@ pt_window_set_decoration_mode(window, pt_decoration_mode_server);
 
 `pt_decoration_mode_auto` follows the framework default, which is client-side
 decoration in 1.1. The request is never a guarantee: the mode returned by
-`configure` is authoritative. Sway forces server-side decoration on tiled
+`configure` is authoritative, and `pt_window_get_effective_decoration_mode`
+reports it separately from the requested mode returned by
+`pt_window_get_decoration_mode`. Sway forces server-side decoration on tiled
 windows even after a client-side request, niri honours client-side but draws a
 focus ring or border rather than a title bar for server-side, and Mutter and
 Weston expose no decoration manager at all, so they get Pt's header. Fullscreen

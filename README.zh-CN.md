@@ -6,7 +6,13 @@
 应用可以使用 C、C++、Python 或 Java 编写，面向同一套扁平 C ABI。
 这个名字是铂的化学符号：小而致密、不易反应。
 
-状态：**1.0.0**。冻结版本：具有仅选择和可过滤两种模式的组合框，原生弹出层表面以及键盘和键入预选导航；列表、表格和树共享一套多行选择模型——范围与切换原语、Shift+单击、Ctrl+单击、Shift+方向键、Ctrl+A，以及每个视图中的几何橡皮筋框选；屏幕阅读器驱动它们所需的 AT-SPI 角色和状态；每个头文件的所有权、生命周期、错误和线程契约，并由只追加式 ABI 测试保障；以及 `tools/release-check.sh`，它将 1.0 就绪检查清单转化为报告——这套 C ABI 包含 412 个函数，由 C++/Python/Java 封装，并强制要求绑定功能对等。API 由经审阅的基线、生成的函数参考和兼容性策略共同跟踪；参见
+状态：**1.1.0**。契约加固版本：默认显式客户端装饰，并分别跟踪请求模式
+与生效模式；离屏快照无副作用，并提供显式的 stride/scale/format 描述符；
+主选区使用触发事件的 serial；绘制、输入法、描述符监视和原始输入回调契约
+均已加固——这套只追加式扩展表面构建于包含 448 个函数的 C ABI 之上，由
+C++/Python/Java 封装，并强制要求绑定功能对等。发布记录已写好，带注释的标签
+将在最终门禁运行后创建；参见 [docs/release.md](docs/release.md)。API 由
+经审阅的基线、生成的函数参考和兼容性策略共同跟踪；参见
 [docs/api-reference.md](docs/api-reference.md)、
 [docs/api-policy.md](docs/api-policy.md) 和 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
@@ -44,32 +50,50 @@
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
 
-## 1.1 的新特性（开发中）
+## 1.1.0 的新特性
 
-1.1 保留全部 1.0 签名，并为需要自行绘制内容、接管输入或直接与合成器交互的
-应用新增一层扩展表面。发布尚未切出；以下各节描述工作分支中的扩展 API。
+1.1.0 保留全部 1.0 签名，并为需要自行绘制内容、接管输入或直接与合成器交互
+的应用新增一层只追加式扩展表面。源码树、测试、示例和文档均已完成；带注释
+的标签将在最终门禁运行后创建，记录见 [release.md](docs/release.md)。
 
-- **装饰协商。** 默认是显式的客户端装饰。`pt_window_set_decorated(false)`
-  现在只表示“Pt 不绘制标题栏”，绝不再请求服务端装饰。
-  `pt_window_set_decoration_mode` 可选择 `auto`、`client` 或 `server`，
-  合成器返回的 `configure` 模式仍然是权威结果。参见
-  [装饰政策](#装饰政策)。
+- **装饰协商。** 默认是显式的客户端装饰。枚举为
+  `pt_decoration_mode {pt_decoration_auto, pt_decoration_client,
+  pt_decoration_server}`。`pt_window_set_decorated(false)` 现在只表示
+  “Pt 不绘制标题栏”，绝不再请求服务端装饰。`pt_window_set_decoration_mode`
+  选择请求模式，`pt_window_get_decoration_mode` 返回该请求，
+  `pt_window_get_effective_decoration_mode` 返回 `configure` 最终决定的
+  生效模式。合成器未声明最大化能力时，`pt_window_maximize` 返回 false，
+  标题栏按钮也会同时禁用。参见 [装饰政策](#装饰政策)。
 - **主选区。** `pt_window_primary_set` 和 `pt_window_primary_get` 通过
   `wp_primary_selection_unstable_v1` 为鼠标中键粘贴提供支持，并使用触发事件
   的 serial；在 Wayland 之外则回退到进程内缓冲区。
+  `pt_window_primary_set_serial` 允许在事件回调内显式传入 serial；
+  没有触发 serial 的程序化选择返回 false 且不发送任何内容。
 - **自定义绘制。** `pt_widget_set_paint_callback` 向控件提供一个借用的
   `pt_paint_context`，其中包含裁剪、矩形、线条、圆角矩形和文本辅助函数
-  （`pt_paint_*`），以及控件范围的请求重绘入口。
+  （`pt_paint_*`），以及控件范围的请求重绘入口。回调是纯函数且幂等，
+  裁剪和重入守卫始终开启，而不是藏在调试开关后面。
 - **离屏快照。** `pt_window_paint_pixels` 将完整一帧渲染到调用方拥有的
   `0xAARRGGBB` 缓冲区，不会产生损坏、重绘簿记或覆盖层收集，因此自定义绘制
-  可以在无头环境中测试。
+  可以在无头环境中测试。`pt_window_paint_pixels_ex` 接受
+  `pt_paint_pixels_desc`，其中包含 stride、scale 和 `pt_pixel_format`
+  （目前只有 `pt_pixel_format_argb8888_premultiplied`），用于分数缩放和
+  带填充的缓冲区。
 - **自定义输入法。** `pt_window_set_ime_callbacks`、
   `pt_window_set_ime_enabled` 和 `pt_window_set_ime_cursor_rect` 让终端或画布
   无需伪装成输入框即可接收组合后的文本。
 - **描述符监视。** `pt_app_watch_fd` 以借用描述符语义把管道、eventfd 和
-  timerfd 纳入应用的 poll 循环。
+  timerfd 纳入应用的 poll 循环；`pt_app_watch_fd_owned` 接管描述符，并在
+  取消监视或应用销毁时关闭它。同一描述符的第二次监视会被拒绝，
+  `POLLHUP`/`POLLERR`/`POLLNVAL` 始终以错误事件到达回调。
 - **原始输入回调。** 焦点回调、携带 xkb UTF-8 文本的按键回调，以及归一化
-  指针事件回调都在控件分发之前运行，并具有明确的消费范围。
+  指针事件回调都在控件分发之前运行，并具有明确的消费范围。返回 true 会消费
+  按键和指针 down/up/axis；enter、leave 和 motion 是建议性的，其返回值被忽略。
+- **行为变化。** 默认装饰请求从服务端改为显式客户端；
+  `pt_window_set_decorated(false)` 不再发送装饰模式；快照不再消费损坏区域或
+  延迟覆盖层；重复的描述符监视会被拒绝；绘制回调内自毁、裁剪不平衡以及重入
+  快照都有明确结果。完整清单见
+  [1.1.0 发布记录](docs/release.md#110-validation-record-2026-11-22)。
 
 ## 1.0 的新特性
 
@@ -338,7 +362,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` 以无头方式运行，不需要合成器。它包含 C 测试套件、
 C++/Python/Java 绑定测试套件、导出符号和 API 基线审计、
-硬性的 412/412 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
+硬性的 448/448 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
 `docs/api-reference.md` 与头文件一致的检查，以及针对文本编辑、URI 解析、
 数据视图索引和损坏矩形的随机属性测试套件。
 实时 Wayland 冒烟测试不属于 `make check`。`make check-wayland`
@@ -516,13 +540,13 @@ pkg-config --modversion pt
 快速入门、架构、绑定、主题、无障碍、RTL 计划、迁移和比较指南提供简体中文版；
 生成的 API 参考、发布记录、路线图、性能说明和政策页面保留英文。
 
-<a id="limitations-in-10"></a>
+<a id="limitations-in-11"></a>
 
-## 1.0 中的限制
+## 1.1 中的限制
 
 - 仅支持 Wayland；没有 X11、Windows 或 macOS 后端。
-- 1.0 ABI 已冻结：1.0 之后的新增均为只追加，移除需要主版本发布和
-  SONAME 提升。签入的基线、符号审计和 `tests/test_abi.c` 会让任何漂移显式化。
+- 1.x ABI 为只追加：移除需要主版本发布和 SONAME 提升。
+  签入的基线、符号审计和 `tests/test_abi.c` 会让任何漂移显式化。
   布局、绘制和事件循环仅在调用线程上运行。
 - 渲染器仅使用 CPU。密集的全窗口动画在桌面尺寸窗口上表现舒适，
   但不是 4K/120 Hz 的 GPU 路径；加速后端是 1.0 之后的候选。
@@ -576,7 +600,9 @@ pt_window_set_decoration_mode(window, pt_decoration_mode_server);
 ```
 
 `pt_decoration_mode_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求
-从来不是保证：`configure` 返回的模式才是权威结果。Sway 即使收到客户端
+从来不是保证：`configure` 返回的模式才是权威结果，
+`pt_window_get_effective_decoration_mode` 会单独报告它，而
+`pt_window_get_decoration_mode` 返回请求模式。Sway 即使收到客户端
 请求，也会对平铺窗口强制服务端装饰；niri 尊重客户端请求，但在服务端模式下
 只绘制焦点环或边框，而不是标题栏；Mutter 和 Weston 根本不提供装饰管理器，
 因此会使用 Pt 的标题栏。全屏会在任何模式下隐藏标题栏，平铺窗口会放弃圆角
