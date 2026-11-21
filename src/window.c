@@ -1994,6 +1994,19 @@ void pt_window_input_ime_compose(pt_window *window, const char *commit, const ch
     pt_platform_window_schedule_draw(window);
 }
 
+void pt_window_input_ime_action(pt_window *window, uint32_t action) {
+    if (!window || action != 1u /* ZWP_TEXT_INPUT_V3_ACTION_SUBMIT */) {
+        return;
+    }
+    /* An IME submit is an activation request, not a key press. Route it to the
+     * focused entry's submit callback so no "\n" is inserted and no raw/legacy
+     * key callback observes a fabricated Enter. */
+    if (window->focused && window->focused->enabled &&
+        window->focused->kind == pt_widget_entry) {
+        pt_widget_activate(window->focused);
+    }
+}
+
 void pt_window_set_ime_callbacks(pt_window *window, pt_ime_commit_callback commit_callback,
                                  pt_ime_preedit_callback preedit_callback, void *user_data) {
     if (!window) {

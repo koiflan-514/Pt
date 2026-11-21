@@ -1264,6 +1264,9 @@ void pt_window_input_ime_preedit(pt_window *window, const char *text);
 void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
                                  int32_t cursor_begin, int32_t cursor_end,
                                  uint32_t delete_before, uint32_t delete_after);
+/* Applies a text-input-v3 v2 action. Submit activates the focused entry through
+ * its submit callback; it never synthesizes an Enter key or inserts "\n". */
+void pt_window_input_ime_action(pt_window *window, uint32_t action);
 void pt_window_gesture_input(pt_window *window, pt_gesture_kind kind, pt_gesture_phase phase,
                              uint32_t fingers, float dx, float dy, float scale,
                              float rotation);

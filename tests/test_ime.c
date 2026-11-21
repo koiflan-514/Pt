@@ -127,6 +127,85 @@ static void test_delete_surrounding(pt_window *window) {
     (void)submits;
 }
 
+static void test_delete_codepoint_boundaries(pt_window *window) {
+    pt_widget *entry = make_entry(window, "a\xF0\x9F\x98\x80" "b");
+
+    /* The emoji is four bytes. Deleting two bytes before a caret after it would
+     * start inside the sequence; the request snaps out to the codepoint edge
+     * instead of splitting the UTF-8. */
+    pt_entry_set_selection(entry, 5, 5);
+    pt_check(pt_widget_ime_apply(entry, "X", 2, 0, true));
+    pt_check(strcmp(pt_widget_get_text(entry), "a\xF0\x9F\x98\x80Xb") == 0);
+
+    /* Likewise a partial deletion after the caret never leaves half a glyph. */
+    pt_widget_set_text(entry, "a\xF0\x9F\x98\x80" "b");
+    pt_entry_set_selection(entry, 1, 1);
+    pt_check(pt_widget_ime_apply(entry, "Y", 0, 1, true));
+    pt_check(strcmp(pt_widget_get_text(entry), "aY\xF0\x9F\x98\x80" "b") == 0);
+
+    /* Whole-codepoint deletion still works. */
+    pt_widget_set_text(entry, "a\xF0\x9F\x98\x80" "b");
+    pt_entry_set_selection(entry, 5, 5);
+    pt_check(pt_widget_ime_apply(entry, "", 4, 0, true));
+    pt_check(strcmp(pt_widget_get_text(entry), "ab") == 0);
+}
+
+typedef struct submit_probe {
+    int submits;
+    int raw_keys;
+    int legacy_keys;
+} submit_probe;
+
+static void count_submit(pt_widget *widget, void *data) {
+    (void)widget;
+    submit_probe *probe = data;
+    probe->submits++;
+}
+
+static bool count_raw_key(pt_window *window, uint32_t key, uint32_t modifiers,
+                          const char *utf8, void *data) {
+    (void)window;
+    (void)key;
+    (void)modifiers;
+    (void)utf8;
+    submit_probe *probe = data;
+    probe->raw_keys++;
+    return false;
+}
+
+static bool count_legacy_key(pt_window *window, uint32_t key, uint32_t modifiers,
+                             void *data) {
+    (void)window;
+    (void)key;
+    (void)modifiers;
+    submit_probe *probe = data;
+    probe->legacy_keys++;
+    return false;
+}
+
+static void test_v2_action_is_not_enter(pt_window *window) {
+    pt_widget *entry = make_entry(window, "value");
+    submit_probe probe = {0};
+    pt_entry_set_on_submit(entry, count_submit, &probe);
+    pt_window_set_key_event_callback(window, count_raw_key, &probe);
+    pt_window_set_key_callback(window, count_legacy_key, &probe);
+
+    /* Action 1 is submit: it must activate the entry but insert no newline and
+     * produce no key callback. */
+    pt_window_input_ime_action(window, 1);
+    pt_check(probe.submits == 1);
+    pt_check(probe.raw_keys == 0);
+    pt_check(probe.legacy_keys == 0);
+    pt_check(strcmp(pt_widget_get_text(entry), "value") == 0);
+
+    /* None/unknown actions are acknowledged without side effects. */
+    pt_window_input_ime_action(window, 0);
+    pt_window_input_ime_action(window, 99);
+    pt_check(probe.submits == 1);
+    pt_window_set_key_event_callback(window, NULL, NULL);
+    pt_window_set_key_callback(window, NULL, NULL);
+}
+
 static void test_scripted_sequence(pt_window *window) {
     pt_widget *entry = make_entry(window, "");
     pt_widget *area = pt_text_area_create(pt_window_root(window), "note");
@@ -305,6 +384,8 @@ int main(void) {
     test_surrounding(window);
     test_preedit_cursor(window);
     test_delete_surrounding(window);
+    test_delete_codepoint_boundaries(window);
+    test_v2_action_is_not_enter(window);
     test_scripted_sequence(window);
     test_empty_done_is_noop(window);
     test_custom_surface(app);

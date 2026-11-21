@@ -167,12 +167,31 @@ pt_api bool pt_paint_font_metrics(pt_paint_context *context, const char *family,
  * Pt normally enables zwp_text_input_v3 when a text-entry widget has focus. A
  * custom surface can opt in instead by installing callbacks and enabling IME.
  * This lets a terminal receive composed text without pretending to be a text
- * entry. Callbacks run on the UI thread; text is borrowed for the call.
+ * entry. Callbacks run on the UI thread; text is borrowed for the call and is
+ * invalid after it returns. A callback may request a redraw or change its own
+ * composition buffer, and may disable IME; it must not call
+ * pt_app_run_for or destroy the window synchronously.
  *
- * `commit` delivers text that should be inserted. `preedit` replaces the
- * current composition; an empty string ends it. Cursor offsets are UTF-8 byte
- * offsets into `preedit`, or -1 when unspecified. Pt does not apply a commit or
- * preedit itself, so the callback owns insertion and redraw.
+ * Event surface (standards section 7, Q-IME-001/002):
+ * - `commit` delivers text to insert. `preedit` replaces the current
+ *   composition; an empty string ends it. Cursor offsets are UTF-8 byte
+ *   offsets into `preedit`, or -1 when unspecified. Pt does not apply either
+ *   itself: the callback owns insertion and redraw.
+ * - Every done event resends the complete state (content type, surrounding
+ *   text, available actions and caret rectangle); never rely on an IME having
+ *   seen an earlier delta.
+ * - A done with no commit, no preedit and no deletion is an acknowledgement of
+ *   the state Pt pushed. It does not insert text and does not require another
+ *   state push; an idle custom surface must not answer it with a redraw loop.
+ * - The local composition buffer belongs to the callback and is cleared only
+ *   on a commit (or an explicit empty preedit), never on each preedit update.
+ * - text-input-v3 v2 `action` (submit) activates the focused entry through its
+ *   submit callback. It is not turned into a synthetic Enter key and inserts
+ *   no newline. `preedit_hint` ranges are accepted but not rendered; they never
+ *   change the composition buffer or synthesize input.
+ * - `delete_surrounding_text` lengths are UTF-8 byte counts measured from the
+ *   caret in each direction. Pt snaps them to codepoint boundaries so a
+ *   multibyte sequence is never split.
  *
  * `pt_window_set_ime_cursor_rect` sets the logical-pixel caret rectangle used
  * by candidate windows. It is remembered while IME is disabled and pushed when

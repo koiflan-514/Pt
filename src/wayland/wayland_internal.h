@@ -248,6 +248,10 @@ struct pt_platform {
     int32_t pending_preedit_end;
     uint32_t pending_delete_before;
     uint32_t pending_delete_after;
+    /* text-input-v3 v2 action event. It is consumed on the next done and must
+     * not be turned into a synthetic Enter key press or a "\n" commit. */
+    uint32_t pending_action;
+    uint32_t pending_action_serial;
 
     uint32_t repeat_key;
     uint32_t repeat_keysym;
