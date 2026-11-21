@@ -38,9 +38,8 @@ The public C ABI is flat and opaque: no structs with platform handles are
 exposed, callbacks carry `void *user_data`, and colors are packed integers.
 This keeps ctypes and the Java Foreign Function & Memory API bindings small.
 The library is built with `-fvisibility=hidden`; only functions marked `pt_api`
-are exported (412 in the frozen 1.0 ABI, 448 in 1.1; later minors append to the
-same SONAME). Internal headers
-live in `src/` and are not
+are exported (412 in the frozen 1.0 ABI, 448 in 1.1 and 554 in 1.2; later
+minors append to the same SONAME). Internal headers live in `src/` and are not
 installed.
 
 ## Design decisions
@@ -91,6 +90,25 @@ HarfBuzz fonts are kept for the life of the process. This is a deliberate
 latency/memory trade-off: the first frame pays for font discovery and glyph
 rasterization, later frames reuse them. See
 [performance.md](performance.md) for measured RSS/PSS.
+
+### Font fallback pipeline
+
+A UTF-8 run is segmented by HarfBuzz script, and each segment is shaped with
+the primary face when that face covers every codepoint, otherwise with the
+first family in the fallback chain that does. `pt_app_set_font_fallbacks`
+installs the app-wide chain and `pt_app_set_font_fallbacks_for_family` replaces
+it for one primary family; an empty chain restores Fontconfig's own sort order.
+An explicit chain is authoritative: if none of its families covers a codepoint,
+the segment keeps the `.notdef` (tofu) glyph even when another installed font
+would have it, and `pt_app_font_uncovered_count` counts those codepoints.
+
+The cache is process-wide, so a chain installation repaints the calling app and
+applies to text laid out afterwards. Block metrics compose over the faces a line
+actually uses: ascent is the maximum ascent and descent the maximum descent,
+and the line height is `max(ascent + descent, primary line height)`. Caret,
+selection and hit-test offsets remain UTF-8 byte offsets in the original string,
+and the accessibility text is unchanged. The override table is bounded by
+`PT_FONT_FALLBACK_MAX_OVERRIDES` and evicts the least recently set family.
 
 ### Multiline editing
 
@@ -520,6 +538,53 @@ menu opened from a key handler grabs with whatever the seat last saw. The
 compositor's `popup_done` dismisses the overlay, and
 local point translation keeps hit testing and painting identical on both
 paths.
+
+### Application-owned popups and pickers
+
+`pt_popup` is the public form of the popup machinery the menus and tooltips
+already use. It takes a parent window and a content widget, adopts the content
+tree, and owns a native `xdg_surface`/`xdg_popup` with its own buffers when the
+platform supports it; otherwise it behaves as a window-local overlay. The anchor
+is a rectangle in parent logical pixels and the positioner asks for flip and
+slide constraints, so the surface moves to the opposite side and slides along
+the other axis rather than leaving the work area. A per-window open limit
+(`PT_POPUP_MAX_OPEN`) rejects a seventeenth popup without disturbing the open
+ones. An outside click, Escape or a `popup_done` closes the popup and runs the
+dismiss callback after the open state is cleared; a menu-style seat grab is
+taken for the open popup, and the window's overlay ordering keeps painting, hit
+testing and focus identical across the native and fallback paths.
+
+The 1.2 pickers are editor fields built from an entry, a popup and the existing
+grid/list primitives rather than a second widget kind: searchable select, date
+picker, number picker (which has no popup) and colour picker. They report
+`pt_widget_combobox` as their kind so the shipped keyboard, pointer,
+measurement and accessibility dispatch applies unchanged; the `pt_combobox_*`
+item and mode API is a no-op on a picker, and only `pt/picker.h` functions
+apply. The entry keeps focus while a popup is open, so typing still filters,
+Tab closes and continues the focus order, and dismiss restores the committed
+value. The select list lives in the same popup surface, the calendar renders a
+fixed six-week grid, and the colour palette is a fixed-size preset grid.
+Programmatic setters are silent; only user input fires the change callback.
+
+### Icon images and caching
+
+`pt_icon_image` is a reference-counted raster handle. PNG loads reuse the
+bounded clipboard decoder (16 MiB input, 8192² decode) with an icon-specific
+4096 px source cap; hicolor lookup reads `index.theme` and scans `NxN`
+directories under the XDG data directories when the index is unusable. The
+button and window slots take their own reference. Rasterisations are cached per
+size and scale in a process-wide LRU bounded by
+`PT_ICON_CACHE_MAX_ENTRIES`/`PT_ICON_CACHE_MAX_PIXELS` with at most
+`PT_ICON_IMAGE_CACHE_MAX_ENTRIES` per handle; a miss that cannot fit draws the
+untinted fallback instead of growing the cache.
+
+`pt_window_set_icon` is best-effort: when the compositor advertises
+`xdg_toplevel_icon_v1`, Pt rasterises the image to a dedicated immutable
+`wl_shm` buffer (never a frame buffer), attaches it with the window scale and
+keeps it alive until the icon or window is replaced, resubmitting on a scale
+change. Without the global the call is a silent no-op that still retains the
+image, so a getter and a later submission see it. SVG is deferred to a later
+minor because it needs a new dependency.
 
 ### Accessibility
 

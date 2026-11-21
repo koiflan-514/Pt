@@ -373,6 +373,151 @@ pt_combobox_set_popup_max_height(font, 190.0f);
 编辑器保持焦点。当窗口内放置无法容纳在下方时，会翻转到字段上方或限制到
 边缘。
 
+## 弹出层与选择器
+
+### 应用自有弹出层
+
+`pt_popup` 在菜单和工具提示所用的同一 `xdg_popup` 后端上打开应用内容。
+弹出层会接管内容树，因此交接后不要销毁或复用该内容。锚点使用父窗口逻辑像素；
+合成器会翻转并滑动原生表面以保持可见，无头回退则在窗口内执行相同行为。
+
+```c
+static void on_popup_dismiss(pt_popup *popup, void *data) {
+    (void)popup;
+    (void)data;
+}
+
+pt_widget *panel = pt_card_create(NULL);
+pt_label_create(panel, "Popup content");
+
+pt_popup *popup = pt_popup_create(window, panel);
+pt_popup_set_on_dismiss(popup, on_popup_dismiss, NULL);
+pt_popup_anchor anchor = {.x = 24.0f, .y = 96.0f, .width = 160.0f, .height = 32.0f};
+pt_popup_show(popup, anchor);
+```
+
+通过外部点击、Escape 或抓取中断触发的关闭会在 `pt_popup_is_open` 变为 false
+之后调用回调。`pt_popup_destroy` 会关闭弹出层并释放内容，但不调用回调。
+父窗口拥有弹出层，因此销毁窗口会使该句柄失效。
+
+### 可搜索选择与选择器
+
+1.2 的四个选择器都是编辑器字段，拥有相同的焦点、键盘和无障碍模型。它们的
+控件类型报告为 `pt_widget_combobox`，但只有 `pt/picker.h` 中的函数适用；
+调用 `pt_combobox_*` 项 API 是空操作。程序化设置函数是静默的，无效的文本提交
+返回 false，保留原值并记录 `pt_get_last_error`。
+
+```c
+pt_widget *city = pt_select_create(card);
+pt_select_set_placeholder(city, "Choose a city");
+pt_select_add_item_with_data(city, "Berlin", &berlin);
+pt_select_add_item_with_data(city, "Lisbon", &lisbon);
+pt_select_set_max_popup_rows(city, 6);
+
+pt_widget *deadline = pt_date_picker_create(card);
+pt_date date = {.year = 2026, .month = 11, .day = 22};
+pt_date_picker_set_date(deadline, date);
+pt_date_picker_set_format(deadline, pt_date_format_iso);
+
+pt_widget *retries = pt_number_picker_create(card);
+pt_number_picker_set_range(retries, 0.0, 10.0);
+pt_number_picker_set_step(retries, 1.0);
+pt_number_picker_set_value(retries, 3.0);
+
+pt_widget *accent = pt_color_picker_create(card);
+pt_color_picker_set_hex(accent, "#336699");
+```
+
+在选择器中键入会按 ASCII 大小写不敏感的子串过滤；Down、Up、F4 和
+Alt+Down/Alt+Up 打开列表，Enter 提交，Escape 恢复已提交值，空查询下按
+Delete 清除。日期字段解析所选图式（始终接受 ISO），弹出层是固定的六周日历。
+数字字段会钳制到其范围，并以 `.` 作为提交的小数分隔符。颜色字段接受
+`#RRGGBB` 和 `#RRGGBBAA`，调色板以 24 种常用颜色开始。无障碍值分别是
+选中索引、`YYYYMMDD`、数字或归一化 RGB。
+
+## 媒体、图标与持久化
+
+### 图标图像
+
+`pt_icon_image` 是引用计数的栅格图像，可从 PNG 文件、内存或 hicolor 主题名
+加载。控件会持有自己的引用，因此加载句柄可以立即释放。
+
+```c
+pt_icon_image *image = pt_icon_image_from_name("document-open", 18);
+if (image) {
+    pt_widget *open = pt_icon_button_create(card, pt_icon_none, "Open");
+    pt_button_set_icon_image(open, image);
+    pt_button_set_icon_tint(open, 0xFF3366FFu);
+    pt_window_set_icon(window, image);
+    pt_icon_image_destroy(image);
+}
+```
+
+窗口图标通过 `xdg-toplevel-icon-v1` 尽力而为；没有该全局的合成器会忽略它，
+且不记录错误。SVG 源不属于 1.2。
+
+### 剪贴板图像与 URI 列表
+
+`pt_window_clipboard_set_image_png` 接受预乘 `0xAARRGGBB` 像素并写入
+`image/png`；获取函数返回调用方拥有的同布局像素。两个方向都受文本传输上限和
+8192×8192 解码像素上限约束，解码失败返回 NULL。
+
+```c
+pt_color pixels[4] = {0xFF336699u, 0xFF336699u, 0xFF336699u, 0xFF336699u};
+if (pt_window_clipboard_set_image_png(window, pixels, 2, 2)) {
+    int width = 0;
+    int height = 0;
+    pt_color *copy = pt_window_clipboard_get_image_png(window, &width, &height);
+    pt_free(copy);
+}
+
+const char *files[] = {"/home/user/notes.txt"};
+pt_window_clipboard_set_uri_list(window, files, 1);
+```
+
+`pt_window_clipboard_set_uri_list` 写入 CRLF 行和百分号编码的 `file://` URI。
+设置一种剪贴板类型会替换之前的类型。
+
+### 字体回退链
+
+`pt_app_set_font_fallbacks` 安装应用级回退链；
+`pt_app_set_font_fallbacks_for_family` 为某个主字体族覆盖它。文本被拆分为
+字形段，每段使用第一个覆盖它的字体族。回退链是进程范围的，显式链是权威的。
+
+```c
+const char *fallbacks[] = {"Noto Sans", "Noto Sans CJK SC", "Noto Sans Arabic"};
+pt_app_set_font_fallbacks(app, fallbacks, 3);
+
+const char *mono[] = {"Noto Sans Mono", "Noto Sans Mono CJK SC"};
+pt_app_set_font_fallbacks_for_family(app, "monospace", mono, 2);
+
+int missing = pt_app_font_uncovered_count(app, NULL, mixed_text, strlen(mixed_text));
+```
+
+`pt_app_font_uncovered_count` 返回仍渲染为豆腐块的码点数。family 传 NULL 表示
+应用配置的默认字体族。
+
+### 列布局持久化
+
+为每一列提供稳定的键，然后保存和恢复带版本的布局 blob。blob 由应用拥有；
+标题、对齐和可调整大小属于模型配置，不在其中。
+
+```c
+pt_table_set_column_key(table, 0, "name");
+pt_table_set_column_key(table, 1, "size");
+
+char *layout = pt_table_columns_save(table);
+if (layout) {
+    /* store layout where the application keeps configuration */
+    pt_table_columns_restore(table, layout);
+    pt_free(layout);
+}
+```
+
+`pt_table_columns_save` 记录显示顺序、列宽、隐藏标志和多列排序状态。
+`pt_table_columns_restore` 在改动任何内容之前校验整个 blob，并拒绝未知版本、
+格式错误的行、缺失或重复的键以及列数不匹配，同时保持当前布局不变。
+
 ## 文本编辑
 
 输入框是单行编辑器，选择使用 UTF-8 字节偏移。鼠标拖动选择，双击选择一个
@@ -1021,7 +1166,7 @@ pt_window_request_redraw(window);
 pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求只是
+`pt_decoration_auto` 遵循框架默认策略，在 1.2 中即客户端装饰。请求只是
 偏好：Pt 分别跟踪请求模式和生效模式，`pt_window_get_decoration_mode` 报告
 请求，`pt_window_get_effective_decoration_mode` 报告 `configure` 最终决定的
 模式，窗口按生效模式布局。Sway 会对平铺窗口强制服务端装饰，而 Mutter 和

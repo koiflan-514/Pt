@@ -155,7 +155,7 @@ Wayland desktop sessions.
 
 Pt's Python and Java layers have no generated glue, no JNI and no GObject
 runtime. They are small enough to audit and debug, and since 0.7 both wrap every
-public C function — 412 at 1.0, 448 at 1.1 — as does the C++ header; see
+public C function — 412 at 1.0, 448 at 1.1, 554 at 1.2 — as does the C++ header; see
 [bindings.md](bindings.md#binding-coverage).
 
 ## Where each toolkit is the better choice

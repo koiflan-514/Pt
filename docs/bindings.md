@@ -6,11 +6,14 @@ Pt exposes one flat C ABI. The bindings are thin, hand-written layers over that
 ABI so the behaviour of a widget is identical from every language. The 1.1
 surface adds decoration modes, primary selection, custom paint and offscreen
 snapshots, custom IME callbacks, descriptor watches and raw focus/key/pointer
-callbacks. From 1.1 the extension surface is consistent across C, C++, Python
-and Java: the wrappers cover every declared name, and the parity audit treats a
+callbacks. The 1.2 surface adds application-owned popups, font fallback chains,
+clipboard images and URI lists, column persistence, icon images and the four
+pickers. From 1.1 the extension surface is consistent across C, C++, Python and
+Java: the wrappers cover every declared name, and the parity audit treats a
 missing name as a `make check` failure rather than reporting a percentage. The
-0.10 combobox and multi-row selection surface, and the 0.9 theme, chip/skeleton,
-data-view editing and per-run typography surface, remain wrapped in full.
+1.2 target is 554/554. The 0.10 combobox and multi-row selection surface, and
+the 0.9 theme, chip/skeleton, data-view editing and per-run typography surface,
+remain wrapped in full.
 
 | Binding | Technology | Minimum | Ownership |
 | --- | --- | --- | --- |
@@ -1546,10 +1549,51 @@ Callback wrappers follow the same ownership rules as the rest of the surface:
   the application. Unwatching from inside the callback is safe, and the binding
   keeps the trampoline alive until the watch is removed.
 
+## The 1.2 extension surface
+
+1.2 adds 106 functions in six groups. They follow the same hand-written
+convention as the landed wrappers: C++ exposes owning classes for `pt_popup` and
+`pt_icon_image` plus fluent `widget`/`window` methods, Python mirrors that with
+`pt.Popup`/`pt.IconImage` classes and `Widget`/`Window` methods, and Java keeps
+raw `Pt.*` static entry points that map to the C names. The parity gate checks
+every name; the helper names below are the expected set.
+
+| Surface | C++ | Python | Java |
+| --- | --- | --- | --- |
+| Popups (10) | `pt::popup` (`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`) | `pt.Popup` (`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`) | `Pt.popup_create`, `popup_show`, `popup_reposition`, `popup_dismiss`, `popup_is_open`, `popup_content`, `popup_set_on_dismiss`, `popup_set_placement`, `popup_get_placement`, `popup_destroy` |
+| Font fallback (7) | `app::set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `App.set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `Pt.app_set_font_fallbacks`, `app_get_font_fallback_count`, `app_get_font_fallback`, `app_set_font_fallbacks_for_family`, `app_get_font_fallback_count_for_family`, `app_get_font_fallback_for_family`, `app_font_uncovered_count` |
+| Clipboard media (3) | `window::set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Window.set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Pt.window_clipboard_set_image_png`, `window_clipboard_get_image_png`, `window_clipboard_set_uri_list` |
+| Column persistence (4) | `widget::set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Widget.set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Pt.table_set_column_key`, `table_get_column_key`, `table_columns_save`, `table_columns_restore` |
+| Icons (12) | `pt::icon_image` (`load_file`, `load_memory`, `from_name`, `width`, `height`), `widget::set_icon_image`, `icon_image`, `set_icon_tint`, `window::set_icon`, `icon` | `pt.IconImage` (`load_file`, `load_memory`, `from_name`, `width`, `height`), `Widget.set_icon_image`, `icon_image`, `set_icon_tint`, `Window.set_icon`, `icon` | `Pt.icon_image_load_file`, `icon_image_load_memory`, `icon_image_from_name`, `icon_image_width`, `icon_image_height`, `button_set_icon_image`, `button_get_icon_image`, `button_set_icon_tint`, `window_set_icon`, `window_get_icon` |
+| Pickers (70) | `pt::select`, `pt::date_picker`, `pt::number_picker`, `pt::color_picker` and the `select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` widget methods | `pt.select`, `pt.date_picker`, `pt.number_picker`, `pt.color_picker` and the `Widget.select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` methods | `Pt.select_*`, `Pt.date_picker_*`, `Pt.number_picker_*`, `Pt.color_picker_*` |
+
+Group notes:
+
+- **Popups.** `pt::popup` and `pt.Popup` are move-only owners like `menu` and
+  `dialog`; destroying the owner frees the content tree and does not run the
+  dismiss callback. The anchor is passed by value.
+- **Font fallback.** C++ and Python index the chain by `int`; the per-family
+  getters return an empty value for "no override". Java uses integer sentinels
+  matching the C API.
+- **Clipboard media.** The image getter returns caller-owned pixels (`std::vector`
+  in C++, `list[int]` in Python, `int[]` filled by the Java method); release is
+  automatic in C++ and Python and `pt_free`-backed in Java like the text
+  clipboard.
+- **Column persistence.** `columns_save` returns an owned `std::string`/`str`
+  (Java copies and frees) and `columns_restore` takes the same text. The blob is
+  opaque to the binding.
+- **Icons.** `pt::icon_image`/`pt.IconImage` are reference-counted owners;
+  assigning one to a button or window takes its own reference, so dropping the
+  local owner is safe. Java keeps the raw `icon_image_ref`/`destroy` handles.
+- **Pickers.** Item text is copied and item data stays borrowed. The silent
+  setters never fire the change callback; the callback signatures are the
+  existing `pt_index_callback`, `pt_date_callback`, `pt_number_callback` and
+  `pt_color_callback`.
+
 ## Binding coverage
 
-From 1.1 every function in the public C ABI is wrapped in C++, Python and
-Java. The parity audit is a hard `make check` gate: it scans the
+From 1.2 every function in the public C ABI (554) is wrapped in C++, Python
+and Java. The parity audit is a hard `make check` gate: it scans the
 comment-stripped binding sources for every declared function name and allows
 zero unreviewed gaps. The reviewed allowlist is empty. The 124
 functions in the 0.6 surface (one fewer than 0.9 carried, because
@@ -1566,8 +1610,9 @@ binding first; they are now gone from the C ABI and from all three bindings in
 the same change.
 
 `make check` runs the C suites, `make check-bindings` and the API/ABI checks.
-The binding suites are headless: 344 C++ checks, 33 Python unittest cases and
-298 Java checks. Overlay and accessibility tests cover menu/dialog callbacks,
+The binding suites are headless. At the 1.1 gate they were 344 C++ checks, 33
+Python unittest cases and 298 Java checks; the 1.2 wrappers add their own cases
+to the same suites. Overlay and accessibility tests cover menu/dialog callbacks,
 toast lifetime, tooltips, event delivery, enable/disable status and text/value
 exposure. The 0.10 tests cover the combobox defaults and mode switch, item
 add/insert/remove/clear with the text and data accessors and the disabled item,

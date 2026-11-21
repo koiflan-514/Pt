@@ -2,7 +2,7 @@
 
 [English](../bindings.md) | 简体中文
 
-Pt 对外暴露一个扁平的 C ABI。绑定是建立在该 ABI 之上的轻量级手写封装层，因此控件在每种语言中的行为都完全一致。1.1 表面新增装饰模式、主选区、自定义绘制与离屏快照、自定义输入法回调、描述符监视，以及原始焦点/键盘/指针回调。自 1.1 起，扩展表面在 C、C++、Python 和 Java 中保持一致：封装层覆盖每个声明名称，一致性审计把缺失名称视为 `make check` 失败，而不是报告百分比。0.10 的组合框和多行选择表面，以及 0.9 的主题、标签片/骨架屏、数据视图编辑和逐段排版表面，仍被完整封装。
+Pt 对外暴露一个扁平的 C ABI。绑定是建立在该 ABI 之上的轻量级手写封装层，因此控件在每种语言中的行为都完全一致。1.1 表面新增装饰模式、主选区、自定义绘制与离屏快照、自定义输入法回调、描述符监视，以及原始焦点/键盘/指针回调。1.2 表面新增应用自有弹出层、字体回退链、剪贴板图像与 URI 列表、列持久化、图标图像和四个选择器。自 1.1 起，扩展表面在 C、C++、Python 和 Java 中保持一致：封装层覆盖每个声明名称，一致性审计把缺失名称视为 `make check` 失败，而不是报告百分比，1.2 的目标是 554/554。0.10 的组合框和多行选择表面，以及 0.9 的主题、标签片/骨架屏、数据视图编辑和逐段排版表面，仍被完整封装。
 
 | 绑定 | 技术 | 最低要求 | 所有权 |
 | --- | --- | --- | --- |
@@ -1081,12 +1081,47 @@ Java 测试是 `bindings/java/test/pt/PtTest.java`；使用 `make check-bindings
 - **描述符监视回调在 UI 线程上运行**，描述符由应用借用或转移给 Pt。在回调
   内部取消监视是安全的，绑定会让 trampoline 一直存活到监视被移除。
 
+## 1.2 扩展表面
+
+1.2 以六个分组新增 106 个函数。它们遵循已落地封装层的同一手写惯例：C++ 为
+`pt_popup` 和 `pt_icon_image` 提供拥有型类，以及流畅的 `widget`/`window` 方法；
+Python 以 `pt.Popup`/`pt.IconImage` 类和 `Widget`/`Window` 方法对应；Java 保留
+映射 C 名称的原始 `Pt.*` 静态入口。一致性闸门会检查每个名称；下表列出的助手名
+是预期集合。
+
+| 表面 | C++ | Python | Java |
+| --- | --- | --- | --- |
+| 弹出层（10） | `pt::popup`（`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`） | `pt.Popup`（`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`） | `Pt.popup_create`, `popup_show`, `popup_reposition`, `popup_dismiss`, `popup_is_open`, `popup_content`, `popup_set_on_dismiss`, `popup_set_placement`, `popup_get_placement`, `popup_destroy` |
+| 字体回退（7） | `app::set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `App.set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `Pt.app_set_font_fallbacks`, `app_get_font_fallback_count`, `app_get_font_fallback`, `app_set_font_fallbacks_for_family`, `app_get_font_fallback_count_for_family`, `app_get_font_fallback_for_family`, `app_font_uncovered_count` |
+| 剪贴板媒体（3） | `window::set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Window.set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Pt.window_clipboard_set_image_png`, `window_clipboard_get_image_png`, `window_clipboard_set_uri_list` |
+| 列持久化（4） | `widget::set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Widget.set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Pt.table_set_column_key`, `table_get_column_key`, `table_columns_save`, `table_columns_restore` |
+| 图标（12） | `pt::icon_image`（`load_file`, `load_memory`, `from_name`, `width`, `height`）, `widget::set_icon_image`, `icon_image`, `set_icon_tint`, `window::set_icon`, `icon` | `pt.IconImage`（`load_file`, `load_memory`, `from_name`, `width`, `height`）, `Widget.set_icon_image`, `icon_image`, `set_icon_tint`, `Window.set_icon`, `icon` | `Pt.icon_image_load_file`, `icon_image_load_memory`, `icon_image_from_name`, `icon_image_width`, `icon_image_height`, `button_set_icon_image`, `button_get_icon_image`, `button_set_icon_tint`, `window_set_icon`, `window_get_icon` |
+| 选择器（70） | `pt::select`, `pt::date_picker`, `pt::number_picker`, `pt::color_picker` 以及 `select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` 控件方法 | `pt.select`, `pt.date_picker`, `pt.number_picker`, `pt.color_picker` 以及 `Widget.select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` 方法 | `Pt.select_*`, `Pt.date_picker_*`, `Pt.number_picker_*`, `Pt.color_picker_*` |
+
+分组说明：
+
+- **弹出层。** `pt::popup` 和 `pt.Popup` 是像 `menu` 和 `dialog` 一样的仅移动
+  拥有者；销毁拥有者会释放内容树，且不运行关闭回调。锚点按值传递。
+- **字体回退。** C++ 和 Python 用 `int` 索引回退链；按字体族的 getter 以空值
+  表示“无覆盖”。Java 使用与 C API 匹配的整数哨兵。
+- **剪贴板媒体。** 图像获取函数返回调用方拥有的像素（C++ 为 `std::vector`，
+  Python 为 `list[int]`，Java 为方法填充的 `int[]`）；C++ 和 Python 自动释放，
+  Java 像文本剪贴板一样通过 `pt_free` 释放。
+- **列持久化。** `columns_save` 返回拥有的 `std::string`/`str`（Java 复制并
+  释放），`columns_restore` 接受同一文本。blob 对绑定层不透明。
+- **图标。** `pt::icon_image`/`pt.IconImage` 是引用计数拥有者；赋给按钮或窗口
+  会取得自己的引用，因此释放本地拥有者是安全的。Java 保留原始
+  `icon_image_ref`/`destroy` 句柄。
+- **选择器。** 项文本会被复制，项数据仍是借用的。静默 setter 绝不触发变更
+  回调；回调签名是现有的 `pt_index_callback`、`pt_date_callback`、
+  `pt_number_callback` 和 `pt_color_callback`。
+
 <a id="binding-coverage"></a>
 
 ## 绑定覆盖范围
 
-自 1.1 起，公共 C ABI 中的每个函数都已在 C++、Python 和 Java 中封装。
+自 1.2 起，公共 C ABI 中的 554 个函数都已在 C++、Python 和 Java 中封装。
 一致性审计是硬性的 `make check` 门禁：它会扫描去除注释后的绑定源码以查找
 每个声明的函数名，允许零个未经审查的缺口。经审查的允许列表为空。0.6 表面中的 124 个函数（比 0.9 所包含的少一个，因为 `pt_window_begin_uri_drag` 在 1.0 冻结时被移除）、为 0.7 数据视图、拖拽和输入表面引入的 19 个函数、为 0.8 结构化拖拽、流式 offer 和带样式文本表面引入的 19 个函数、为 0.9 主题、标签片/骨架屏、数据视图编辑和重命名表面引入的 44 个函数，以及为 0.10 组合框和多行选择表面引入的 40 个函数，全部存在于三个封装层中。两个在 0.9 中弃用的拖拽辅助函数在其弃用窗口期内，以弃用封装层的形式存在于每个绑定中，而不是被加入允许列表而绕过，因此任何接口在离开 ABI 之前都必须先经过每个绑定；现在它们已在同一变更中从 C ABI 和三个绑定中消失。
 
-`make check` 运行 C 测试套件、`make check-bindings` 以及 API/ABI 检查。绑定套件是无头的：344 项 C++ 检查、33 个 Python unittest 用例和 298 项 Java 检查。覆盖层和无障碍测试覆盖菜单/对话框回调、浮层通知生命周期、工具提示、事件传递、启用/禁用状态以及文本/值暴露。0.10 测试覆盖组合框默认值和模式切换，条目添加/插入/移除/清除以及文本和数据访问器和禁用条目，静默的 `set_selected`/`set_text` 行为，占位符和字段文本，弹出层打开/关闭状态和最大高度往返，索引和文本回调，列表上通过范围、切换和清除实现的多行选择以及主索引的后续变化，额外的表格切换路径，按文档顺序进行的树范围、切换和清除，以及组合框和列表框角色及其可选择和多可选择状态。0.9 测试覆盖应用度量、窗口级令牌和度量覆盖及其清除、标签片创建和回调、骨架屏尺寸、busy 和 invalid 标志、表格单元格编辑和提交、多行选择范围、列重排和行拖拽回调、树重命名提交和第二次无编辑器提交，以及按文本段的字体族和字号。0.8 测试覆盖由 offer 驱动的拖放目标及其对传统配对的回退、带取消和在 `max_bytes` 处截断的分块流读取、多 MIME 源拖拽及其完成回调、带限制和清除的文本段往返，以及输入用途 setter/getter 对。0.7 测试覆盖跨行数变化和刷新的带键列表/表格选择、批量 `refresh_rows`、多列排序过滤和报告、隐藏列、行键/文本回调、弹出层策略、拖拽激活/取消/超时以及无障碍状态。0.6 测试覆盖表格列设置、绑定和排序，树构建和选择，标签页和侧边栏状态，图标 setter，URI 列表解析，拖拽图像写入和触控笔回调注册。0.5 测试检查列表行绑定、选择和激活，文本区域选择和内容自适应，wrap/grid 间距和跨度，缓动和 transition 重定向，减少动态效果切换以及新的无障碍角色。
+`make check` 运行 C 测试套件、`make check-bindings` 以及 API/ABI 检查。绑定套件是无头的。1.1 门禁时为 344 项 C++ 检查、33 个 Python unittest 用例和 298 项 Java 检查；1.2 封装层会在同一批套件中增加自己的用例。覆盖层和无障碍测试覆盖菜单/对话框回调、浮层通知生命周期、工具提示、事件传递、启用/禁用状态以及文本/值暴露。0.10 测试覆盖组合框默认值和模式切换，条目添加/插入/移除/清除以及文本和数据访问器和禁用条目，静默的 `set_selected`/`set_text` 行为，占位符和字段文本，弹出层打开/关闭状态和最大高度往返，索引和文本回调，列表上通过范围、切换和清除实现的多行选择以及主索引的后续变化，额外的表格切换路径，按文档顺序进行的树范围、切换和清除，以及组合框和列表框角色及其可选择和多可选择状态。0.9 测试覆盖应用度量、窗口级令牌和度量覆盖及其清除、标签片创建和回调、骨架屏尺寸、busy 和 invalid 标志、表格单元格编辑和提交、多行选择范围、列重排和行拖拽回调、树重命名提交和第二次无编辑器提交，以及按文本段的字体族和字号。0.8 测试覆盖由 offer 驱动的拖放目标及其对传统配对的回退、带取消和在 `max_bytes` 处截断的分块流读取、多 MIME 源拖拽及其完成回调、带限制和清除的文本段往返，以及输入用途 setter/getter 对。0.7 测试覆盖跨行数变化和刷新的带键列表/表格选择、批量 `refresh_rows`、多列排序过滤和报告、隐藏列、行键/文本回调、弹出层策略、拖拽激活/取消/超时以及无障碍状态。0.6 测试覆盖表格列设置、绑定和排序，树构建和选择，标签页和侧边栏状态，图标 setter，URI 列表解析，拖拽图像写入和触控笔回调注册。0.5 测试检查列表行绑定、选择和激活，文本区域选择和内容自适应，wrap/grid 间距和跨度，缓动和 transition 重定向，减少动态效果切换以及新的无障碍角色。
