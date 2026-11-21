@@ -178,7 +178,7 @@ static void keyboard_enter(void *data, struct wl_keyboard *keyboard, uint32_t se
     (void)keyboard;
     (void)keys;
     pt_platform *platform = data;
-    platform->serial = serial;
+    platform->enter_serial = serial;
     pt_wl_surface_ref ref = {0};
     pt_window *window =
         pt_wl_resolve_surface(platform, surface, &ref) ? ref.window : NULL;
@@ -216,7 +216,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t seri
     if (!window) {
         return;
     }
-    platform->serial = serial;
+    platform->key_serial = serial;
     uint32_t keycode = key + 8u;
     bool pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED;
     if (!pressed) {
@@ -228,6 +228,9 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t seri
     if (!platform->xkb_state) {
         return;
     }
+    /* Record the key-press serial before dispatch. A raw callback that consumes
+     * the key must not hide the serial from a later primary-selection set. */
+    pt_window_input_key_serial(window, serial);
     uint32_t keysym = (uint32_t)xkb_state_key_get_one_sym(platform->xkb_state, keycode);
     uint32_t modifiers = keyboard_modifiers(platform);
     char utf8[32] = {0};
@@ -362,7 +365,7 @@ static void pointer_enter(void *data, struct wl_pointer *pointer, uint32_t seria
     (void)pointer;
     pt_platform *platform = data;
     platform->pointer_serial = serial;
-    platform->serial = serial;
+    platform->enter_serial = serial;
     pt_wl_surface_ref ref = {0};
     bool found = pt_wl_resolve_surface(platform, surface, &ref);
     pt_window *window = found ? ref.window : NULL;
@@ -415,7 +418,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
                            uint32_t time, uint32_t button, uint32_t state) {
     (void)pointer;
     pt_platform *platform = data;
-    platform->serial = serial;
+    platform->button_serial = serial;
     if (!platform->pointer_focus) {
         return;
     }
@@ -1114,7 +1117,7 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
     pt_wl_surface_ref ref = {0};
     bool found = pt_wl_resolve_surface(platform, surface, &ref);
     pt_window *window = found ? ref.window : NULL;
-    platform->serial = serial;
+    platform->touch_serial = serial;
     platform->touch_focus = window;
     platform->touch_offset_x = found ? ref.offset_x : 0.0f;
     platform->touch_offset_y = found ? ref.offset_y : 0.0f;
@@ -1245,7 +1248,7 @@ static void text_input_done(void *data, struct zwp_text_input_v3 *text_input,
                             uint32_t serial) {
     (void)text_input;
     pt_platform *platform = data;
-    platform->serial = serial;
+    platform->ime_serial = serial;
     pt_window *window = platform->text_input_window;
     char *preedit = platform->pending_preedit;
     char *commit = platform->pending_commit;
@@ -2054,6 +2057,13 @@ static const struct wl_data_source_listener data_source_listener = {
     .action = data_source_action,
 };
 
+static uint32_t platform_latest_trigger_serial(const pt_platform *platform) {
+    /* Clipboard has no single protocol-mandated source; prefer the most recent
+     * pointer-button serial and fall back to the most recent key press. Primary
+     * selection never uses this helper: it carries its own explicit serial. */
+    return platform->button_serial ? platform->button_serial : platform->key_serial;
+}
+
 void pt_platform_clipboard_set(pt_window *window, const char *text) {
     pt_platform *platform = pt_platform_for(window);
     if (!platform) {
@@ -2069,8 +2079,9 @@ void pt_platform_clipboard_set(pt_window *window, const char *text) {
     }
     struct wl_data_source *old_source = platform->data_source;
     platform->data_source = NULL;
+    uint32_t serial = platform_latest_trigger_serial(platform);
     if (!platform->clipboard_text) {
-        wl_data_device_set_selection(platform->data_device, NULL, platform->serial);
+        wl_data_device_set_selection(platform->data_device, NULL, serial);
     } else {
         struct wl_data_source *source =
             wl_data_device_manager_create_data_source(platform->data_device_manager);
@@ -2078,7 +2089,7 @@ void pt_platform_clipboard_set(pt_window *window, const char *text) {
             platform->data_source = source;
             wl_data_source_add_listener(source, &data_source_listener, platform);
             platform_offers_text(source);
-            wl_data_device_set_selection(platform->data_device, source, platform->serial);
+            wl_data_device_set_selection(platform->data_device, source, serial);
         }
     }
     if (old_source) {
@@ -2281,9 +2292,12 @@ static const struct zwp_primary_selection_device_v1_listener primary_device_list
     .selection = primary_device_selection,
 };
 
-void pt_platform_primary_set(pt_window *window, const char *text) {
+void pt_platform_primary_set(pt_window *window, const char *text, uint32_t serial) {
     pt_platform *platform = pt_platform_for(window);
     if (!platform) {
+        return;
+    }
+    if (serial == 0) {
         return;
     }
     free(platform->primary_text);
@@ -2297,7 +2311,7 @@ void pt_platform_primary_set(pt_window *window, const char *text) {
     }
     if (!platform->primary_text) {
         zwp_primary_selection_device_v1_set_selection(platform->primary_device, NULL,
-                                                      platform->serial);
+                                                      serial);
         return;
     }
     struct zwp_primary_selection_source_v1 *source =
@@ -2311,8 +2325,7 @@ void pt_platform_primary_set(pt_window *window, const char *text) {
     zwp_primary_selection_source_v1_offer(source, "text/plain");
     zwp_primary_selection_source_v1_offer(source, "UTF8_STRING");
     zwp_primary_selection_source_v1_offer(source, "STRING");
-    zwp_primary_selection_device_v1_set_selection(platform->primary_device, source,
-                                                  platform->serial);
+    zwp_primary_selection_device_v1_set_selection(platform->primary_device, source, serial);
 }
 
 char *pt_platform_primary_get(pt_window *window) {

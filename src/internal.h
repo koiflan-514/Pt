@@ -1072,6 +1072,10 @@ struct pt_window {
     float last_click_y[32];
     uint32_t click_count[32];
     uint32_t pointer_serial;
+    uint32_t key_serial;
+    /* Serial of the last pointer release or key press that can legally trigger
+     * a primary-selection set. Programmatic sets without one return false. */
+    uint32_t primary_serial;
     uint32_t pointer_buttons;
     int32_t touch_id;
     bool touch_active;
@@ -1205,6 +1209,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
                                     float y, uint32_t serial, uint32_t time);
 void pt_window_input_axis(pt_window *window, float x, float y, float delta);
 void pt_window_input_keyboard_focus(pt_window *window, bool focused, uint32_t serial);
+/* Records the serial of a key press before raw/focused dispatch, so a consumed
+ * key still updates the serial a primary-selection set can use. */
+void pt_window_input_key_serial(pt_window *window, uint32_t serial);
 void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
                          const char *utf8, bool pressed);
 void pt_window_set_input_modifiers(pt_window *window, uint32_t modifiers);
@@ -1386,7 +1393,7 @@ void pt_platform_window_set_cursor(pt_window *window, pt_cursor cursor);
 void pt_platform_window_set_size_hint(pt_window *window);
 void pt_platform_clipboard_set(pt_window *window, const char *text);
 char *pt_platform_clipboard_get(pt_window *window);
-void pt_platform_primary_set(pt_window *window, const char *text);
+void pt_platform_primary_set(pt_window *window, const char *text, uint32_t serial);
 char *pt_platform_primary_get(pt_window *window);
 bool pt_platform_begin_drag_types(pt_window *window, const pt_drag_data *types,
                                   uint32_t count);

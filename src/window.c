@@ -304,10 +304,18 @@ char *pt_window_clipboard_get(pt_window *window) {
 }
 
 bool pt_window_primary_set(pt_window *window, const char *text) {
-    if (!window) {
+    if (!window || window->primary_serial == 0) {
         return false;
     }
-    pt_platform_primary_set(window, text);
+    pt_platform_primary_set(window, text, window->primary_serial);
+    return true;
+}
+
+bool pt_window_primary_set_serial(pt_window *window, const char *text, uint32_t serial) {
+    if (!window || serial == 0) {
+        return false;
+    }
+    pt_platform_primary_set(window, text, serial);
     return true;
 }
 
@@ -1243,8 +1251,12 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
         window->pointer_buttons &= ~(1u << slot);
         /* Only the primary button owns widget press state, text selection and
          * the long-press machinery; a right or middle release must leave a
-         * held left button undisturbed. */
+         * held left button undisturbed. A completed left release is also the
+         * legal trigger for a primary-selection publish. */
         if (button == 0x110u) {
+            if (serial != 0) {
+                window->primary_serial = serial;
+            }
             pt_window_press_end(window, x, y);
         }
     }
@@ -1617,6 +1629,14 @@ void pt_window_set_input_modifiers(pt_window *window, uint32_t modifiers) {
     if (window) {
         window->modifiers = modifiers;
     }
+}
+
+void pt_window_input_key_serial(pt_window *window, uint32_t serial) {
+    if (!window || serial == 0) {
+        return;
+    }
+    window->key_serial = serial;
+    window->primary_serial = serial;
 }
 
 void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,

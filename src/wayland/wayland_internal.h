@@ -219,7 +219,14 @@ struct pt_platform {
     pt_window *pointer_focus;
     pt_window *keyboard_focus;
     pt_window *touch_focus;
-    uint32_t serial;
+    /* Serials are per source (standards section 9): focus/enter, pointer button,
+     * key press and touch each keep their own. A primary-selection set uses the
+     * serial of the event that triggered it, never a generic "last serial". */
+    uint32_t enter_serial;
+    uint32_t button_serial;
+    uint32_t key_serial;
+    uint32_t touch_serial;
+    uint32_t ime_serial;
 
     pt_wl_popup *popups;
 

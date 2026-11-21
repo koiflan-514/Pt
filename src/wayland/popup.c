@@ -444,7 +444,10 @@ static bool popup_create(pt_window *window, pt_overlay *overlay) {
     if (overlay->passive) {
         popup_set_passive_input(popup);
     } else {
-        uint32_t serial = window->pointer_serial ? window->pointer_serial : platform->serial;
+        uint32_t serial = window->pointer_serial ? window->pointer_serial
+                                                 : platform->button_serial
+                                                       ? platform->button_serial
+                                                       : platform->enter_serial;
         if (platform->seat && serial) {
             xdg_popup_grab(popup->popup, platform->seat, serial);
         }

@@ -158,8 +158,18 @@ pt_api char *pt_window_clipboard_get(pt_window *window);
  * protocol, or headless, both sides fall back to an in-process buffer so the
  * API stays usable everywhere. Ownership and error contract match the
  * clipboard pair: the setter copies, the getter returns malloc'd UTF-8 owned
- * by the caller (release with pt_free()), NULL when empty or unavailable. */
+ * by the caller (release with pt_free()), NULL when empty or unavailable.
+ *
+ * Serial sourcing (standards section 9, Q-PRI-001). pt_window_primary_set
+ * publishes only when a pointer release or key press has supplied a legal
+ * trigger serial; after any run of input events it uses the most recent one.
+ * A programmatic selection with no triggering event returns false and sends
+ * nothing. Inside a callback that knows the trigger serial, call
+ * pt_window_primary_set_serial instead. Call the setter once when a drag
+ * selection completes, not on every motion event. Since 1.1. */
 pt_api bool pt_window_primary_set(pt_window *window, const char *text);
+pt_api bool pt_window_primary_set_serial(pt_window *window, const char *text,
+                                         uint32_t serial);
 pt_api char *pt_window_primary_get(pt_window *window);
 
 #ifdef __cplusplus

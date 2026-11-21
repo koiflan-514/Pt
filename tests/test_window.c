@@ -429,31 +429,50 @@ int main(void) {
     test_raw_key_dispatch(app);
 
     /* Primary selection (middle-click paste) API. Headless runs keep an
-     * in-process buffer, so the round trip must behave like the clipboard. */
+     * in-process buffer, but publication still requires a triggering event
+     * serial (Q-PRI-001): a programmatic set with no trigger returns false. */
     pt_window *pwin = pt_window_create(app, "primary", 320, 240);
     pt_check(pwin != NULL);
     pt_check(pt_window_primary_get(pwin) == NULL);
-    pt_check(pt_window_primary_set(pwin, "middle-click text"));
+    pt_check(!pt_window_primary_set(pwin, "programmatic"));
+    pt_check(pt_window_primary_get(pwin) == NULL);
+    pt_check(!pt_window_primary_set_serial(pwin, "no serial", 0));
+
+    /* Keyboard selection: the last key press supplies the serial. */
+    pt_window_input_key_serial(pwin, 41);
+    pt_check(pwin->key_serial == 41);
+    pt_check(pwin->primary_serial == 41);
+    pt_check(pt_window_primary_set(pwin, "keyboard text"));
     char *primary = pt_window_primary_get(pwin);
-    pt_check(primary != NULL && strcmp(primary, "middle-click text") == 0);
+    pt_check(primary != NULL && strcmp(primary, "keyboard text") == 0);
     pt_free(primary);
-    /* The clipboard and the primary selection stay independent. */
-    pt_check(pt_window_clipboard_set(pwin, "control-c text"));
+
+    /* Drag selection: press alone is not a trigger; the release is. */
+    float click_x = 20.0f;
+    float click_y = pwin->header_height + 20.0f;
+    pt_window_input_pointer_button(pwin, 0x110u, true, click_x, click_y, 50, 1000);
+    pt_check(pwin->primary_serial == 41);
+    pt_window_input_pointer_button(pwin, 0x110u, false, click_x, click_y, 51, 1010);
+    pt_check(pwin->primary_serial == 51);
+    pt_check(pt_window_primary_set(pwin, "drag text"));
+    /* A right release must not replace the trigger. */
+    pt_window_input_pointer_button(pwin, 0x111u, true, click_x, click_y, 60, 1020);
+    pt_window_input_pointer_button(pwin, 0x111u, false, click_x, click_y, 61, 1030);
+    pt_check(pwin->primary_serial == 51);
     primary = pt_window_primary_get(pwin);
-    pt_check(primary != NULL && strcmp(primary, "middle-click text") == 0);
+    pt_check(primary != NULL && strcmp(primary, "drag text") == 0);
     pt_free(primary);
-    char *clipboard = pt_window_clipboard_get(pwin);
-    pt_check(clipboard != NULL && strcmp(clipboard, "control-c text") == 0);
-    pt_free(clipboard);
-    /* Overwriting and clearing. */
-    pt_check(pt_window_primary_set(pwin, "second"));
+
+    /* The explicit entry point accepts a serial from inside an event callback. */
+    pt_check(pt_window_primary_set_serial(pwin, "explicit", 77));
     primary = pt_window_primary_get(pwin);
-    pt_check(primary != NULL && strcmp(primary, "second") == 0);
+    pt_check(primary != NULL && strcmp(primary, "explicit") == 0);
     pt_free(primary);
     pt_check(pt_window_primary_set(pwin, NULL));
     pt_check(pt_window_primary_get(pwin) == NULL);
     /* NULL-window error contract matches the clipboard pair. */
     pt_check(!pt_window_primary_set(NULL, "nope"));
+    pt_check(!pt_window_primary_set_serial(NULL, "nope", 5));
     pt_check(pt_window_primary_get(NULL) == NULL);
     pt_window_free(pwin);
 
