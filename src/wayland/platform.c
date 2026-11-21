@@ -1605,6 +1605,8 @@ static void data_device_data_offer(void *data, struct wl_data_device *device,
     wl_data_offer_add_listener(wl_offer, &data_offer_listener, offer);
 }
 
+static char *offer_read_bytes(pt_platform *platform, struct pt_wl_offer *offer,
+                              const char *mime, uint32_t timeout_ms, size_t *out_size);
 static char *offer_read_text(pt_platform *platform, struct pt_wl_offer *offer, const char *mime,
                              uint32_t timeout_ms);
 static pt_drop_offer *platform_drop_offer_create(pt_window *window, struct pt_wl_offer *wl);
@@ -1838,9 +1840,12 @@ static void data_source_send(void *data, struct wl_data_source *source, const ch
             payload = type->data;
             size = type->size;
         }
-    } else if (mime_is_text(mime_type) && platform->clipboard_text) {
-        payload = platform->clipboard_text;
-        size = strlen(platform->clipboard_text);
+    } else if (platform->clipboard_data && platform->clipboard_mime && mime_type) {
+        if (strcmp(platform->clipboard_mime, mime_type) == 0 ||
+            (mime_is_text(mime_type) && mime_is_text(platform->clipboard_mime))) {
+            payload = platform->clipboard_data;
+            size = platform->clipboard_size;
+        }
     }
     if (!payload) {
         close(fd);
@@ -2133,41 +2138,133 @@ static uint32_t platform_latest_trigger_serial(const pt_platform *platform) {
     return platform->button_serial ? platform->button_serial : platform->key_serial;
 }
 
-void pt_platform_clipboard_set(pt_window *window, const char *text) {
-    pt_platform *platform = pt_platform_for(window);
-    if (!platform) {
-        return;
+static void clipboard_storage_clear(pt_platform *platform) {
+    free(platform->clipboard_mime);
+    free(platform->clipboard_data);
+    platform->clipboard_mime = NULL;
+    platform->clipboard_data = NULL;
+    platform->clipboard_size = 0;
+}
+
+static bool clipboard_store(pt_platform *platform, const char *mime, const void *data,
+                            size_t size) {
+    if (!platform || !mime || mime[0] == '\0' || !data) {
+        pt_set_error("invalid clipboard payload");
+        return false;
     }
-    free(platform->clipboard_text);
-    platform->clipboard_text = text ? pt_strdup(text) : NULL;
+    if (size > pt_clipboard_max_bytes) {
+        pt_set_error("clipboard payload exceeds %u bytes", pt_clipboard_max_bytes);
+        return false;
+    }
+    if (strlen(mime) >= 128u) {
+        pt_set_error("clipboard MIME type is too long");
+        return false;
+    }
+    char *mime_copy = pt_strdup(mime);
+    char *data_copy = pt_alloc(size + 1u);
+    if (size > 0) {
+        memcpy(data_copy, data, size);
+    }
+    data_copy[size] = '\0';
+    clipboard_storage_clear(platform);
+    platform->clipboard_mime = mime_copy;
+    platform->clipboard_data = data_copy;
+    platform->clipboard_size = size;
+    return true;
+}
+
+static void platform_offer_clipboard(pt_platform *platform, struct wl_data_source *source) {
+    if (platform->clipboard_mime && mime_is_text(platform->clipboard_mime)) {
+        platform_offers_text(source);
+    } else if (platform->clipboard_mime) {
+        wl_data_source_offer(source, platform->clipboard_mime);
+    }
+}
+
+static bool clipboard_publish(pt_platform *platform) {
     if (platform->headless) {
-        return;
+        return true;
     }
     if (!platform->data_device || !platform->data_device_manager) {
-        return;
+        /* Keep the in-process buffer; the API stays usable without a seat. */
+        return true;
     }
     struct wl_data_source *old_source = platform->data_source;
     platform->data_source = NULL;
     uint32_t serial = platform_latest_trigger_serial(platform);
-    if (!platform->clipboard_text) {
+    if (!platform->clipboard_data) {
         wl_data_device_set_selection(platform->data_device, NULL, serial);
     } else {
         struct wl_data_source *source =
             wl_data_device_manager_create_data_source(platform->data_device_manager);
-        if (source) {
-            platform->data_source = source;
-            wl_data_source_add_listener(source, &data_source_listener, platform);
-            platform_offers_text(source);
-            wl_data_device_set_selection(platform->data_device, source, serial);
+        if (!source) {
+            wl_data_device_set_selection(platform->data_device, NULL, serial);
+            if (old_source) {
+                wl_data_source_destroy(old_source);
+            }
+            pt_set_error("cannot create a clipboard data source");
+            return false;
         }
+        platform->data_source = source;
+        wl_data_source_add_listener(source, &data_source_listener, platform);
+        platform_offer_clipboard(platform, source);
+        wl_data_device_set_selection(platform->data_device, source, serial);
     }
     if (old_source) {
         wl_data_source_destroy(old_source);
     }
+    return true;
 }
 
-static char *offer_read_text(pt_platform *platform, struct pt_wl_offer *offer, const char *mime,
-                             uint32_t timeout_ms) {
+bool pt_platform_clipboard_set_data(pt_window *window, const char *mime, const void *data,
+                                    size_t size) {
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform) {
+        pt_set_error("a window is required to set the clipboard");
+        return false;
+    }
+    if (!clipboard_store(platform, mime, data, size)) {
+        return false;
+    }
+    return clipboard_publish(platform);
+}
+
+bool pt_platform_clipboard_clear(pt_window *window) {
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform) {
+        pt_set_error("a window is required to clear the clipboard");
+        return false;
+    }
+    clipboard_storage_clear(platform);
+    return clipboard_publish(platform);
+}
+
+void pt_platform_clipboard_set(pt_window *window, const char *text) {
+    if (!text) {
+        pt_platform_clipboard_clear(window);
+        return;
+    }
+    pt_platform_clipboard_set_data(window, "text/plain;charset=utf-8", text, strlen(text));
+}
+
+const char *pt_platform_clipboard_mime(pt_window *window) {
+    pt_platform *platform = pt_platform_for(window);
+    return platform ? platform->clipboard_mime : NULL;
+}
+
+const void *pt_platform_clipboard_data(pt_window *window, size_t *size) {
+    pt_platform *platform = pt_platform_for(window);
+    if (size) {
+        *size = platform ? platform->clipboard_size : 0;
+    }
+    return platform ? platform->clipboard_data : NULL;
+}
+
+static char *offer_read_bytes(pt_platform *platform, struct pt_wl_offer *offer,
+                              const char *mime, uint32_t timeout_ms, size_t *out_size) {
+    if (out_size) {
+        *out_size = 0;
+    }
     if (!platform || !offer || !offer->offer || !mime) {
         return NULL;
     }
@@ -2180,7 +2277,7 @@ static char *offer_read_text(pt_platform *platform, struct pt_wl_offer *offer, c
     wl_display_flush(platform->display);
     size_t capacity = 4096;
     size_t length = 0;
-    char *buffer = pt_alloc(capacity);
+    char *buffer = pt_alloc(capacity + 1u);
     int64_t deadline = pt_now_ms() + timeout_ms;
     for (;;) {
         int64_t now = pt_now_ms();
@@ -2199,14 +2296,18 @@ static char *offer_read_text(pt_platform *platform, struct pt_wl_offer *offer, c
         if (ready == 0) {
             break;
         }
-        if (length + 1 >= capacity) {
+        if (length == capacity) {
             if (capacity >= pt_clipboard_max_bytes) {
                 break;
             }
-            capacity *= 2;
-            buffer = pt_realloc_mem(buffer, capacity);
+            size_t next = capacity * 2u;
+            if (next > pt_clipboard_max_bytes) {
+                next = pt_clipboard_max_bytes;
+            }
+            capacity = next;
+            buffer = pt_realloc_mem(buffer, capacity + 1u);
         }
-        ssize_t got = read(fds[0], buffer + length, capacity - length - 1);
+        ssize_t got = read(fds[0], buffer + length, capacity - length);
         if (got > 0) {
             length += (size_t)got;
             if (length >= pt_clipboard_max_bytes) {
@@ -2228,7 +2329,27 @@ static char *offer_read_text(pt_platform *platform, struct pt_wl_offer *offer, c
         return NULL;
     }
     buffer[length] = '\0';
+    if (out_size) {
+        *out_size = length;
+    }
     return buffer;
+}
+
+static char *offer_read_text(pt_platform *platform, struct pt_wl_offer *offer, const char *mime,
+                             uint32_t timeout_ms) {
+    return offer_read_bytes(platform, offer, mime, timeout_ms, NULL);
+}
+
+static bool offer_has_mime(const struct pt_wl_offer *offer, const char *mime) {
+    if (!offer || !mime) {
+        return false;
+    }
+    for (int i = 0; i < offer->mime_count; ++i) {
+        if (strcmp(offer->mimes[i], mime) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 char *pt_platform_clipboard_get(pt_window *window) {
@@ -2236,17 +2357,56 @@ char *pt_platform_clipboard_get(pt_window *window) {
     if (!platform) {
         return NULL;
     }
-    if (platform->headless) {
-        return platform->clipboard_text ? pt_strdup(platform->clipboard_text) : NULL;
-    }
-    if (platform->data_source && platform->clipboard_text) {
-        return pt_strdup(platform->clipboard_text);
+    if (platform->headless || platform->data_source) {
+        if (platform->clipboard_data && mime_is_text(platform->clipboard_mime)) {
+            return pt_strdup_len(platform->clipboard_data, platform->clipboard_size);
+        }
+        return NULL;
     }
     const char *mime = offer_text_mime(platform->selection);
     if (!mime) {
         return NULL;
     }
     return offer_read_text(platform, platform->selection, mime, pt_clipboard_timeout_ms);
+}
+
+pt_color *pt_platform_clipboard_get_image(pt_window *window, int *width, int *height) {
+    if (width) {
+        *width = 0;
+    }
+    if (height) {
+        *height = 0;
+    }
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform) {
+        pt_set_error("a window is required to read a clipboard image");
+        return NULL;
+    }
+    if (platform->headless || platform->data_source) {
+        if (!platform->clipboard_data ||
+            !platform->clipboard_mime ||
+            strcmp(platform->clipboard_mime, "image/png") != 0) {
+            pt_set_error("the clipboard does not hold an image/png payload");
+            return NULL;
+        }
+        return pt_png_decode_argb_premultiplied((const uint8_t *)platform->clipboard_data,
+                                                platform->clipboard_size, width, height);
+    }
+    if (!offer_has_mime(platform->selection, "image/png")) {
+        pt_set_error("the clipboard does not advertise image/png");
+        return NULL;
+    }
+    size_t size = 0;
+    char *data = offer_read_bytes(platform, platform->selection, "image/png",
+                                  pt_clipboard_timeout_ms, &size);
+    if (!data) {
+        pt_set_error("the image/png clipboard transfer failed or timed out");
+        return NULL;
+    }
+    pt_color *pixels = pt_png_decode_argb_premultiplied((const uint8_t *)data, size, width,
+                                                       height);
+    free(data);
+    return pixels;
 }
 
 /* ---------- primary selection (middle-click paste) ----------
@@ -2880,7 +3040,8 @@ void pt_platform_stop(pt_app *app) {
     if (platform->repeat_active && app) {
         pt_app_cancel_timeout(app, platform->repeat_timer);
     }
-    free(platform->clipboard_text);
+    free(platform->clipboard_mime);
+    free(platform->clipboard_data);
     free(platform->primary_text);
     free(platform->primary_mime);
     free(platform->pending_preedit);

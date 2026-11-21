@@ -215,6 +215,12 @@ _Static_assert(sizeof(((pt_pointer_event *)0)->click_count) == sizeof(uint32_t),
                "click count is 32-bit");
 _Static_assert(sizeof(((pt_pointer_event *)0)->pressed) == sizeof(bool), "pressed is bool");
 
+/* M19: clipboard-media. The decoded-pixel cap is part of the public contract
+ * and is pinned like the other sentinels so a later lowering cannot silently
+ * reject images an application was promised. */
+_Static_assert(pt_clipboard_image_max_dimension == 8192,
+               "clipboard image cap must stay 8192");
+
 /* Runtime invariants that cannot be expressed as an offset comparison. */
 int main(void) {
     char version[32];

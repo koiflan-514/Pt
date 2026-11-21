@@ -184,6 +184,48 @@ pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callbac
 pt_api bool pt_window_clipboard_set(pt_window *window, const char *text);
 pt_api char *pt_window_clipboard_get(pt_window *window);
 
+/* Largest image dimension, in pixels, that the clipboard image API accepts on
+ * either side. Independent of the 16 MiB / 1.5 s transfer cap. Since 1.2. */
+#define pt_clipboard_image_max_dimension 8192
+
+/* PNG clipboard images (image/png). The setter takes premultiplied 0xAARRGGBB
+ * pixels, row-major with a stride of width, the same layout as
+ * pt_window_paint_pixels, converts them to straight-alpha RGBA and writes a
+ * PNG. Conversion rule: a transparent pixel encodes as RGB 0; otherwise each
+ * component is round(component * 255 / alpha) clamped to 255, and the alpha
+ * byte is unchanged. The setter copies; the caller keeps ownership. It
+ * returns false for NULL, a non-positive size, a size above
+ * pt_clipboard_image_max_dimension, or an encode/transfer failure, and records
+ * the reason in pt_get_last_error().
+ *
+ * The getter returns caller-owned premultiplied 0xAARRGGBB pixels (release
+ * with pt_free()) and stores the decoded width and height in the out
+ * parameters, which may be NULL. Decoding reuses the text clipboard transfer
+ * cap (1.5 s, 16 MiB) and rejects dimensions above
+ * pt_clipboard_image_max_dimension, corrupt data and decompression bombs by
+ * returning NULL with the out parameters set to zero and an error recorded;
+ * it never crashes. The decoder accepts 8-bit non-interlaced PNG colour types
+ * 0/2/3/4/6; other PNG variants are rejected rather than approximated.
+ * Headless and self-owned selections use the in-process fallback, exactly like
+ * the text clipboard. Setting any clipboard type replaces the previous one, so
+ * a successful image set makes the text getter return NULL. Since 1.2. */
+pt_api bool pt_window_clipboard_set_image_png(pt_window *window, const pt_color *pixels,
+                                              int width, int height);
+pt_api pt_color *pt_window_clipboard_get_image_png(pt_window *window, int *width,
+                                                   int *height);
+
+/* text/uri-list clipboard write. Entries are absolute filesystem paths or
+ * already-formed URIs. Paths are emitted as file:// URIs with every byte
+ * outside the RFC 3986 unreserved set and '/' percent-encoded as uppercase
+ * %XX (UTF-8 bytes included); entries that already carry a scheme are copied
+ * verbatim, so a pre-encoded file:// URI is not double-encoded. Lines are
+ * separated and terminated with CRLF. count 0, NULL, a relative path, a CR or
+ * LF inside an entry, or a payload above the 16 MiB clipboard cap returns
+ * false and records an error. The setter copies. Since 1.2. */
+pt_api bool pt_window_clipboard_set_uri_list(pt_window *window,
+                                             const char *const *uris,
+                                             uint32_t count);
+
 /* Primary selection (middle-click paste), backed by
  * wp_primary_selection_unstable_v1 when the compositor offers it. Without the
  * protocol, or headless, both sides fall back to an in-process buffer so the

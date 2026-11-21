@@ -438,6 +438,17 @@ uint32_t pt_canvas_get_pixel(const pt_canvas *canvas, int x, int y);
 int pt_canvas_write_png(const pt_canvas *canvas, const char *path);
 int pt_write_png_rgba(const char *path, int width, int height, const uint8_t *rgba);
 
+/* In-memory PNG codec shared by snapshots and clipboard images. The encoder
+ * takes premultiplied 0xAARRGGBB pixels (pt_window_paint_pixels layout) and
+ * produces a straight-alpha RGBA PNG. The decoder returns caller-owned
+ * premultiplied 0xAARRGGBB pixels (release with pt_free), rejects corrupt,
+ * oversized and decompression-bomb inputs, and leaves the out parameters at
+ * zero on failure. */
+uint8_t *pt_png_encode_argb_premultiplied(const uint32_t *pixels, int width,
+                                          int height, size_t *out_size);
+pt_color *pt_png_decode_argb_premultiplied(const uint8_t *data, size_t size,
+                                           int *out_width, int *out_height);
+
 /* ---------- data views and navigation ---------- */
 
 /* A rubber band dragged across a data view. Coordinates are window space, the
@@ -1338,6 +1349,11 @@ bool pt_window_drag_source_begin(pt_window *window, const char *mime_type,
                                  const char *payload);
 bool pt_window_drag_source_begin_types(pt_window *window, const pt_drag_data *types,
                                        uint32_t count);
+/* Shared text/uri-list encoder used by the clipboard writer. Entries are
+ * absolute filesystem paths (encoded as file:// URIs with percent-escaped
+ * bytes) or already-formed URIs (copied verbatim). Lines end with CRLF.
+ * Returns caller-owned memory; NULL on invalid input or the clipboard cap. */
+char *pt_uri_list_encode(const char *const *uris, uint32_t count);
 void pt_window_drag_finish_notify(pt_window *window, bool dropped, pt_drag_action action);
 void pt_window_input_touch_down(pt_window *window, int32_t id, float x, float y, uint32_t time,
                                 uint32_t serial);
@@ -1558,6 +1574,16 @@ void pt_platform_window_set_cursor(pt_window *window, pt_cursor cursor);
 void pt_platform_window_set_size_hint(pt_window *window);
 void pt_platform_clipboard_set(pt_window *window, const char *text);
 char *pt_platform_clipboard_get(pt_window *window);
+/* Generic clipboard slot used by the image and text/uri-list writers. The
+ * payload is copied and capped at 16 MiB; the advertised MIME is either the
+ * exact type or, for text, the usual text/plain family. Headless keeps the
+ * in-process fallback. */
+bool pt_platform_clipboard_set_data(pt_window *window, const char *mime,
+                                    const void *data, size_t size);
+bool pt_platform_clipboard_clear(pt_window *window);
+const char *pt_platform_clipboard_mime(pt_window *window);
+const void *pt_platform_clipboard_data(pt_window *window, size_t *size);
+pt_color *pt_platform_clipboard_get_image(pt_window *window, int *width, int *height);
 void pt_platform_primary_set(pt_window *window, const char *text, uint32_t serial);
 char *pt_platform_primary_get(pt_window *window);
 bool pt_platform_begin_drag_types(pt_window *window, const pt_drag_data *types,
