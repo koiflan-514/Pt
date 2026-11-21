@@ -3,18 +3,14 @@
 English | [简体中文](zh-CN/bindings.md)
 
 Pt exposes one flat C ABI. The bindings are thin, hand-written layers over that
-ABI so the behaviour of a widget is identical from every language. The 0.10
-surface adds the combobox widget — modes, item list and per-item data and
-disabled flags, field text, placeholder, popup control and the change/text
-callbacks — together with multi-row selection parity across the list, table and
-tree views and the matching accessibility roles and states, and keeps the
-parity gate closed: all 412 functions — two fewer than 0.10 shipped, because the
-1.0 freeze removed the deprecated drag helpers — are available from C++, Python
-and Java.
-The 0.9 surface — the expanded theme tokens and metrics with window-level
-overrides, chips and skeletons, the busy/invalid state matrix, table cell
-editing, multi-row selection, column reorder and row drag, tree rename and
-per-run typography — remains wrapped in full.
+ABI so the behaviour of a widget is identical from every language. The 1.1
+surface adds decoration modes, primary selection, custom paint and offscreen
+snapshots, custom IME callbacks, descriptor watches and raw focus/key/pointer
+callbacks. From 1.1 the extension surface is consistent across C, C++, Python
+and Java: the wrappers cover every declared name, and the parity audit treats a
+missing name as a `make check` failure rather than reporting a percentage. The
+0.10 combobox and multi-row selection surface, and the 0.9 theme, chip/skeleton,
+data-view editing and per-run typography surface, remain wrapped in full.
 
 | Binding | Technology | Minimum | Ownership |
 | --- | --- | --- | --- |
@@ -1491,12 +1487,58 @@ installation, compile against
 The Java test is `bindings/java/test/pt/PtTest.java`; run it with
 `make check-bindings` or `make java-test`.
 
+## The 1.1 extension surface
+
+From 1.1 the extension surface is consistent across C, C++, Python and Java:
+the wrappers cover decoration modes, primary selection, custom paint and
+offscreen snapshots, custom IME, descriptor watches and the raw
+focus/key/pointer callbacks, and `make check` fails on a missing name instead of
+reporting a percentage. The wrappers are hand-written against the headers, so
+the header is the source of truth.
+
+| Surface | C++ | Python | Java |
+| --- | --- | --- | --- |
+| Custom paint | `widget::set_paint_callback` | `Widget.on_paint` | `Pt.widget_set_paint_callback` |
+| Offscreen snapshot | `window::paint_pixels` | `pt.paint_window_pixels` | `Pt.window_paint_pixels` |
+| Primary selection | `window::set_primary` / `primary` | `Window.set_primary` / `primary` | `Pt.window_primary_set` / `window_primary_get` |
+| Custom IME | `window::set_ime_callbacks` | `Window.set_ime_callbacks` | `Pt.window_set_ime_callbacks` |
+| fd watch | `app::watch_fd` / `unwatch_fd` | `App.watch_fd` / `unwatch_fd` | `Pt.app_watch_fd` / `app_unwatch_fd` |
+| Raw input | `window::on_focus`, `on_key_event`, `on_pointer` | `Window.on_focus`, `on_key_event`, `on_pointer` | `Pt.window_set_focus_callback`, `Pt.window_set_key_event_callback`, `Pt.window_set_pointer_callback` |
+| Decoration | `window::set_decorated`, `set_decoration_mode` | `Window.set_decorated`, `set_decoration_mode` | `Pt.window_set_decorated`, `Pt.window_set_decoration_mode` |
+
+Callback wrappers follow the same ownership rules as the rest of the surface:
+
+- **A paint context is borrowed for the call.** C++ passes the raw
+  `pt_paint_context *`, Python supplies a `PaintContext` wrapper and Java a
+  `MemorySegment` region. Storing either past the callback keeps a dangling
+  pointer; the callback draws only through the `pt_paint_*` helpers.
+- **Exceptions stay at the boundary.** Python trampolines catch an exception
+  and route it to the binding's error path instead of letting it unwind into C;
+  Java upcalls do the same through their handler interface, and the confined
+  arena that registered the handler must outlive the registration. C++
+  callbacks must not throw across the C ABI.
+- **Raw callbacks return a boolean.** Python handlers return `True` to consume,
+  Java returns `boolean` from the handler interface, and C++ keeps the C
+  signature. Only keys and pointer down/up/axis are consumed; enter, leave and
+  motion ignore the return value.
+- **Allocated strings.** `pt_window_primary_get` returns malloc'd UTF-8.
+  Python's `Window.primary` returns a `str` and frees the native buffer, Java
+  returns a `MemorySegment` that the caller frees, and C++ returns a `char *`
+  owned by the caller, like C.
+- **Offscreen snapshots write into caller memory.** Python's
+  `paint_window_pixels(window, width, height)` returns a `list[int]` of
+  `0xAARRGGBB` values for small frames, while `Window.paint_pixels` takes a
+  caller-provided buffer; C++ takes a `std::span<uint32_t>`.
+- **fd watch callbacks run on the UI thread** and the descriptor stays owned by
+  the application. Unwatching from inside the callback is safe, and the binding
+  keeps the trampoline alive until the watch is removed.
+
 ## Binding coverage
 
-All 412 functions in the public C ABI are wrapped in C++, Python and Java. The
-parity audit is a hard `make check` gate: it scans the comment-stripped binding
-sources for every declared function name, allows zero unreviewed gaps and
-reports `412/412` for each language. The reviewed allowlist is empty. The 124
+From 1.1 every function in the public C ABI is wrapped in C++, Python and
+Java. The parity audit is a hard `make check` gate: it scans the
+comment-stripped binding sources for every declared function name and allows
+zero unreviewed gaps. The reviewed allowlist is empty. The 124
 functions in the 0.6 surface (one fewer than 0.9 carried, because
 `pt_window_begin_uri_drag` was removed at the 1.0 freeze), the 19 functions
 introduced for the 0.7 data-view,

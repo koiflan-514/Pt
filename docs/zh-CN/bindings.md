@@ -2,7 +2,7 @@
 
 [English](../bindings.md) | 简体中文
 
-Pt 对外暴露一个扁平的 C ABI。绑定是建立在该 ABI 之上的轻量级手写封装层，因此控件在每种语言中的行为都完全一致。0.10 表面新增了组合框控件——模式、条目列表、逐条目数据和禁用标志、字段文本、占位符、弹出层控制以及 change/text 回调——并让列表视图、表格和树视图具备一致的多行选择能力，以及匹配的无障碍角色和状态，同时保持一致性门禁零缺口：全部 412 个函数——比 0.10 发布时少两个，因为 1.0 冻结移除了已弃用的拖拽辅助函数——均可从 C++、Python 和 Java 使用。0.9 表面——带窗口级覆盖的扩展主题令牌和度量、标签片和骨架屏、busy/invalid 状态矩阵、表格单元格编辑、多行选择、列重排和行拖拽、树重命名以及按文本段排版——仍被完整封装。
+Pt 对外暴露一个扁平的 C ABI。绑定是建立在该 ABI 之上的轻量级手写封装层，因此控件在每种语言中的行为都完全一致。1.1 表面新增装饰模式、主选区、自定义绘制与离屏快照、自定义输入法回调、描述符监视，以及原始焦点/键盘/指针回调。自 1.1 起，扩展表面在 C、C++、Python 和 Java 中保持一致：封装层覆盖每个声明名称，一致性审计把缺失名称视为 `make check` 失败，而不是报告百分比。0.10 的组合框和多行选择表面，以及 0.9 的主题、标签片/骨架屏、数据视图编辑和逐段排版表面，仍被完整封装。
 
 | 绑定 | 技术 | 最低要求 | 所有权 |
 | --- | --- | --- | --- |
@@ -1030,10 +1030,51 @@ java --enable-native-access=ALL-UNNAMED \
 
 Java 测试是 `bindings/java/test/pt/PtTest.java`；使用 `make check-bindings` 或 `make java-test` 运行它。
 
+## 1.1 扩展表面
+
+自 1.1 起，扩展表面在 C、C++、Python 和 Java 中保持一致：封装层覆盖装饰
+模式、主选区、自定义绘制与离屏快照、自定义输入法、描述符监视，以及原始
+焦点/键盘/指针回调，并且 `make check` 会在名称缺失时失败，而不是报告百分比。
+封装层是针对头文件手写的，因此头文件是唯一事实来源。
+
+| 表面 | C++ | Python | Java |
+| --- | --- | --- | --- |
+| 自定义绘制 | `widget::set_paint_callback` | `Widget.on_paint` | `Pt.widget_set_paint_callback` |
+| 离屏快照 | `window::paint_pixels` | `pt.paint_window_pixels` | `Pt.window_paint_pixels` |
+| 主选区 | `window::set_primary` / `primary` | `Window.set_primary` / `primary` | `Pt.window_primary_set` / `window_primary_get` |
+| 自定义输入法 | `window::set_ime_callbacks` | `Window.set_ime_callbacks` | `Pt.window_set_ime_callbacks` |
+| 描述符监视 | `app::watch_fd` / `unwatch_fd` | `App.watch_fd` / `unwatch_fd` | `Pt.app_watch_fd` / `app_unwatch_fd` |
+| 原始输入 | `window::on_focus`, `on_key_event`, `on_pointer` | `Window.on_focus`, `on_key_event`, `on_pointer` | `Pt.window_set_focus_callback`, `Pt.window_set_key_event_callback`, `Pt.window_set_pointer_callback` |
+| 装饰 | `window::set_decorated`, `set_decoration_mode` | `Window.set_decorated`, `set_decoration_mode` | `Pt.window_set_decorated`, `Pt.window_set_decoration_mode` |
+
+回调封装遵循与该表面其余部分相同的所有权规则：
+
+- **绘制上下文在调用期间借用。** C++ 传递原始的 `pt_paint_context *`，
+  Python 提供 `PaintContext` 包装器，Java 提供 `MemorySegment` 区域。在
+  回调之后保留其中任何一个都会留下悬空指针；回调只能通过 `pt_paint_*`
+  辅助函数绘制。
+- **异常停在边界。** Python trampoline 捕获异常并转入绑定错误路径，而不是
+  让它回卷进 C；Java upcall 通过其处理器接口做同样的事，注册处理器的
+  confined arena 必须比注册存活更久。C++ 回调不得跨 C ABI 抛出异常。
+- **原始回调返回布尔值。** Python 处理器返回 `True` 表示消费，Java 处理器
+  接口返回 `boolean`，C++ 保持 C 签名。只有按键和指针 down/up/axis 会被
+  消费；enter、leave 和 motion 忽略返回值。
+- **分配的字符串。** `pt_window_primary_get` 返回 malloc 分配的 UTF-8。
+  Python 的 `Window.primary` 返回 `str` 并释放原生缓冲区，Java 返回由调用方
+  释放的 `MemorySegment`，C++ 像 C 一样返回由调用方拥有的 `char *`。
+- **离屏快照写入调用方内存。** Python 的
+  `paint_window_pixels(window, width, height)` 为小帧返回 `0xAARRGGBB`
+  值的 `list[int]`，而 `Window.paint_pixels` 接受调用方提供的缓冲区；C++
+  接受 `std::span<uint32_t>`。
+- **描述符监视回调在 UI 线程上运行**，描述符始终归应用所有。在回调内部
+  取消监视是安全的，绑定会让 trampoline 一直存活到监视被移除。
+
 <a id="binding-coverage"></a>
 
 ## 绑定覆盖范围
 
-公共 C ABI 中的全部 412 个函数都已在 C++、Python 和 Java 中封装。一致性审计是硬性的 `make check` 门禁：它会扫描去除注释后的绑定源码以查找每个声明的函数名，允许零个未经审查的缺口，并为每种语言报告 `412/412`。经审查的允许列表为空。0.6 表面中的 124 个函数（比 0.9 所包含的少一个，因为 `pt_window_begin_uri_drag` 在 1.0 冻结时被移除）、为 0.7 数据视图、拖拽和输入表面引入的 19 个函数、为 0.8 结构化拖拽、流式 offer 和带样式文本表面引入的 19 个函数、为 0.9 主题、标签片/骨架屏、数据视图编辑和重命名表面引入的 44 个函数，以及为 0.10 组合框和多行选择表面引入的 40 个函数，全部存在于三个封装层中。两个在 0.9 中弃用的拖拽辅助函数在其弃用窗口期内，以弃用封装层的形式存在于每个绑定中，而不是被加入允许列表而绕过，因此任何接口在离开 ABI 之前都必须先经过每个绑定；现在它们已在同一变更中从 C ABI 和三个绑定中消失。
+自 1.1 起，公共 C ABI 中的每个函数都已在 C++、Python 和 Java 中封装。
+一致性审计是硬性的 `make check` 门禁：它会扫描去除注释后的绑定源码以查找
+每个声明的函数名，允许零个未经审查的缺口。经审查的允许列表为空。0.6 表面中的 124 个函数（比 0.9 所包含的少一个，因为 `pt_window_begin_uri_drag` 在 1.0 冻结时被移除）、为 0.7 数据视图、拖拽和输入表面引入的 19 个函数、为 0.8 结构化拖拽、流式 offer 和带样式文本表面引入的 19 个函数、为 0.9 主题、标签片/骨架屏、数据视图编辑和重命名表面引入的 44 个函数，以及为 0.10 组合框和多行选择表面引入的 40 个函数，全部存在于三个封装层中。两个在 0.9 中弃用的拖拽辅助函数在其弃用窗口期内，以弃用封装层的形式存在于每个绑定中，而不是被加入允许列表而绕过，因此任何接口在离开 ABI 之前都必须先经过每个绑定；现在它们已在同一变更中从 C ABI 和三个绑定中消失。
 
 `make check` 运行 C 测试套件、`make check-bindings` 以及 API/ABI 检查。绑定套件是无头的：344 项 C++ 检查、33 个 Python unittest 用例和 298 项 Java 检查。覆盖层和无障碍测试覆盖菜单/对话框回调、浮层通知生命周期、工具提示、事件传递、启用/禁用状态以及文本/值暴露。0.10 测试覆盖组合框默认值和模式切换，条目添加/插入/移除/清除以及文本和数据访问器和禁用条目，静默的 `set_selected`/`set_text` 行为，占位符和字段文本，弹出层打开/关闭状态和最大高度往返，索引和文本回调，列表上通过范围、切换和清除实现的多行选择以及主索引的后续变化，额外的表格切换路径，按文档顺序进行的树范围、切换和清除，以及组合框和列表框角色及其可选择和多可选择状态。0.9 测试覆盖应用度量、窗口级令牌和度量覆盖及其清除、标签片创建和回调、骨架屏尺寸、busy 和 invalid 标志、表格单元格编辑和提交、多行选择范围、列重排和行拖拽回调、树重命名提交和第二次无编辑器提交，以及按文本段的字体族和字号。0.8 测试覆盖由 offer 驱动的拖放目标及其对传统配对的回退、带取消和在 `max_bytes` 处截断的分块流读取、多 MIME 源拖拽及其完成回调、带限制和清除的文本段往返，以及输入用途 setter/getter 对。0.7 测试覆盖跨行数变化和刷新的带键列表/表格选择、批量 `refresh_rows`、多列排序过滤和报告、隐藏列、行键/文本回调、弹出层策略、拖拽激活/取消/超时以及无障碍状态。0.6 测试覆盖表格列设置、绑定和排序，树构建和选择，标签页和侧边栏状态，图标 setter，URI 列表解析，拖拽图像写入和触控笔回调注册。0.5 测试检查列表行绑定、选择和激活，文本区域选择和内容自适应，wrap/grid 间距和跨度，缓动和 transition 重定向，减少动态效果切换以及新的无障碍角色。
