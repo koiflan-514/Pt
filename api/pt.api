@@ -119,6 +119,9 @@ enum pt_color_scheme_dark = 0
 enum pt_color_scheme_light = 1
 enum pt_combobox_filterable = 1
 enum pt_combobox_select_only = 0
+enum pt_decoration_auto = 0
+enum pt_decoration_client = 1
+enum pt_decoration_server = 2
 enum pt_direction_column = 1
 enum pt_direction_row = 0
 enum pt_drag_action_ask = 4
@@ -193,6 +196,7 @@ enum pt_key_modifier_alt = 4
 enum pt_key_modifier_ctrl = 2
 enum pt_key_modifier_logo = 8
 enum pt_key_modifier_shift = 1
+enum pt_pixel_format_argb8888_premultiplied = 0
 enum pt_pointer_phase_axis = 5
 enum pt_pointer_phase_cancel = 6
 enum pt_pointer_phase_down = 3
@@ -340,6 +344,7 @@ func pt_app_set_theme_color voidpt_app_set_theme_color(pt_app*app,pt_theme_token
 func pt_app_set_theme_metric voidpt_app_set_theme_metric(pt_app*app,pt_theme_metricmetric,floatvalue)
 func pt_app_unwatch_fd voidpt_app_unwatch_fd(pt_app*app,uint64_twatch_id)
 func pt_app_watch_fd uint64_tpt_app_watch_fd(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
+func pt_app_watch_fd_owned uint64_tpt_app_watch_fd_owned(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
 func pt_box_create pt_widget*pt_box_create(pt_widget*parent,pt_directiondirection)
 func pt_box_set_align voidpt_box_set_align(pt_widget*box,pt_alignalign)
 func pt_box_set_direction voidpt_box_set_direction(pt_widget*box,pt_directiondirection)
@@ -711,9 +716,11 @@ func pt_window_clipboard_set boolpt_window_clipboard_set(pt_window*window,constc
 func pt_window_close voidpt_window_close(pt_window*window)
 func pt_window_create pt_window*pt_window_create(pt_app*app,constchar*title,intwidth,intheight)
 func pt_window_focus voidpt_window_focus(pt_window*window,pt_widget*widget)
+func pt_window_get_decoration_mode pt_decoration_modept_window_get_decoration_mode(constpt_window*window)
 func pt_window_get_drag_active boolpt_window_get_drag_active(constpt_window*window)
 func pt_window_get_drag_result pt_drag_actionpt_window_get_drag_result(constpt_window*window)
 func pt_window_get_drag_timeout uint32_tpt_window_get_drag_timeout(constpt_window*window)
+func pt_window_get_effective_decoration_mode pt_decoration_modept_window_get_effective_decoration_mode(constpt_window*window)
 func pt_window_get_height intpt_window_get_height(constpt_window*window)
 func pt_window_get_momentum_scrolling boolpt_window_get_momentum_scrolling(constpt_window*window)
 func pt_window_get_popup_policy pt_popup_policypt_window_get_popup_policy(constpt_window*window)
@@ -723,13 +730,17 @@ func pt_window_get_theme_metric floatpt_window_get_theme_metric(constpt_window*w
 func pt_window_get_width intpt_window_get_width(constpt_window*window)
 func pt_window_hide voidpt_window_hide(pt_window*window)
 func pt_window_is_open boolpt_window_is_open(constpt_window*window)
+func pt_window_maximize boolpt_window_maximize(pt_window*window)
 func pt_window_paint_pixels boolpt_window_paint_pixels(pt_window*window,uint32_t*pixels,intwidth,intheight)
+func pt_window_paint_pixels_ex boolpt_window_paint_pixels_ex(pt_window*window,uint32_t*pixels,intwidth,intheight,constpt_paint_pixels_desc*desc)
 func pt_window_primary_get char*pt_window_primary_get(pt_window*window)
 func pt_window_primary_set boolpt_window_primary_set(pt_window*window,constchar*text)
+func pt_window_primary_set_serial boolpt_window_primary_set_serial(pt_window*window,constchar*text,uint32_tserial)
 func pt_window_request_redraw voidpt_window_request_redraw(pt_window*window)
 func pt_window_root pt_widget*pt_window_root(pt_window*window)
 func pt_window_set_close_callback voidpt_window_set_close_callback(pt_window*window,pt_close_callbackcallback,void*user_data)
 func pt_window_set_decorated voidpt_window_set_decorated(pt_window*window,booldecorated)
+func pt_window_set_decoration_mode voidpt_window_set_decoration_mode(pt_window*window,pt_decoration_modemode)
 func pt_window_set_drag_finished_callback voidpt_window_set_drag_finished_callback(pt_window*window,pt_drag_finished_callbackcallback,void*user_data)
 func pt_window_set_drag_image voidpt_window_set_drag_image(pt_window*window,constpt_color*pixels,intwidth,intheight)
 func pt_window_set_drag_timeout voidpt_window_set_drag_timeout(pt_window*window,uint32_tmilliseconds)
@@ -769,6 +780,7 @@ opaque pt_window
 struct pt_drag_data constchar*mime_type|constchar*data|size_tsize
 struct pt_drop_target pt_drop_enter_callbackenter|pt_drop_motion_callbackmotion|pt_drop_leave_callbackleave|pt_drop_callbackdrop|void*user_data|pt_drop_offer_enter_callbackenter_offer|pt_drop_offer_drop_callbackdrop_offer
 struct pt_gesture_event pt_gesture_kindkind|pt_gesture_phasephase|uint32_tfingers|floatx|floaty|floatdx|floatdy|floatscale|floatrotation|pt_widget*target
+struct pt_paint_pixels_desc intstride|floatscale|pt_pixel_formatformat|uint32_treserved[3]
 struct pt_pointer_event pt_pointer_phasephase|floatx|floaty|floatdelta_x|floatdelta_y|uint32_tbutton|uint32_tmodifiers|uint32_tclick_count|boolpressed
 struct pt_stylus_event pt_stylus_phasephase|pt_stylus_tooltool|floatx|floaty|floatpressure|floatdistance|floattilt_x|floattilt_y|floatrotation|uint32_tbuttons
 struct pt_text_span uint32_tstart|uint32_tlength|pt_font_weightweight|pt_font_slantslant|pt_colorcolor|uint32_tflags|charfamily[64]|floatsize
