@@ -73,6 +73,13 @@ typedef struct pt_overlay_garbage {
     struct pt_overlay_garbage *next;
 } pt_overlay_garbage;
 
+/* A widget destroyed from inside a paint callback. The free is deferred until
+ * the current paint pass returns so the traversal never touches freed memory. */
+typedef struct pt_paint_garbage {
+    pt_widget *widget;
+    struct pt_paint_garbage *next;
+} pt_paint_garbage;
+
 typedef struct pt_menu_item {
     char *label;
     char *shortcut;
@@ -1184,6 +1191,7 @@ struct pt_window {
 
     pt_overlay *overlays;
     pt_overlay_garbage *overlay_garbage;
+    pt_paint_garbage *paint_garbage;
     pt_toast *first_toast;
     pt_widget *tooltip_target;
     uint64_t tooltip_timer;
@@ -1220,6 +1228,9 @@ bool pt_window_paint(pt_window *window, pt_canvas *canvas);
 /* Pure full-frame snapshot: paints without touching damage, needs_draw,
  * redraw_scheduled, last_paint_time or deferred overlay garbage. */
 bool pt_window_paint_snapshot(pt_window *window, pt_canvas *canvas);
+/* Frees widgets whose destruction was deferred by a paint callback. Runs at the
+ * end of a paint pass and when the window is freed. */
+void pt_window_paint_collect(pt_window *window);
 void pt_window_input_pointer_enter(pt_window *window, float x, float y);
 void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_t time);
 void pt_window_input_pointer_leave(pt_window *window);

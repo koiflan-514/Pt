@@ -476,6 +476,98 @@ static void test_offscreen_snapshot(pt_app *app) {
     pt_window_free(twin);
 }
 
+typedef struct paint_contract_probe {
+    int calls;
+    bool deferred;
+    int kind_after_destroy;
+    int reentrant_calls;
+    bool reentrant_rejected;
+    uint32_t *scratch;
+    int scratch_width;
+    int scratch_height;
+} paint_contract_probe;
+
+static void destroy_self_paint(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)context;
+    paint_contract_probe *probe = data;
+    probe->calls++;
+    pt_window *window = pt_widget_window(widget);
+    pt_widget_destroy(widget);
+    /* Detached immediately, but the memory is still readable until the paint
+     * pass returns, which is what makes a self-destroying callback safe. */
+    probe->deferred = window && window->paint_garbage != NULL;
+    probe->kind_after_destroy = (int)widget->kind;
+}
+
+static void reentrant_paint(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)context;
+    paint_contract_probe *probe = data;
+    probe->calls++;
+    probe->reentrant_calls++;
+    pt_window *window = pt_widget_window(widget);
+    probe->reentrant_rejected =
+        !pt_window_paint_pixels(window, probe->scratch, probe->scratch_width,
+                                probe->scratch_height);
+}
+
+static void unbalanced_clip_paint(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)widget;
+    paint_contract_probe *probe = data;
+    probe->calls++;
+    pt_paint_push_clip(context, 0.0f, 0.0f, 1.0f, 1.0f);
+    /* Deliberately no pop: the frame must restore its own clip depth. */
+}
+
+/* Paint callbacks are pure, may destroy themselves, may not re-paint the window
+ * and must leave the clip stack balanced. */
+static void test_paint_contract(pt_app *app) {
+    pt_window *window = pt_window_create(app, "paint-contract", 96, 72);
+    pt_window_set_decorated(window, false);
+    pt_widget *victim = pt_button_create(pt_window_root(window), "Victim");
+    paint_contract_probe self = {0};
+    pt_widget_set_paint_callback(victim, destroy_self_paint, &self);
+    pt_canvas *canvas = pt_canvas_create(96, 72, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(self.calls == 1);
+    pt_check(self.deferred);
+    pt_check(self.kind_after_destroy == pt_widget_button);
+    pt_check(window->paint_garbage == NULL);
+    pt_check(window->root->first_child == NULL);
+
+    /* Next frame is clean: no dangling child and no deferred garbage. */
+    window->needs_draw = true;
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(self.calls == 1);
+
+    /* Re-entrant snapshot is rejected and the outer frame still completes. */
+    paint_contract_probe reentrant = {0};
+    reentrant.scratch_width = 96;
+    reentrant.scratch_height = 72;
+    reentrant.scratch = calloc(96 * 72, sizeof(uint32_t));
+    pt_check(reentrant.scratch != NULL);
+    pt_widget_set_paint_callback(pt_window_root(window), reentrant_paint, &reentrant);
+    window->needs_draw = true;
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(reentrant.calls >= 1);
+    pt_check(reentrant.reentrant_rejected);
+    pt_check(!window->needs_draw);
+    pt_widget_clear_paint_callback(pt_window_root(window));
+
+    /* An unbalanced clip is repaired, never left for the next widget. */
+    pt_widget *label = pt_label_create(pt_window_root(window), "clip");
+    paint_contract_probe clip_probe = {0};
+    pt_widget_set_paint_callback(label, unbalanced_clip_paint, &clip_probe);
+    window->needs_draw = true;
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(clip_probe.calls == 1);
+    pt_check(canvas->clip_depth == 0);
+
+    free(reentrant.scratch);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 /* Motion return values are advisory: a consuming motion callback must not
  * stop hover, drag tracking or slider value updates. */
 static void test_motion_advisory(pt_app *app) {
@@ -677,6 +769,7 @@ int main(void) {
     test_scroll_painting(app);
     test_animation(app);
     test_offscreen_snapshot(app);
+    test_paint_contract(app);
     test_button_specificity(app);
     test_motion_advisory(app);
     test_raw_key_dispatch(app);

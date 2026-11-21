@@ -2006,8 +2006,19 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
 
     if (widget->paint_callback) {
         pt_canvas_push_clip(canvas, widget->x, widget->y, widget->width, widget->height);
+        int clip_depth = canvas->clip_depth;
+        pt_rect clip = canvas->clip;
         pt_paint_context custom = {.canvas = canvas, .widget = widget};
         widget->paint_callback(widget, &custom, widget->paint_callback_data);
+        if (canvas->clip_depth != clip_depth) {
+            /* The header contract requires balanced push/pop. Restoring both the
+             * depth and the clip keeps one broken callback from corrupting the
+             * rest of the frame; a debug build additionally reports it. */
+            pt_log_warn("paint callback left the clip stack unbalanced");
+            pt_set_error("paint callbacks must balance pt_paint_push_clip/pop_clip");
+            canvas->clip_depth = clip_depth;
+            canvas->clip = clip;
+        }
         pt_canvas_pop_clip(canvas);
     }
 

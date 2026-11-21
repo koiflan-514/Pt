@@ -1400,7 +1400,17 @@ void pt_widget_destroy(pt_widget *widget) {
     pt_window_overlays_forget_widget(window, widget);
     widget_forget_owner_state(widget);
     widget_detach(widget);
-    pt_widget_free_tree(widget);
+    if (window && window->in_paint) {
+        /* The paint traversal may still be inside this widget or about to visit
+         * its children. Detach now so future passes cannot see it, but defer the
+         * actual free until the paint pass returns (standards section 7). */
+        pt_paint_garbage *item = pt_alloc_zeroed(1, sizeof(*item));
+        item->widget = widget;
+        item->next = window->paint_garbage;
+        window->paint_garbage = item;
+    } else {
+        pt_widget_free_tree(widget);
+    }
     if (window) {
         pt_window_invalidate_layout(window, NULL);
         window->needs_draw = true;

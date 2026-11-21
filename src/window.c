@@ -220,6 +220,7 @@ void pt_window_free(pt_window *window) {
         pt_platform_window_destroy(window);
     }
     pt_window_overlays_free(window);
+    pt_window_paint_collect(window);
     if (window->root) {
         window->root->window = NULL;
         pt_widget_free_tree(window->root);
@@ -1153,6 +1154,9 @@ static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force
         /* A snapshot is a pure observation: the next live frame must still see
          * its damage, scheduled redraw, paint timestamp and deferred overlays. */
         paint_state_restore(window, &saved);
+        /* A widget destroyed by the callback itself is still freed: deferral
+         * protects the traversal, not the snapshot's overlay bookkeeping. */
+        pt_window_paint_collect(window);
         return true;
     }
     window->damage_valid = false;
@@ -1163,7 +1167,22 @@ static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force
     window->redraw_scheduled = false;
     window->last_paint_time = pt_now_seconds();
     pt_window_overlays_collect(window);
+    pt_window_paint_collect(window);
     return true;
+}
+
+void pt_window_paint_collect(pt_window *window) {
+    if (!window) {
+        return;
+    }
+    pt_paint_garbage *item = window->paint_garbage;
+    window->paint_garbage = NULL;
+    while (item) {
+        pt_paint_garbage *next = item->next;
+        pt_widget_free_tree(item->widget);
+        free(item);
+        item = next;
+    }
 }
 
 bool pt_window_paint(pt_window *window, pt_canvas *canvas) {

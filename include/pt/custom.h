@@ -33,13 +33,35 @@ typedef struct pt_paint_context pt_paint_context;
 
 /* Called while a widget is painted, after its normal background/content pass.
  * The context is clipped to the widget rectangle. Drawing is additive: the
- * callback can cover the default appearance. */
+ * callback can cover the default appearance.
+ *
+ * Contract (standards section 7):
+ * - Pure and idempotent. The same widget is painted 0..N times per frame (once
+ *   per damage tile) and must produce identical pixels regardless of tile order
+ *   or count. Draw from widget state only; do not advance counters or mutate
+ *   data that changes the output across calls in one frame.
+ * - Do not change the widget tree and do not trigger layout. Use
+ *   pt_widget_request_redraw/pt_widget_request_redraw_rect, or change another
+ *   widget and let the frame finish; the change is queued for the next frame.
+ * - `context` and its canvas are valid only during the call. Local coordinates
+ *   are logical widget pixels; pt_paint_scale() is the device-pixel ratio.
+ * - Every pt_paint_push_clip must have a matching pt_paint_pop_clip. A debug
+ *   build reports an unbalanced stack and the frame restores its own clip.
+ * - Do not call pt_window_paint_pixels/pt_window_paint_pixels_ex or
+ *   pt_window_paint from inside the callback; the re-entrant call returns false
+ *   and records an error.
+ * - The callback may destroy its widget (or another widget). The free is
+ *   deferred until the paint pass returns; pointers passed to the callback are
+ *   invalid after it returns.
+ *
+ * A custom-painted control still needs its accessibility role, name and state
+ * declared explicitly; paint does not replace semantics. */
 typedef void (*pt_paint_callback)(pt_widget *widget, pt_paint_context *context,
                                   void *user_data);
 
 /* Installs or removes a paint callback on any widget. Passing NULL clears it.
  * The callback data must stay valid until it is replaced or the widget is
- * destroyed. Calling this requests a redraw. */
+ * destroyed. Calling this requests a redraw. The callback rules above apply. */
 pt_api void pt_widget_set_paint_callback(pt_widget *widget, pt_paint_callback callback,
                                          void *user_data);
 pt_api void pt_widget_clear_paint_callback(pt_widget *widget);
@@ -49,7 +71,9 @@ pt_api void pt_widget_clear_paint_callback(pt_widget *widget);
  * This is a pure snapshot: it does not damage the window, clear
  * needs_draw/redraw_scheduled, touch last_paint_time or collect deferred
  * overlays, so calling it on a mapped window never swallows the next live
- * frame. Returns false for a NULL window, NULL buffer or non-positive size. */
+ * frame. It must not be called from a paint callback (the call is rejected and
+ * records an error). Returns false for a NULL window, NULL buffer or
+ * non-positive size. */
 pt_api bool pt_window_paint_pixels(pt_window *window, uint32_t *pixels, int width,
                                    int height);
 
