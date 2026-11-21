@@ -42,6 +42,13 @@ static bool popup_open(const pt_combobox_state *state) {
     return state && state->popup && state->popup->open;
 }
 
+/* The 1.2 pickers borrow the combo-box kind for dispatch; their state lives in
+ * src/picker.c and every hook below forwards there instead of touching the
+ * combo-box item model or its overlay. */
+static pt_picker *combobox_picker(const pt_combobox_state *state) {
+    return state ? state->picker : NULL;
+}
+
 /* Rebuilds an open popup after a model change, keeping the highlight when the
  * option is still there. Defined with the popup contents. */
 static void refresh_popup(pt_widget *combobox);
@@ -474,6 +481,10 @@ static void show_popup(pt_widget *combobox, bool reset_filter) {
 
 void pt_combobox_open_popup(pt_widget *combobox) {
     pt_combobox_state *state = combobox_state(combobox);
+    if (combobox_picker(state)) {
+        pt_picker_open(combobox);
+        return;
+    }
     if (popup_open(state)) {
         return;
     }
@@ -482,6 +493,10 @@ void pt_combobox_open_popup(pt_widget *combobox) {
 
 void pt_combobox_close_popup(pt_widget *combobox) {
     pt_combobox_state *state = combobox_state(combobox);
+    if (combobox_picker(state)) {
+        pt_picker_close(combobox);
+        return;
+    }
     if (!popup_open(state)) {
         return;
     }
@@ -536,6 +551,10 @@ static void commit_highlight(pt_widget *combobox) {
 
 void pt_combobox_choose_option(pt_widget *combobox, uint32_t position) {
     pt_combobox_state *state = combobox_state(combobox);
+    if (combobox_picker(state)) {
+        pt_picker_choose(combobox, position);
+        return;
+    }
     uint32_t item = visible_item(state, position);
     if (!state || item == pt_list_index_none || item_disabled(state, item)) {
         return;
@@ -572,7 +591,7 @@ void pt_combobox_add_item(pt_widget *combobox, const char *text) {
 
 void pt_combobox_insert_item(pt_widget *combobox, uint32_t index, const char *text) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state) {
+    if (!state || combobox_picker(state)) {
         return;
     }
     if (index == pt_list_index_none || index > state->item_count) {
@@ -600,7 +619,7 @@ void pt_combobox_insert_item(pt_widget *combobox, uint32_t index, const char *te
 
 void pt_combobox_remove_item(pt_widget *combobox, uint32_t index) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state || index >= state->item_count) {
+    if (!state || combobox_picker(state) || index >= state->item_count) {
         return;
     }
     item_clear(&state->items[index]);
@@ -626,7 +645,7 @@ void pt_combobox_remove_item(pt_widget *combobox, uint32_t index) {
 
 void pt_combobox_clear(pt_widget *combobox) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state) {
+    if (!state || combobox_picker(state)) {
         return;
     }
     for (uint32_t i = 0; i < state->item_count; ++i) {
@@ -704,7 +723,7 @@ static void field_changed(pt_widget *field, const char *text, void *user_data);
 
 void pt_combobox_set_mode(pt_widget *combobox, pt_combobox_mode mode) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state || state->mode == mode) {
+    if (!state || combobox_picker(state) || state->mode == mode) {
         return;
     }
     pt_combobox_close_popup(combobox);
@@ -765,7 +784,8 @@ uint32_t pt_combobox_get_selected(const pt_widget *combobox) {
 
 void pt_combobox_select(pt_widget *combobox, uint32_t index, bool notify) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state || index >= state->item_count || state->items[index].disabled) {
+    if (!state || combobox_picker(state) || index >= state->item_count ||
+        state->items[index].disabled) {
         return;
     }
     bool changed = state->selected != index;
@@ -789,7 +809,7 @@ void pt_combobox_select(pt_widget *combobox, uint32_t index, bool notify) {
 
 void pt_combobox_set_selected(pt_widget *combobox, uint32_t index) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state) {
+    if (!state || combobox_picker(state)) {
         return;
     }
     if (index >= state->item_count) {
@@ -816,7 +836,7 @@ const char *pt_combobox_get_text(const pt_widget *combobox) {
 
 void pt_combobox_set_text(pt_widget *combobox, const char *text) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state) {
+    if (!state || combobox_picker(state)) {
         return;
     }
     const char *wanted = text ? text : "";
@@ -855,7 +875,7 @@ const char *pt_combobox_get_placeholder(const pt_widget *combobox) {
 
 void pt_combobox_set_placeholder(pt_widget *combobox, const char *text) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!combobox) {
+    if (!combobox || combobox_picker(state)) {
         return;
     }
     char *copy = pt_strdup(text ? text : "");
@@ -876,12 +896,16 @@ void pt_combobox_close(pt_widget *combobox) {
 }
 
 bool pt_combobox_is_open(const pt_widget *combobox) {
-    return popup_open(combobox_state_const(combobox));
+    const pt_combobox_state *state = combobox_state_const(combobox);
+    if (combobox_picker(state)) {
+        return pt_picker_is_open(combobox);
+    }
+    return popup_open(state);
 }
 
 void pt_combobox_set_popup_max_height(pt_widget *combobox, float height) {
     pt_combobox_state *state = combobox_state(combobox);
-    if (!state) {
+    if (!state || combobox_picker(state)) {
         return;
     }
     state->popup_max_height = pt_max_float(combobox_option_height, height);
@@ -1045,6 +1069,9 @@ bool pt_combobox_key(pt_widget *combobox, uint32_t keysym, uint32_t modifiers,
     if (!state || !combobox->enabled) {
         return false;
     }
+    if (combobox_picker(state)) {
+        return pt_picker_key(combobox, keysym, modifiers, utf8);
+    }
     bool open = popup_open(state);
     bool filterable = state->mode == pt_combobox_filterable;
     bool alt = (modifiers & (uint32_t)pt_key_modifier_alt) != 0;
@@ -1144,10 +1171,12 @@ bool pt_combobox_key(pt_widget *combobox, uint32_t keysym, uint32_t modifiers,
 }
 
 void pt_combobox_pointer_down(pt_widget *combobox, float x, float y) {
-    pt_unused(x);
-    pt_unused(y);
     pt_combobox_state *state = combobox_state(combobox);
     if (!state || !combobox->enabled) {
+        return;
+    }
+    if (combobox_picker(state)) {
+        pt_picker_pointer_down(combobox, x, y);
         return;
     }
     if (popup_open(state)) {
@@ -1171,6 +1200,10 @@ void pt_combobox_pointer_down(pt_widget *combobox, float x, float y) {
 
 void pt_combobox_preferred(pt_widget *combobox, const pt_layout_ctx *ctx, float *width,
                            float *height) {
+    if (combobox_picker(combobox_state(combobox))) {
+        pt_picker_preferred(combobox, ctx, width, height);
+        return;
+    }
     float scale = ctx->scale > 0.0f ? ctx->scale : 1.0f;
     pt_font *font = pt_widget_font_for(combobox, ctx);
     float natural = 0.0f;
@@ -1191,6 +1224,10 @@ void pt_combobox_preferred(pt_widget *combobox, const pt_layout_ctx *ctx, float 
 
 void pt_combobox_layout(pt_widget *combobox, const pt_layout_ctx *ctx, pt_rect inner) {
     pt_combobox_state *state = combobox_state(combobox);
+    if (combobox_picker(state)) {
+        pt_picker_layout(combobox, ctx, inner);
+        return;
+    }
     if (!state || !state->field) {
         return;
     }
@@ -1202,6 +1239,9 @@ void pt_combobox_free_extra(pt_widget *combobox) {
     pt_combobox_state *state = combobox_state(combobox);
     if (!state) {
         return;
+    }
+    if (combobox_picker(state)) {
+        pt_picker_free(combobox);
     }
     if (popup_open(state)) {
         state->popup->owner = NULL;

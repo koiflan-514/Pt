@@ -18,6 +18,7 @@
 #include <pt/interaction.h>
 #include <pt/motion.h>
 #include <pt/overlay.h>
+#include <pt/picker.h>
 #include <pt/popup.h>
 #include <pt/theme.h>
 #include <pt/widget.h>
