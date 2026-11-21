@@ -1477,6 +1477,65 @@ public final class PtTest {
             Pt.widget_destroy(shortTable);
             Pt.widget_destroy(keyTable);
 
+            /* Reference-counted raster icons, button and window slots. */
+            int[] iconPixels = new int[16];
+            for (int index = 0; index < iconPixels.length; index++) {
+                iconPixels[index] = 0x80FF0000 | index;
+            }
+            byte[] iconBytes = png(4, 4, iconPixels);
+            MemorySegment rasterIcon = Pt.icon_image_load_memory(iconBytes);
+            check(rasterIcon.address() != 0, "icon load memory");
+            check(Pt.icon_image_width(rasterIcon) == 4 && Pt.icon_image_height(rasterIcon) == 4,
+                    "icon dimensions");
+            MemorySegment iconRef = Pt.icon_image_ref(rasterIcon);
+            check(iconRef.address() == rasterIcon.address(), "icon ref identity");
+            check(Pt.icon_image_width(MemorySegment.NULL) == 0, "icon null width");
+            check(Pt.icon_image_height(MemorySegment.NULL) == 0, "icon null height");
+            Pt.icon_image_ref(MemorySegment.NULL);
+            Pt.icon_image_destroy(MemorySegment.NULL);
+            check(Pt.icon_image_load_memory(new byte[0]).address() == 0,
+                    "icon empty bytes rejected");
+            check(Pt.icon_image_load_memory(new byte[] {1, 2, 3}).address() == 0,
+                    "icon corrupt bytes rejected");
+            java.nio.file.Path iconPath = java.nio.file.Files.createTempFile("pt-icon", ".png");
+            try {
+                java.nio.file.Files.write(iconPath, iconBytes);
+                MemorySegment fileIcon = Pt.icon_image_load_file(iconPath.toString());
+                check(fileIcon.address() != 0, "icon load file");
+                if (fileIcon.address() != 0) {
+                    check(Pt.icon_image_width(fileIcon) == 4, "icon file dimensions");
+                    Pt.icon_image_destroy(fileIcon);
+                }
+            } finally {
+                java.nio.file.Files.deleteIfExists(iconPath);
+            }
+            check(Pt.icon_image_load_file("/tmp/pt-definitely-missing-icon.png").address() == 0,
+                    "icon missing file rejected");
+            check(Pt.icon_image_from_name("pt-definitely-missing", 32).address() == 0,
+                    "icon missing name rejected");
+            check(Pt.icon_image_from_name("../escape", 32).address() == 0,
+                    "icon path name rejected");
+            MemorySegment iconButton = Pt.button(column, "Save");
+            Pt.button_set_icon_image(iconButton, rasterIcon);
+            check(Pt.button_get_icon_image(iconButton).address() == rasterIcon.address(),
+                    "button icon slot");
+            Pt.button_set_icon_tint(iconButton, 0xFF3366FF);
+            Pt.button_set_icon_tint(iconButton, 0);
+            Pt.icon_image_destroy(rasterIcon);
+            check(Pt.icon_image_width(Pt.button_get_icon_image(iconButton)) == 4,
+                    "button keeps icon reference");
+            Pt.window_set_icon(window, iconRef);
+            check(Pt.window_get_icon(window).address() == iconRef.address(),
+                    "window icon slot");
+            Pt.icon_image_destroy(iconRef);
+            check(Pt.icon_image_width(Pt.window_get_icon(window)) == 4,
+                    "window keeps icon reference");
+            Pt.button_set_icon_image(iconButton, MemorySegment.NULL);
+            check(Pt.button_get_icon_image(iconButton).address() == 0,
+                    "button icon cleared");
+            Pt.window_set_icon(window, MemorySegment.NULL);
+            check(Pt.window_get_icon(window).address() == 0, "window icon cleared");
+
             final boolean[] allowed = {false};
             Pt.window_set_close_handler(window, (target, data) -> allowed[0], arena);
             Pt.window_close(window);

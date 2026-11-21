@@ -4273,6 +4273,83 @@ public final class Pt {
         return (float) invoke(icon_get_size, icon);
     }
 
+    /* Reference-counted raster icon images. Every load/lookup returns one
+     * reference owned by the caller; the button and window slots take their own
+     * reference, so drop the caller's with icon_image_destroy. */
+
+    public static MemorySegment icon_image_load_file(String path) {
+        Objects.requireNonNull(path, "path");
+        try (Arena arena = Arena.ofConfined()) {
+            return (MemorySegment) invoke(icon_image_load_file, cstring(arena, path));
+        }
+    }
+
+    /** Loads PNG bytes; the caller keeps ownership of {@code data}. */
+    public static MemorySegment icon_image_load_memory(MemorySegment data, long size) {
+        return (MemorySegment) invoke(icon_image_load_memory, data, size);
+    }
+
+    /** Convenience overload that copies the array into a temporary arena. */
+    public static MemorySegment icon_image_load_memory(byte[] data) {
+        Objects.requireNonNull(data, "data");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buffer = arena.allocate(data.length, 1);
+            MemorySegment.copy(data, 0, buffer, ValueLayout.JAVA_BYTE, 0, data.length);
+            return (MemorySegment) invoke(icon_image_load_memory, buffer, (long) data.length);
+        }
+    }
+
+    /** Looks a PNG up in the hicolor theme; NULL on a miss or invalid name. */
+    public static MemorySegment icon_image_from_name(String name, int size) {
+        Objects.requireNonNull(name, "name");
+        try (Arena arena = Arena.ofConfined()) {
+            return (MemorySegment) invoke(icon_image_from_name, cstring(arena, name), size);
+        }
+    }
+
+    /** Adds one reference and returns the same handle; NULL stays NULL. */
+    public static MemorySegment icon_image_ref(MemorySegment image) {
+        return (MemorySegment) invoke(icon_image_ref, image);
+    }
+
+    /** Drops one reference; the last drop frees the image. NULL is accepted. */
+    public static void icon_image_destroy(MemorySegment image) {
+        invoke(icon_image_destroy, image);
+    }
+
+    public static int icon_image_width(MemorySegment image) {
+        return (int) invoke(icon_image_width, image);
+    }
+
+    public static int icon_image_height(MemorySegment image) {
+        return (int) invoke(icon_image_height, image);
+    }
+
+    /** Sets the button slot; the button takes a reference. NULL clears it. */
+    public static void button_set_icon_image(MemorySegment button, MemorySegment image) {
+        invoke(button_set_icon_image, button, image);
+    }
+
+    /** Borrowed image owned by the button; NULL when the slot is empty. */
+    public static MemorySegment button_get_icon_image(MemorySegment button) {
+        return (MemorySegment) invoke(button_get_icon_image, button);
+    }
+
+    /** 0xRRGGBBAA theme tint; 0 restores the image's own colours. */
+    public static void button_set_icon_tint(MemorySegment button, int tint) {
+        invoke(button_set_icon_tint, button, tint);
+    }
+
+    /** Best-effort window icon; the window takes a reference. NULL removes it. */
+    public static void window_set_icon(MemorySegment window, MemorySegment image) {
+        invoke(window_set_icon, window, image);
+    }
+
+    /** Borrowed image owned by the window; NULL when the slot is empty. */
+    public static MemorySegment window_get_icon(MemorySegment window) {
+        return (MemorySegment) invoke(window_get_icon, window);
+    }
+
     public static void table_set_column_count(MemorySegment table, int count) {
         invoke(table_set_column_count, table, count);
     }
