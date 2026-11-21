@@ -62,6 +62,8 @@ _Static_assert(pt_pointer_phase_cancel == 6, "pointer cancel must stay 6");
 _Static_assert(pt_decoration_auto == 0, "decoration auto must stay 0");
 _Static_assert(pt_decoration_client == 1, "decoration client must stay 1");
 _Static_assert(pt_decoration_server == 2, "decoration server must stay 2");
+_Static_assert(pt_pixel_format_argb8888_premultiplied == 0,
+               "the only 1.1 pixel format must stay 0");
 
 /* fd-watch event bits: append-only, one bit per readiness class. */
 _Static_assert(pt_fd_event_read == (1u << 0), "fd read bit");
@@ -167,6 +169,21 @@ _Static_assert(offsetof(pt_transition, duration) < offsetof(pt_transition, easin
                "transition order");
 _Static_assert(offsetof(pt_transition, easing) < offsetof(pt_transition, active),
                "transition order");
+
+/* Offscreen snapshot descriptor. New fields may only be appended; applications
+ * zero-initialize it so a later minor can use the reserved words. */
+_Static_assert(offsetof(pt_paint_pixels_desc, stride) == 0, "stride first");
+_Static_assert(offsetof(pt_paint_pixels_desc, stride) <
+                   offsetof(pt_paint_pixels_desc, scale),
+               "descriptor order");
+_Static_assert(offsetof(pt_paint_pixels_desc, scale) <
+                   offsetof(pt_paint_pixels_desc, format),
+               "descriptor order");
+_Static_assert(offsetof(pt_paint_pixels_desc, format) <
+                   offsetof(pt_paint_pixels_desc, reserved),
+               "descriptor order");
+_Static_assert(sizeof(((pt_paint_pixels_desc *)0)->reserved) == 3 * sizeof(uint32_t),
+               "three reserved words");
 
 /* Window-level pointer events. The field order is part of the callback contract:
  * an event is built by the framework and only read by applications. */

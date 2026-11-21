@@ -1008,16 +1008,87 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
     }
 }
 
-static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force_full) {
+typedef struct paint_snapshot_state {
+    pt_rect damage;
+    pt_rect damage_tiles[pt_damage_tile_capacity];
+    uint8_t damage_tile_count;
+    bool damage_valid;
+    bool damage_full;
+    pt_rect last_damage;
+    pt_rect last_damage_tiles[pt_damage_tile_capacity];
+    uint8_t last_damage_tile_count;
+    bool last_damage_full;
+    pt_widget *layout_root;
+    bool last_layout_partial;
+    bool needs_layout;
+    bool needs_draw;
+    bool redraw_scheduled;
+    double last_paint_time;
+    uint32_t paint_visits;
+} paint_snapshot_state;
+
+static void paint_state_save(const pt_window *window, paint_snapshot_state *state) {
+    state->damage = window->damage;
+    memcpy(state->damage_tiles, window->damage_tiles, sizeof(state->damage_tiles));
+    state->damage_tile_count = window->damage_tile_count;
+    state->damage_valid = window->damage_valid;
+    state->damage_full = window->damage_full;
+    state->last_damage = window->last_damage;
+    memcpy(state->last_damage_tiles, window->last_damage_tiles,
+           sizeof(state->last_damage_tiles));
+    state->last_damage_tile_count = window->last_damage_tile_count;
+    state->last_damage_full = window->last_damage_full;
+    state->layout_root = window->layout_root;
+    state->last_layout_partial = window->last_layout_partial;
+    state->needs_layout = window->needs_layout;
+    state->needs_draw = window->needs_draw;
+    state->redraw_scheduled = window->redraw_scheduled;
+    state->last_paint_time = window->last_paint_time;
+    state->paint_visits = window->paint_visits;
+}
+
+static void paint_state_restore(pt_window *window, const paint_snapshot_state *state) {
+    window->damage = state->damage;
+    memcpy(window->damage_tiles, state->damage_tiles, sizeof(state->damage_tiles));
+    window->damage_tile_count = state->damage_tile_count;
+    window->damage_valid = state->damage_valid;
+    window->damage_full = state->damage_full;
+    window->last_damage = state->last_damage;
+    memcpy(window->last_damage_tiles, state->last_damage_tiles,
+           sizeof(state->last_damage_tiles));
+    window->last_damage_tile_count = state->last_damage_tile_count;
+    window->last_damage_full = state->last_damage_full;
+    window->layout_root = state->layout_root;
+    window->last_layout_partial = state->last_layout_partial;
+    window->needs_layout = state->needs_layout;
+    window->needs_draw = state->needs_draw;
+    window->redraw_scheduled = state->redraw_scheduled;
+    window->last_paint_time = state->last_paint_time;
+    window->paint_visits = state->paint_visits;
+}
+
+static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force_full,
+                                bool snapshot) {
     if (!window || !canvas || !window->root) {
         return false;
     }
-    if (!force_full && !window->needs_draw && !window->needs_layout &&
+    if (window->in_paint) {
+        pt_log_warn("pt_window_paint_pixels called during a paint pass");
+        pt_set_error("paint callbacks must not paint re-entrantly");
+        return false;
+    }
+    if (!snapshot && !force_full && !window->needs_draw && !window->needs_layout &&
         !window->damage_valid && !window->damage_full) {
         window->last_damage = (pt_rect){0.0f, 0.0f, 0.0f, 0.0f};
         window->last_damage_full = false;
         return true;
     }
+    paint_snapshot_state saved;
+    if (snapshot) {
+        paint_state_save(window, &saved);
+        force_full = true;
+    }
+    window->in_paint = true;
     pt_layout_ctx ctx = pt_layout_context_for(window->root);
     if (!window->app) {
         ctx = (pt_layout_ctx){canvas->scale > 0.0f ? canvas->scale : 1.0f, "sans-serif"};
@@ -1077,6 +1148,13 @@ static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force
         }
     }
 
+    window->in_paint = false;
+    if (snapshot) {
+        /* A snapshot is a pure observation: the next live frame must still see
+         * its damage, scheduled redraw, paint timestamp and deferred overlays. */
+        paint_state_restore(window, &saved);
+        return true;
+    }
     window->damage_valid = false;
     window->damage_full = false;
     window->damage_tile_count = 0;
@@ -1093,11 +1171,15 @@ bool pt_window_paint(pt_window *window, pt_canvas *canvas) {
         return false;
     }
     pt_window_damage_all(window);
-    return window_paint_common(window, canvas, true);
+    return window_paint_common(window, canvas, true, false);
+}
+
+bool pt_window_paint_snapshot(pt_window *window, pt_canvas *canvas) {
+    return window_paint_common(window, canvas, true, true);
 }
 
 bool pt_window_paint_damage(pt_window *window, pt_canvas *canvas) {
-    return window_paint_common(window, canvas, false);
+    return window_paint_common(window, canvas, false, false);
 }
 
 /* ---------- input ---------- */

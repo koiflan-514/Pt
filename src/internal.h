@@ -1206,6 +1206,9 @@ struct pt_window {
     pt_widget *layout_root;
     bool last_layout_partial;
     uint32_t paint_visits;
+    /* True while the window paint pass is running. Used to reject a re-entrant
+     * pt_window_paint_pixels and to defer widget destruction (see paint.c). */
+    bool in_paint;
 
     struct pt_wayland_window *platform_window;
 };
@@ -1214,6 +1217,9 @@ pt_window *pt_window_alloc(pt_app *app, const char *title, int width, int height
 void pt_window_free(pt_window *window);
 void pt_window_apply_configure(pt_window *window, int width, int height);
 bool pt_window_paint(pt_window *window, pt_canvas *canvas);
+/* Pure full-frame snapshot: paints without touching damage, needs_draw,
+ * redraw_scheduled, last_paint_time or deferred overlay garbage. */
+bool pt_window_paint_snapshot(pt_window *window, pt_canvas *canvas);
 void pt_window_input_pointer_enter(pt_window *window, float x, float y);
 void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_t time);
 void pt_window_input_pointer_leave(pt_window *window);

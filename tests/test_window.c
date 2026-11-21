@@ -97,6 +97,17 @@ static void record_paint(pt_widget *widget, pt_paint_context *context, void *dat
     pt_paint_fill_rect(context, 0.0f, 0.0f, 12.0f, 12.0f, pt_rgb(0xAA3300));
 }
 
+/* Fully covered 12x12 patch of the opaque mark above in premultiplied ARGB. */
+#define paint_mark_pixel 0xFFAA3300u
+
+static void patch_paint(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)widget;
+    paint_probe *probe = data;
+    probe->calls++;
+    probe->width = pt_paint_width(context);
+    pt_paint_fill_rect(context, 4.0f, 4.0f, 8.0f, 8.0f, pt_rgb(0xAA3300));
+}
+
 static pt_rect bounds_of(pt_widget *widget) {
     float x = 0.0f;
     float y = 0.0f;
@@ -312,6 +323,159 @@ static void test_button_specificity(pt_app *app) {
     pt_window_free(window);
 }
 
+/* An offscreen snapshot is a pure observation. It must not consume damage,
+ * needs_draw or redraw_scheduled, and must not collect deferred overlay panels. */
+static void test_offscreen_snapshot(pt_app *app) {
+    pt_window *window = pt_window_create(app, "snapshot", 64, 48);
+    pt_check(window != NULL);
+    pt_window_set_decorated(window, false);
+    paint_probe probe = {0};
+    pt_widget_set_paint_callback(pt_window_root(window), patch_paint, &probe);
+    pt_window_show(window);
+    pt_canvas *live = pt_canvas_create(64, 48, 1.0f);
+    pt_check(pt_window_paint(window, live));
+    pt_check(probe.calls == 1);
+
+    /* A pending frame: damage, needs_draw and a scheduled redraw survive the
+     * snapshot, so the next live paint still runs and the frame is not lost. */
+    pt_window_damage_rect(window, (pt_rect){4.0f, window->header_height + 4.0f, 8.0f, 8.0f});
+    window->needs_draw = true;
+    window->redraw_scheduled = true;
+    double last_paint = window->last_paint_time;
+    uint32_t visits = window->paint_visits;
+    uint32_t *pixels = calloc(64 * 48, sizeof(uint32_t));
+    pt_check(pixels != NULL);
+    pt_check(pt_window_paint_pixels(window, pixels, 64, 48));
+    pt_check(window->needs_draw);
+    pt_check(window->redraw_scheduled);
+    pt_check(window->damage_valid);
+    pt_check_near(window->last_paint_time, last_paint, 0.0);
+    pt_check(window->paint_visits == visits);
+    int calls_after_snapshot = probe.calls;
+    pt_check(pt_window_paint_damage(window, live));
+    pt_check(probe.calls > calls_after_snapshot);
+    pt_check(!window->needs_draw);
+    pt_check(!window->redraw_scheduled);
+    pt_check(!window->damage_valid);
+
+    /* A panel queued for deferred destruction stays alive across a snapshot and
+     * is only collected by a live frame. */
+    pt_menu *menu = pt_menu_create(window);
+    pt_menu_add_item(menu, "One", NULL, NULL, NULL);
+    pt_menu_show_at(menu, 8.0f, window->header_height + 8.0f);
+    pt_check(window->overlays != NULL);
+    pt_menu_destroy(menu);
+    pt_check(window->overlay_garbage != NULL);
+    pt_overlay_garbage *queued = window->overlay_garbage;
+    pt_check(pt_window_paint_pixels(window, pixels, 64, 48));
+    pt_check(window->overlay_garbage == queued);
+    pt_check(queued->panel != NULL);
+    pt_check(pt_window_paint(window, live));
+    pt_check(window->overlay_garbage == NULL);
+
+    /* The exact mark occupies the fully covered pixels at scale 1. */
+    int root_x = (int)window->root->x;
+    int root_y = (int)window->root->y;
+    pt_check(pixels[(size_t)(root_y + 5) * 64u + (size_t)(root_x + 5)] == paint_mark_pixel);
+    pt_check(pixels[(size_t)(root_y + 5) * 64u + (size_t)(root_x + 13)] != paint_mark_pixel);
+
+    free(pixels);
+    pt_canvas_destroy(live);
+    pt_window_free(window);
+
+    /* Stride: padding columns are left untouched, rows advance by stride. */
+    pt_window *swin = pt_window_create(app, "stride", 64, 48);
+    pt_window_set_decorated(swin, false);
+    paint_probe stride_probe = {0};
+    pt_widget_set_paint_callback(pt_window_root(swin), patch_paint, &stride_probe);
+    int stride = 80;
+    uint32_t *strided = malloc((size_t)stride * 48u * sizeof(uint32_t));
+    pt_check(strided != NULL);
+    for (int i = 0; i < stride * 48; ++i) {
+        strided[i] = 0xDEADBEEFu;
+    }
+    pt_paint_pixels_desc desc = {.stride = stride, .scale = 0.0f};
+    pt_check(pt_window_paint_pixels_ex(swin, strided, 64, 48, &desc));
+    bool padding_kept = true;
+    for (int row = 0; row < 48; ++row) {
+        for (int column = 64; column < stride; ++column) {
+            if (strided[(size_t)row * (size_t)stride + (size_t)column] != 0xDEADBEEFu) {
+                padding_kept = false;
+            }
+        }
+    }
+    pt_check(padding_kept);
+    int sx = (int)swin->root->x;
+    int sy = (int)swin->root->y;
+    pt_check(strided[(size_t)(sy + 5) * (size_t)stride + (size_t)(sx + 5)] == paint_mark_pixel);
+    pt_check(strided[(size_t)(sy + 5) * (size_t)stride + (size_t)(sx + 13)] != paint_mark_pixel);
+
+    /* Scale 2 doubles the device-pixel footprint of the same logical patch. */
+    uint32_t *scaled = calloc((size_t)128 * 96, sizeof(uint32_t));
+    pt_check(scaled != NULL);
+    pt_paint_pixels_desc scale_desc = {.scale = 2.0f};
+    pt_check(pt_window_paint_pixels_ex(swin, scaled, 128, 96, &scale_desc));
+    size_t scaled_x = (size_t)(sx + 5) * 2u;
+    size_t scaled_y = (size_t)(sy + 5) * 2u;
+    pt_check(scaled[scaled_y * 128u + scaled_x] == paint_mark_pixel);
+    pt_check(scaled[(scaled_y + 1u) * 128u + scaled_x + 1u] == paint_mark_pixel);
+    pt_check(scaled[((size_t)(sy + 13) * 2u) * 128u + scaled_x] != paint_mark_pixel);
+
+    /* Invalid descriptors are rejected, not clamped silently. */
+    pt_check(pt_window_paint_pixels_ex(swin, scaled, 128, 96, NULL));
+    pt_paint_pixels_desc bad_stride = {.stride = 64};
+    pt_check(!pt_window_paint_pixels_ex(swin, strided, 128, 96, &bad_stride));
+    pt_paint_pixels_desc bad_scale = {.scale = -1.0f};
+    pt_check(!pt_window_paint_pixels_ex(swin, scaled, 128, 96, &bad_scale));
+    pt_paint_pixels_desc bad_format = {.format = (pt_pixel_format)7};
+    pt_check(!pt_window_paint_pixels_ex(swin, scaled, 128, 96, &bad_format));
+
+    free(scaled);
+    free(strided);
+    pt_window_free(swin);
+
+    /* Full paint versus damage tiles: one tile, three tiles and the three tiles
+     * delivered in a different order must produce identical pixels. */
+    pt_window *twin = pt_window_create(app, "tiles", 96, 72);
+    pt_window_set_decorated(twin, false);
+    paint_probe tile_probe = {0};
+    pt_widget_set_paint_callback(pt_window_root(twin), patch_paint, &tile_probe);
+    pt_canvas *full = pt_canvas_create(96, 72, 1.0f);
+    pt_canvas *tiled = pt_canvas_create(96, 72, 1.0f);
+    pt_check(full && tiled);
+    pt_check(pt_window_paint(twin, full));
+    int tx = (int)twin->root->x;
+    int ty = (int)twin->root->y;
+    pt_rect tile_a = {(float)(tx + 2), (float)(ty + 2), 10.0f, 8.0f};
+    pt_rect tile_b = {(float)(tx + 30), (float)(ty + 4), 12.0f, 10.0f};
+    pt_rect tile_c = {(float)(tx + 10), (float)(ty + 20), 14.0f, 8.0f};
+    size_t bytes = (size_t)96 * 72u * sizeof(uint32_t);
+
+    memcpy(tiled->pixels, full->pixels, bytes);
+    pt_window_damage_rect(twin, tile_a);
+    pt_check(pt_window_paint_damage(twin, tiled));
+    pt_check(memcmp(full->pixels, tiled->pixels, bytes) == 0);
+
+    memcpy(tiled->pixels, full->pixels, bytes);
+    pt_window_damage_rect(twin, tile_a);
+    pt_window_damage_rect(twin, tile_b);
+    pt_window_damage_rect(twin, tile_c);
+    pt_check(twin->damage_tile_count == 3);
+    pt_check(pt_window_paint_damage(twin, tiled));
+    pt_check(memcmp(full->pixels, tiled->pixels, bytes) == 0);
+
+    memcpy(tiled->pixels, full->pixels, bytes);
+    pt_window_damage_rect(twin, tile_c);
+    pt_window_damage_rect(twin, tile_a);
+    pt_window_damage_rect(twin, tile_b);
+    pt_check(pt_window_paint_damage(twin, tiled));
+    pt_check(memcmp(full->pixels, tiled->pixels, bytes) == 0);
+
+    pt_canvas_destroy(full);
+    pt_canvas_destroy(tiled);
+    pt_window_free(twin);
+}
+
 /* Motion return values are advisory: a consuming motion callback must not
  * stop hover, drag tracking or slider value updates. */
 static void test_motion_advisory(pt_app *app) {
@@ -512,6 +676,7 @@ int main(void) {
     test_window_properties(app);
     test_scroll_painting(app);
     test_animation(app);
+    test_offscreen_snapshot(app);
     test_button_specificity(app);
     test_motion_advisory(app);
     test_raw_key_dispatch(app);

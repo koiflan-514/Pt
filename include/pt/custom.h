@@ -44,13 +44,36 @@ pt_api void pt_widget_set_paint_callback(pt_widget *widget, pt_paint_callback ca
                                          void *user_data);
 pt_api void pt_widget_clear_paint_callback(pt_widget *widget);
 
-/* Paints one full frame of `window` into `pixels` (one uint32_t per pixel in
- * 0xAARRGGBB byte order, `width` pixels per row) at a scale of 1.0. This is
- * the offscreen entry point for headless and unit testing of custom paint
- * callbacks: no compositor or window buffer is involved. Returns false when
- * the window is NULL or the size is invalid. */
+/* Paints one full frame of `window` into `pixels` at a scale of 1.0 with a
+ * stride of `width` pixels. Pixels are premultiplied 0xAARRGGBB, row-major.
+ * This is a pure snapshot: it does not damage the window, clear
+ * needs_draw/redraw_scheduled, touch last_paint_time or collect deferred
+ * overlays, so calling it on a mapped window never swallows the next live
+ * frame. Returns false for a NULL window, NULL buffer or non-positive size. */
 pt_api bool pt_window_paint_pixels(pt_window *window, uint32_t *pixels, int width,
                                    int height);
+
+/* Pixel layout of an offscreen snapshot. `stride` is in pixels per row and 0
+ * means `width`; `scale` is the device-pixel ratio and 0 means 1.0. Only
+ * premultiplied 0xAARRGGBB is supported. Unused fields are reserved for a later
+ * minor and must be zero-initialized. Since 1.1. */
+typedef enum pt_pixel_format {
+    pt_pixel_format_argb8888_premultiplied = 0
+} pt_pixel_format;
+
+typedef struct pt_paint_pixels_desc {
+    int stride;
+    float scale;
+    pt_pixel_format format;
+    uint32_t reserved[3];
+} pt_paint_pixels_desc;
+
+/* Extended offscreen snapshot. `width` and `height` are device pixels (a scale
+ * of 2.0 needs width = 2 * logical_width). The stride may exceed width, in
+ * which case the padding pixels are left untouched. Returns false for an
+ * invalid stride, scale, format or buffer. Since 1.1. */
+pt_api bool pt_window_paint_pixels_ex(pt_window *window, uint32_t *pixels, int width,
+                                      int height, const pt_paint_pixels_desc *desc);
 
 /* Requests a repaint of this widget and its subtree. Unlike a window-level
  * redraw this damages the widget rectangle only. */
