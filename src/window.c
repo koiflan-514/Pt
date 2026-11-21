@@ -228,6 +228,7 @@ void pt_window_free(pt_window *window) {
     pt_canvas_destroy(window->backing);
     free(window->drag_text);
     free(window->drag_image);
+    pt_icon_image_destroy(window->icon);
     free(window->title);
     free(window);
     (void)app;

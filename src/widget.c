@@ -1375,6 +1375,7 @@ void pt_widget_free_tree(pt_widget *widget) {
         free(widget->segment_labels);
     }
     edit_history_free(widget->edit_history);
+    pt_icon_image_destroy(widget->icon_image);
     free(widget);
 }
 

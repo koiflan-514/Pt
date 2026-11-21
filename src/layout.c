@@ -266,9 +266,21 @@ static void preferred_size(pt_widget *widget, const pt_layout_ctx *ctx, float av
         font = pt_widget_font_for(widget, ctx);
         float line_height = font ? pt_font_line_height_for(font, text, text_len) / scale
                                  : pt_default_font_size * 1.3f;
-        width = (font ? pt_font_measure(font, text, text_len) / scale : 0.0f) + padding_w;
-        width = pt_max_float(width, 64.0f);
-        height = line_height + padding_h;
+        float text_width = font ? pt_font_measure(font, text, text_len) / scale : 0.0f;
+        bool has_icon = widget->icon_image != NULL || widget->icon != pt_icon_none;
+        if (has_icon) {
+            float icon_size = widget->icon_size > 0.0f ? widget->icon_size : 18.0f;
+            float gap = text_len > 0 ? 8.0f : 0.0f;
+            width = icon_size + gap + text_width + padding_w;
+            if (text_len > 0) {
+                width = pt_max_float(width, 64.0f);
+            }
+            height = pt_max_float(line_height, icon_size) + padding_h;
+        } else {
+            width = text_width + padding_w;
+            width = pt_max_float(width, 64.0f);
+            height = line_height + padding_h;
+        }
         break;
     }
     case pt_widget_entry: {

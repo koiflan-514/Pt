@@ -438,6 +438,19 @@ uint32_t pt_canvas_get_pixel(const pt_canvas *canvas, int x, int y);
 int pt_canvas_write_png(const pt_canvas *canvas, const char *path);
 int pt_write_png_rgba(const char *path, int width, int height, const uint8_t *rgba);
 
+/* Raster icon helpers (icon.c). The raster cache is keyed by device-pixel size
+ * and bounded by the PT_ICON_CACHE_* limits; the returned buffer is borrowed and
+ * valid until the next cache operation. The cache counters are exposed for the
+ * boundary tests. */
+const uint32_t *pt_icon_image_raster(pt_icon_image *image, int pixel_width, int pixel_height,
+                                     int *out_stride);
+void pt_icon_draw_canvas(pt_canvas *canvas, pt_icon_image *image, float x, float y, float width,
+                         float height, pt_color tint);
+size_t pt_icon_cache_entry_count(void);
+size_t pt_icon_cache_pixel_count(void);
+bool pt_icon_window_buffer_geometry(int source_width, int source_height, float scale,
+                                    int *out_size, int *out_scale);
+
 /* In-memory PNG codec shared by snapshots and clipboard images. The encoder
  * takes premultiplied 0xAARRGGBB pixels (pt_window_paint_pixels layout) and
  * produces a straight-alpha RGBA PNG. The decoder returns caller-owned
@@ -701,6 +714,8 @@ typedef struct pt_widget {
     void *extra;
     pt_icon icon;
     float icon_size;
+    pt_icon_image *icon_image;
+    pt_color icon_tint;
     uint32_t column_index;
     struct pt_tree_node *tree_node;
     pt_widget *inline_editor;
@@ -1130,6 +1145,7 @@ struct pt_window {
     pt_app *app;
     pt_window *next;
     char *title;
+    pt_icon_image *icon;
     pt_widget *root;
     uint32_t a11y_id;
 
@@ -1563,6 +1579,9 @@ void pt_platform_window_destroy(pt_window *window);
 void pt_platform_window_show(pt_window *window);
 void pt_platform_window_hide(pt_window *window);
 void pt_platform_window_set_title(pt_window *window);
+/* Best-effort xdg_toplevel_icon_v1 submission; a no-op without the global or
+ * in headless mode (window->icon stays owned by the window). */
+void pt_platform_window_set_icon(pt_window *window);
 void pt_platform_window_set_min_size(pt_window *window);
 void pt_platform_window_set_resizable(pt_window *window);
 void pt_platform_window_set_decorated(pt_window *window);

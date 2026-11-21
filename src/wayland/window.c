@@ -66,6 +66,132 @@ static const struct wl_buffer_listener buffer_listener = {
     .release = buffer_release,
 };
 
+static void destroy_toplevel_icon(pt_wayland_window *wl) {
+    if (wl->toplevel_icon) {
+        xdg_toplevel_icon_v1_destroy(wl->toplevel_icon);
+        wl->toplevel_icon = NULL;
+    }
+    if (wl->toplevel_icon_buffer) {
+        wl_buffer_destroy(wl->toplevel_icon_buffer);
+        wl->toplevel_icon_buffer = NULL;
+    }
+    if (wl->toplevel_icon_data) {
+        munmap(wl->toplevel_icon_data, wl->toplevel_icon_size);
+        wl->toplevel_icon_data = NULL;
+    }
+    wl->toplevel_icon_size = 0;
+    wl->toplevel_icon_width = 0;
+    wl->toplevel_icon_height = 0;
+    wl->toplevel_icon_scale = 0;
+}
+
+/* xdg_toplevel_icon_v1: submit a dedicated, immutable wl_shm buffer. The
+ * protocol requires a square buffer and forbids modifying it or reusing a frame
+ * buffer while the icon lives, so every submission gets its own mapping. The
+ * global is optional (KWin/labwc/Muffin expose it; niri/Sway/Weston do not):
+ * without it this is a silent no-op and the image stays on the window. */
+void pt_platform_window_set_icon(pt_window *window) {
+    pt_wayland_window *wl = pt_wl_window_for(window);
+    pt_platform *platform = pt_platform_for(window);
+    if (!wl || !platform || platform->headless || !platform->toplevel_icon_manager ||
+        !platform->shm || !wl->toplevel) {
+        return;
+    }
+    destroy_toplevel_icon(wl);
+    if (!window->icon) {
+        xdg_toplevel_icon_manager_v1_set_icon(platform->toplevel_icon_manager, wl->toplevel,
+                                              NULL);
+        pt_wl_window_schedule_frame(window);
+        return;
+    }
+    int source_width = pt_icon_image_width(window->icon);
+    int source_height = pt_icon_image_height(window->icon);
+    int side = 0;
+    int icon_scale = 1;
+    if (!pt_icon_window_buffer_geometry(source_width, source_height, window->scale, &side,
+                                        &icon_scale)) {
+        return;
+    }
+    float ratio = (float)side / (float)(source_width > source_height ? source_width
+                                                                    : source_height);
+    int icon_width = (int)lroundf((float)source_width * ratio);
+    int icon_height = (int)lroundf((float)source_height * ratio);
+    if (icon_width < 1) {
+        icon_width = 1;
+    }
+    if (icon_height < 1) {
+        icon_height = 1;
+    }
+    if (icon_width > side) {
+        icon_width = side;
+    }
+    if (icon_height > side) {
+        icon_height = side;
+    }
+    int stride = 0;
+    const uint32_t *pixels =
+        pt_icon_image_raster(window->icon, icon_width, icon_height, &stride);
+    if (!pixels) {
+        return;
+    }
+    size_t plane = 0;
+    size_t total = 0;
+    if (!pt_wl_buffer_geometry(side, side, 1, &plane, &total)) {
+        return;
+    }
+    int fd = pt_wl_create_shm_file(total);
+    if (fd < 0) {
+        return;
+    }
+    void *data = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (data == MAP_FAILED) {
+        close(fd);
+        return;
+    }
+    memset(data, 0, total);
+    int offset_x = (side - icon_width) / 2;
+    int offset_y = (side - icon_height) / 2;
+    for (int row = 0; row < icon_height; ++row) {
+        uint32_t *dst = (uint32_t *)data + (size_t)(offset_y + row) * (size_t)side +
+                        (size_t)offset_x;
+        const uint32_t *src = pixels + (size_t)row * (size_t)stride;
+        memcpy(dst, src, (size_t)icon_width * sizeof(uint32_t));
+    }
+    struct wl_shm_pool *pool = wl_shm_create_pool(platform->shm, fd, (int32_t)total);
+    close(fd);
+    if (!pool) {
+        munmap(data, total);
+        return;
+    }
+    struct wl_buffer *buffer = wl_shm_pool_create_buffer(
+        pool, 0, side, side, side * 4, WL_SHM_FORMAT_ARGB8888);
+    wl_shm_pool_destroy(pool);
+    if (!buffer) {
+        munmap(data, total);
+        return;
+    }
+    struct xdg_toplevel_icon_v1 *icon =
+        xdg_toplevel_icon_manager_v1_create_icon(platform->toplevel_icon_manager);
+    if (!icon) {
+        wl_buffer_destroy(buffer);
+        munmap(data, total);
+        return;
+    }
+    xdg_toplevel_icon_v1_add_buffer(icon, buffer, icon_scale);
+    xdg_toplevel_icon_manager_v1_set_icon(platform->toplevel_icon_manager, wl->toplevel,
+                                          icon);
+    wl->toplevel_icon = icon;
+    wl->toplevel_icon_buffer = buffer;
+    wl->toplevel_icon_data = data;
+    wl->toplevel_icon_size = total;
+    wl->toplevel_icon_width = side;
+    wl->toplevel_icon_height = side;
+    wl->toplevel_icon_scale = icon_scale;
+    ++wl->toplevel_icon_submissions;
+    /* set_icon is double-buffered and applies on the next surface commit. */
+    pt_wl_window_schedule_frame(window);
+}
+
 static void destroy_buffers(pt_wayland_window *wl) {
     for (int i = 0; i < pt_wl_buffer_count; ++i) {
         if (wl->buffers[i].buffer) {
@@ -310,6 +436,10 @@ void pt_wl_window_apply_scale(pt_window *window) {
     }
     pt_window_invalidate_layout(window, NULL);
     window->needs_draw = true;
+    if (window->icon) {
+        /* Re-rasterise the window icon for the new buffer scale. */
+        pt_platform_window_set_icon(window);
+    }
 }
 
 static void frame_done(void *data, struct wl_callback *callback, uint32_t time) {
@@ -705,6 +835,9 @@ bool pt_platform_window_init(pt_window *window) {
     wl->pending_height = window->height;
     window->platform_window = wl;
     pt_platform_window_set_size_hint(window);
+    if (window->icon) {
+        pt_platform_window_set_icon(window);
+    }
     wl_surface_commit(wl->surface);
     return true;
 }
@@ -723,6 +856,7 @@ void pt_platform_window_destroy(pt_window *window) {
      * events that arrive afterwards must not reach this window. */
     pt_platform_window_forget_focus(window);
     pt_platform_popup_destroy_all(window);
+    destroy_toplevel_icon(wl);
     if (wl->frame_callback) {
         wl_callback_destroy(wl->frame_callback);
         wl->frame_callback = NULL;

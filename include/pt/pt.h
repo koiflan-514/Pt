@@ -14,6 +14,7 @@
 #include <pt/base.h>
 #include <pt/custom.h>
 #include <pt/dnd.h>
+#include <pt/icon.h>
 #include <pt/interaction.h>
 #include <pt/motion.h>
 #include <pt/overlay.h>

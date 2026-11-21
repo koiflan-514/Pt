@@ -2931,6 +2931,12 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
         if (platform->wm_base) {
             xdg_wm_base_add_listener(platform->wm_base, &wm_base_listener, platform);
         }
+    } else if (strcmp(interface, xdg_toplevel_icon_manager_v1_interface.name) == 0) {
+        /* Best-effort window icons (staging). The manager's icon_size/done
+         * events are advisory; Pt submits a 32-logical-pixel raster and lets
+         * the compositor choose. Missing global = silent no-op. */
+        platform->toplevel_icon_manager = wl_registry_bind(
+            registry, name, &xdg_toplevel_icon_manager_v1_interface, 1);
     } else if (strcmp(interface, zxdg_decoration_manager_v1_interface.name) == 0) {
         platform->decoration_manager = wl_registry_bind(
             registry, name, &zxdg_decoration_manager_v1_interface, 1);
@@ -3125,6 +3131,9 @@ void pt_platform_stop(pt_app *app) {
     }
     if (platform->decoration_manager) {
         zxdg_decoration_manager_v1_destroy(platform->decoration_manager);
+    }
+    if (platform->toplevel_icon_manager) {
+        xdg_toplevel_icon_manager_v1_destroy(platform->toplevel_icon_manager);
     }
     if (platform->wm_base) {
         xdg_wm_base_destroy(platform->wm_base);

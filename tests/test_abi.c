@@ -272,3 +272,20 @@ _Static_assert(pt_clipboard_image_max_dimension == 8192,
 _Static_assert(PT_TABLE_MAX_COLUMNS == 1024u, "1024 column limit");
 _Static_assert(PT_TABLE_COLUMN_KEY_MAX == 64u, "64 byte column key limit");
 _Static_assert(PT_TABLE_COLUMN_LAYOUT_MAX == 262144u, "256 KiB layout blob cap");
+
+/* M19: icons
+ * The raster handle is opaque and reference counted. The cache and hicolor
+ * bounds are part of the public contract: lowering them silently would make an
+ * application's previously accepted icon fail, so they are pinned like the
+ * other 1.2 limits. */
+#include <pt/icon.h>
+_Static_assert(PT_ICON_MAX_DIMENSION == 4096, "icon source cap must stay 4096");
+_Static_assert(PT_ICON_CACHE_MAX_ENTRIES == 32u, "icon cache entry cap must stay 32");
+_Static_assert(PT_ICON_CACHE_MAX_PIXELS == 4194304u, "icon cache pixel cap must stay 4 Mi");
+_Static_assert(PT_ICON_IMAGE_CACHE_MAX_ENTRIES == 8u, "per-icon cache cap must stay 8");
+_Static_assert(PT_ICON_PATH_MAX == 4096u, "icon path cap must stay 4096");
+_Static_assert(PT_ICON_SEARCH_DIRS_MAX == 32u, "icon search dir cap must stay 32");
+_Static_assert(PT_ICON_NAME_MAX == 128u, "icon name cap must stay 128");
+_Static_assert(PT_ICON_WINDOW_SIZE == 32, "window icon logical size must stay 32");
+_Static_assert(PT_ICON_WINDOW_MAX_SCALE == 4, "window icon scale cap must stay 4");
+_Static_assert(sizeof(pt_icon_image *) == sizeof(void *), "icon handle is a pointer");

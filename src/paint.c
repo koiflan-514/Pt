@@ -1035,7 +1035,32 @@ static void paint_button(pt_canvas *canvas, pt_widget *button) {
     if (!button->enabled) {
         foreground = pt_color_alpha(foreground, 140);
     }
-    if (button->icon != pt_icon_none) {
+    if (button->icon_image) {
+        pt_layout_ctx icon_ctx = pt_layout_context_for(button);
+        pt_font *font = pt_widget_font_for(button, &icon_ctx);
+        float scale = icon_ctx.scale > 0.0f ? icon_ctx.scale : 1.0f;
+        const char *label = button->text ? button->text : "";
+        float text_width = font && *label ? pt_font_measure(font, label, strlen(label)) / scale
+                                          : 0.0f;
+        float icon_size = button->icon_size > 0.0f ? button->icon_size : 18.0f;
+        icon_size = pt_min_float(icon_size, pt_max_float(8.0f, button->height - 10.0f));
+        float gap = text_width > 0.0f ? 8.0f : 0.0f;
+        float total = icon_size + gap + text_width;
+        float start = button->x + (button->width - total) * 0.5f;
+        pt_color tint = button->icon_tint;
+        if ((tint & 0xFFu) != 0 && !button->enabled) {
+            tint = pt_color_alpha(tint, (uint8_t)(((tint & 0xFFu) * 140u) / 255u));
+        }
+        pt_icon_draw_canvas(canvas, button->icon_image, start,
+                            button->y + (button->height - icon_size) * 0.5f, icon_size,
+                            icon_size, tint);
+        if (text_width > 0.0f) {
+            paint_single_line(canvas, button, label, foreground, pt_text_align_start, false,
+                              0.0f,
+                              (pt_rect){start + icon_size + gap, button->y,
+                                        text_width + 1.0f, button->height});
+        }
+    } else if (button->icon != pt_icon_none) {
         pt_layout_ctx icon_ctx = pt_layout_context_for(button);
         pt_font *font = pt_widget_font_for(button, &icon_ctx);
         float scale = icon_ctx.scale > 0.0f ? icon_ctx.scale : 1.0f;

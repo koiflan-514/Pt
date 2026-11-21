@@ -21,6 +21,7 @@
 #include "viewporter-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "xdg-toplevel-icon-v1-client-protocol.h"
 
 #define pt_wl_buffer_count 3
 
@@ -73,6 +74,18 @@ struct pt_wayland_window {
     struct wp_fractional_scale_v1 *fractional_scale;
     struct wp_viewport *viewport;
     struct wl_callback *frame_callback;
+
+    /* xdg_toplevel_icon_v1 state. The icon object owns the wl_buffer, and the
+     * buffer must stay alive and unmodified while the icon exists; both are
+     * replaced together and never reused as a frame buffer. */
+    struct xdg_toplevel_icon_v1 *toplevel_icon;
+    struct wl_buffer *toplevel_icon_buffer;
+    void *toplevel_icon_data;
+    size_t toplevel_icon_size;
+    int toplevel_icon_width;
+    int toplevel_icon_height;
+    int toplevel_icon_scale;
+    uint64_t toplevel_icon_submissions;
 
     pt_wl_buffer buffers[pt_wl_buffer_count];
     void *pool_data;
@@ -197,6 +210,7 @@ struct pt_platform {
     uint32_t drag_serial;
 
     struct xdg_wm_base *wm_base;
+    struct xdg_toplevel_icon_manager_v1 *toplevel_icon_manager;
     struct zxdg_decoration_manager_v1 *decoration_manager;
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
     struct wp_viewporter *viewporter;

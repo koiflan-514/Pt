@@ -422,6 +422,93 @@ static void test_snapshot_views(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Icon slot goldens: icon+text and icon-only buttons at 1x and 2x, with a tint
+ * state that must move pixels. The icon is generated in memory so the golden
+ * does not depend on installed themes. */
+static pt_icon_image *snapshot_icon_image(void) {
+    uint32_t pixels[16 * 16];
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            uint32_t alpha = (x < 2 || y < 2 || x > 13 || y > 13) ? 96u : 255u;
+            uint32_t red = (uint32_t)(x * 16);
+            uint32_t green = (uint32_t)(y * 16);
+            uint32_t blue = (uint32_t)(255 - (x + y) * 8);
+            pixels[(size_t)y * 16 + (size_t)x] =
+                (alpha << 24) | ((red * alpha / 255u) << 16) |
+                ((green * alpha / 255u) << 8) | (blue * alpha / 255u);
+        }
+    }
+    size_t size = 0;
+    uint8_t *png = pt_png_encode_argb_premultiplied(pixels, 16, 16, &size);
+    pt_check(png != NULL && size > 0);
+    pt_icon_image *image = png ? pt_icon_image_load_memory(png, size) : NULL;
+    free(png);
+    return image;
+}
+
+static void test_snapshot_icon(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "icon-snapshots", 360, 160);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_gap(root, 12.0f);
+    pt_icon_image *image = snapshot_icon_image();
+    pt_check(image != NULL);
+    if (!image) {
+        pt_window_free(window);
+        return;
+    }
+    pt_widget *row = pt_row_create(root);
+    pt_widget_set_gap(row, 12.0f);
+    pt_widget *with_text = pt_button_create(row, "Export");
+    pt_button_set_icon_image(with_text, image);
+    pt_widget *icon_only = pt_button_create(row, "");
+    pt_button_set_icon_image(icon_only, image);
+    pt_button_set_icon_tint(icon_only, 0xFFB04AFFu);
+    pt_widget *secondary = pt_button_create(row, "Share");
+    pt_button_set_variant(secondary, pt_button_secondary);
+    pt_button_set_icon_image(secondary, image);
+    pt_icon_image_destroy(image);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(360, 160, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    uint64_t one_x = 0;
+    snapshot_paint(window, canvas, directory, "icon-1x", &one_x);
+    uint64_t one_x_repeat = 0;
+    snapshot_paint(window, canvas, directory, "icon-1x-repeat", &one_x_repeat);
+    pt_check(one_x == one_x_repeat);
+
+    pt_button_set_icon_tint(icon_only, 0);
+    uint64_t untinted = 0;
+    snapshot_paint(window, canvas, directory, "icon-untinted", &untinted);
+    pt_check(untinted != one_x);
+    pt_button_set_icon_tint(icon_only, 0xFFB04AFFu);
+
+    pt_canvas *hidpi = pt_canvas_create(720, 320, 2.0f);
+    pt_check(hidpi != NULL);
+    if (hidpi) {
+        uint64_t two_x = 0;
+        snapshot_paint(window, hidpi, directory, "icon-2x", &two_x);
+        uint64_t two_x_repeat = 0;
+        snapshot_paint(window, hidpi, directory, "icon-2x-repeat", &two_x_repeat);
+        pt_check(two_x == two_x_repeat);
+        pt_check(two_x != one_x);
+        pt_canvas_destroy(hidpi);
+    }
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -433,6 +520,7 @@ int main(void) {
     test_rich_text_runs(app);
     test_snapshot_gallery(app);
     test_snapshot_views(app);
+    test_snapshot_icon(app);
     pt_app_destroy(app);
     return pt_test_finish("visuals");
 }
