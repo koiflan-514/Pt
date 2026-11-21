@@ -108,34 +108,6 @@ FIXTURE_API_NAMES = [
     "pt_demo_event_count",
 ]
 
-WAVE_1_MISSING = {
-    "pt_app_font_uncovered_count",
-    "pt_app_get_font_fallback",
-    "pt_app_get_font_fallback_count",
-    "pt_app_get_font_fallback_count_for_family",
-    "pt_app_get_font_fallback_for_family",
-    "pt_app_set_font_fallbacks",
-    "pt_app_set_font_fallbacks_for_family",
-    "pt_popup_content",
-    "pt_popup_create",
-    "pt_popup_destroy",
-    "pt_popup_dismiss",
-    "pt_popup_get_placement",
-    "pt_popup_is_open",
-    "pt_popup_reposition",
-    "pt_popup_set_on_dismiss",
-    "pt_popup_set_placement",
-    "pt_popup_show",
-    "pt_table_columns_restore",
-    "pt_table_columns_save",
-    "pt_table_get_column_key",
-    "pt_table_set_column_key",
-    "pt_window_clipboard_get_image_png",
-    "pt_window_clipboard_set_image_png",
-    "pt_window_clipboard_set_uri_list",
-}
-
-
 class Fixture:
     def __init__(self) -> None:
         self.root = pathlib.Path(tempfile.mkdtemp(prefix="stub-fixture-", dir="/tmp/opencode"))
@@ -361,37 +333,50 @@ class GenBindingStubsTests(unittest.TestCase):
 
 
 class RealTreeTests(unittest.TestCase):
-    """Guards the wave-1 preview against the checked-in binding sources."""
+    """Guards the generated preview against the checked-in binding sources."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.surface = GEN.parse_surface(ROOT / "include" / "pt")
         cls.functions = sorted(cls.surface.functions)
+        cls.coverage = AUDIT.binding_coverage(set(cls.functions))
 
     def test_missing_sets_match_api_audit(self) -> None:
-        coverage = AUDIT.binding_coverage(set(self.functions))
         for language in ("cpp", "python", "java"):
             generated = GEN.binding_missing(
                 ROOT, language, self.functions
             )
-            self.assertEqual(generated, coverage[language], language)
+            self.assertEqual(generated, self.coverage[language], language)
 
-    def test_wave_1_missing_surface(self) -> None:
+    def test_missing_surface_tracks_the_live_tree(self) -> None:
+        """The expected set is computed from the tree, not a frozen wave list.
+
+        A later wave that adds reviewed functions extends the set; once the
+        bindings are fully populated it becomes empty and both assertions
+        still hold.
+        """
         for language in ("cpp", "python", "java"):
             generated = set(
                 GEN.binding_missing(ROOT, language, self.functions)
             )
-            self.assertEqual(generated, WAVE_1_MISSING, language)
+            expected = set(self.coverage[language])
+            self.assertEqual(generated, expected, language)
 
-    def test_strict_check_is_red_until_wave_2_lands(self) -> None:
+    def test_strict_check_follows_the_missing_set(self) -> None:
+        missing = self.coverage["python"]
         result = subprocess.run(
             [sys.executable, str(TOOL), "--check", "--strict", "--language", "python"],
             check=False,
             capture_output=True,
             text=True,
         )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("missing  24", result.stdout)
+        self.assertIn(f"missing {len(missing):3d}", result.stdout)
+        if missing:
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("result: MISSING", result.stdout)
+        else:
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("result: COMPLETE", result.stdout)
 
 
 if __name__ == "__main__":
