@@ -38,7 +38,7 @@ The public C ABI is flat and opaque: no structs with platform handles are
 exposed, callbacks carry `void *user_data`, and colors are packed integers.
 This keeps ctypes and the Java Foreign Function & Memory API bindings small.
 The library is built with `-fvisibility=hidden`; only functions marked `pt_api`
-are exported (412 in 1.0, 414 in 0.10.0). Internal headers
+are exported (412 in the frozen 1.0 ABI; 1.1 appends to it). Internal headers
 live in `src/` and are not
 installed.
 
@@ -122,12 +122,25 @@ scale is used instead. Buffers are recreated on scale changes.
 
 ### Decorations
 
-Pt negotiates `zxdg_toplevel_decoration_v1`. It requests client-side mode so
-the default title bar has a consistent look. If the compositor insists on
-server-side decorations, Pt omits its header bar. The client header handles
-move, resize, maximize and close through xdg-shell requests. This is important
-on tiling compositors such as niri and wlroots-based desktops where server-side
-decorations are not always shown.
+Pt negotiates `zxdg_toplevel_decoration_v1` through `xdg-decoration`, but the
+public API separates who decorates the surface from whether Pt draws a header.
+The default is explicit client-side mode: Pt draws its 44 px header and asks for
+`CLIENT_SIDE` at the first commit, because the header, its edge resize zones and
+hit testing are built for it. `pt_window_set_decorated(false)` only removes the
+header and its edge zones; it never turns the request into server-side.
+`pt_window_set_decoration_mode` selects `auto`, `client` or `server`, where
+`auto` follows the framework default and `server` is the explicit SSD opt-in.
+
+The request is a preference. Pt tracks the requested and the effective mode
+separately, sends `set_mode` only when the request changes and obeys the
+`configure` mode. Sway forces `server_side` on tiled windows even after a
+client-side request (Q-DEC-001), niri honours client-side but draws only a
+border or focus ring for server-side (Q-DEC-002), and Mutter and Weston expose
+no manager at all, so they get Pt's header. Fullscreen hides the header in every
+mode, tiling drops the corner radius and shadow, and `configure_bounds` plus
+`wm_capabilities` clamp size requests and disable unavailable maximize or close
+buttons. Content area, hit zones and header ownership are laid out for the
+effective mode, never for the requested one.
 
 The 44 px logical header contains a title, minimize/maximize/close controls and
 6 px edge/corner resize zones outside the content area. Hover tracking and hit
@@ -192,6 +205,23 @@ key repeat for compositors that do not repeat for the client: keymap
 `repeat_info` rate and delay are honored, with 500 ms/25 Hz fallbacks. Repeat
 uses the application timer queue, not a busy loop.
 
+Window-level raw callbacks sit in front of widget dispatch. A focus callback
+reports gain and loss; a key-event callback receives the keysym, modifiers and
+the xkb UTF-8 text; a pointer callback receives a normalized
+`pt_pointer_event` with a phase, window coordinates, modifiers, button,
+per-button click count and press state. Dispatch order is overlay key handling,
+the raw key callback, the legacy key callback, then the focused widget.
+Consuming a key through the raw callback stops widget dispatch but not internal
+focus or serial accounting, so a popup grab that follows still sees the serial
+the seat does, and a consumed key is not re-delivered to text input as a
+commit. Pointer callbacks run before overlay and widget pointer dispatch; enter,
+leave and motion are advisory, their return value is ignored so hover tracking
+is unaffected, and down/up/axis can be consumed. Serials are kept per source —
+focus/enter, pointer button and key press — because `wp_primary_selection`
+requires the serial of the event that triggered the selection; non-left buttons
+track their own press state and click count so a right or middle click does not
+disturb a left-button double-click.
+
 `zwp_text_input_v3` is enabled when an entry gains focus and disabled on leave.
 Enabling text input does not hand every key to the input method: keys that the
 input method does not consume still arrive as `wl_keyboard` events and are
@@ -218,6 +248,16 @@ end-of-composition signal, so it clears the preedit and redraws as before. The
 same three moments are stated in `include/pt/widget.h` and pinned by
 `test_ime`, because an input-method engine written against 1.0 will assume a
 reply to every event it sends.
+
+A custom widget can opt into the same input method without being an entry.
+`pt_window_set_ime_callbacks` installs commit and preedit callbacks,
+`pt_window_set_ime_enabled` activates text input and
+`pt_window_set_ime_cursor_rect` places the candidate window. The callbacks own
+insertion, preedit replacement (an empty string ends it) and redraw; cursor
+offsets are UTF-8 byte offsets into the preedit or -1. Pt keeps re-sending full
+state on every change instead of relying on incremental acknowledgement, which
+mitigates the KWin/fcitx5 and sway focus desyncs (Q-IME-001, Q-IME-002), and
+treats an empty `done` as an acknowledgement rather than a request to answer.
 
 Entry editing is modelled as UTF-8 byte positions with a caret and an
 independent selection anchor. The anchor and cursor are normalized before every
@@ -256,6 +296,19 @@ RGBA drag thumbnail can
 replace the built-in one through `pt_window_set_drag_image`. The
 `pt_uri_list_*` helpers parse CRLF-tolerant URI lists and skip comments and
 blank lines, returning each URI as a newly allocated string.
+
+Primary selection (middle-click paste) uses
+`zwp_primary_selection_device_manager_v1` when the seat exposes it and falls
+back to an in-process buffer otherwise, so `pt_window_primary_set/get` behaves
+the same in a headless run. A selection set from a pointer drag uses the
+button-release serial and a keyboard selection uses the last key-press serial; a
+programmatic set with no triggering event does not send to the compositor and
+reports failure, and an application that mirrors a selection created outside its
+own input callback passes the serial explicitly. Primary reads are bounded by
+the same 1.5 s / 16 MiB limits as the clipboard, and the getter returns malloc'd
+UTF-8 owned by the caller. The two buffers stay separate: the clipboard serves
+Ctrl+C/Ctrl+V, the primary selection serves middle-click paste, and Pt applies
+neither policy on its own.
 
 ### Layout and painting
 
@@ -362,6 +415,23 @@ Surface version 4+ receives `wl_surface.damage_buffer` for that pixel region;
 older surfaces fall back to a full `wl_surface.damage`. A frame with no damage
 attaches and commits nothing, so idle windows and caret timers do not produce
 empty swaps.
+
+`pt_paint_*` exposes that paint pass to applications. A widget paint callback
+runs after the widget's own background and content pass with a context clipped
+to the widget and expressed in widget-local logical pixels. The callback is
+pure: it can run 0..N times per frame (once per damage tile), must produce
+identical pixels regardless of tile order or count, must not mutate the tree or
+trigger layout, must balance `push_clip`/`pop_clip`, and must not call
+`pt_window_paint_pixels` re-entrantly. A context is valid only inside the call;
+`pt_widget_request_redraw` and `pt_widget_request_redraw_rect` queue work for the
+next frame instead. A debug build (`PT_DEBUG_CALLBACKS=1`) rejects reentrancy,
+unbalanced clips and use of a context after its callback returned.
+
+`pt_window_paint_pixels` renders one frame into a caller-owned buffer in
+premultiplied `0xAARRGGBB`, row-major, scale 1.0. It is a pure snapshot: it does
+not damage, clear `needs_draw`/`redraw_scheduled`, touch the last paint time or
+collect deferred overlays, so a snapshot of a mapped window leaves the next live
+frame intact. Custom paint and golden images are therefore testable headless.
 
 The title bar, cards, buttons, entries, toggles, checkboxes, radios, sliders,
 progress bars, spinners, segmented controls, tabs, sidebars, tables, trees,
@@ -516,6 +586,16 @@ are queued and freed at a safe point in the loop, which prevents use-after-free
 from widget or window callbacks. The last accepted close quits the loop unless
 `pt_app_set_quit_on_last_window_close(app, false)` is set.
 
+`pt_app_watch_fd` adds application descriptors to the same poll set as the
+display and the AT-SPI bridge. The mask is
+`pt_fd_event_read`/`write`/`error`/`hangup`, the callback runs on the UI thread,
+and `POLLHUP`, `POLLERR` and `POLLNVAL` surface as the error event with at least
+one callback. Watches are borrowed (Pt never closes the descriptor), may be
+removed from inside their own callback because the free is deferred, reject a
+duplicate watch of the same descriptor, and shorten the `pt_app_run_for` timeout
+exactly like a timer. Sanitizer runs assert that repeated create/destroy cycles
+do not grow the descriptor or memory count.
+
 ### Bindings
 
 The flat ABI is wrapped in four places:
@@ -532,9 +612,13 @@ The flat ABI is wrapped in four places:
   text uses a persistent 256-byte upcall buffer owned by the arena.
 - C: the ABI itself.
 
-No binding touches internal structs or duplicates layout/paint logic. All 412
-public functions are wrapped in all three bindings and the audit enforces that
-parity as part of `make check`. See [bindings.md](bindings.md) and
+No binding touches internal structs or duplicates layout/paint logic. Every
+function in `api/pt.api` is wrapped in all three bindings and the audit enforces
+that parity as part of `make check`. The 1.1 extension surface — paint callbacks
+and the borrowed context, offscreen snapshots, primary selection, custom IME, fd
+watches and the raw input callbacks — is wrapped under the same rule, so the
+binding rules are about ownership and the exception boundary rather than a
+separate API. See [bindings.md](bindings.md) and
 [api-reference.md](api-reference.md).
 
 ### Testing strategy
@@ -628,6 +712,8 @@ the API.
 | Accessibility model and event callback | UI thread | Events are delivered synchronously |
 | Drag/drop, gesture and stylus state | UI thread | Callback pointers are borrowed for the call |
 | Framework callbacks and `pt_app_add_timeout` timers | UI thread | Must not block; user_data stays valid until replaced |
+| Paint callbacks and `pt_window_paint_pixels` | UI thread | Context borrowed for the call; a snapshot has no side effects |
+| fd watch callbacks (`pt_app_watch_fd`) | UI thread | Descriptor stays borrowed; must not block |
 | `pt_ease`, `pt_ease_value`, `pt_transition_*` | any thread | Operate only on caller-owned storage |
 | `pt_rgba`, `pt_rgb`, `pt_color_alpha` | any thread | Pure value helpers |
 | `pt_uri_list_count`, `pt_uri_list_get` | any thread | Parse caller-owned input; the get allocates and reports through the thread-local error |
