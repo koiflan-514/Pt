@@ -217,6 +217,26 @@ public final class Pt {
     }
 
     @FunctionalInterface
+    public interface PopupDismissHandler {
+        void handle(MemorySegment popup, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface DateChangeHandler {
+        void handle(MemorySegment picker, PtDate date, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface NumberChangeHandler {
+        void handle(MemorySegment picker, double value, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface ColorChangeHandler {
+        void handle(MemorySegment picker, int color, MemorySegment data);
+    }
+
+    @FunctionalInterface
     public interface ImeCommitHandler {
         void handle(MemorySegment window, String text, MemorySegment data);
     }
@@ -300,6 +320,29 @@ public final class Pt {
 
     /** One MIME entry of a structured drag; size zero means NUL-terminated data. */
     public record DragData(String mime_type, String data, long size) {}
+
+    /** Anchor rectangle in parent-window logical pixels; zero size means one pixel. */
+    public record PopupAnchor(float x, float y, float width, float height) {}
+
+    /**
+     * A civil date in the range year 1..9999. {@code year == 0} is the empty
+     * value used by a cleared date picker.
+     */
+    public record PtDate(int year, int month, int day) {
+        public static PtDate empty() {
+            return new PtDate(0, 0, 0);
+        }
+
+        public boolean isEmpty() {
+            return year == 0;
+        }
+    }
+
+    /**
+     * Premultiplied 0xAARRGGBB pixels of a clipboard image and its dimensions.
+     * {@code pixels} has {@code width * height} entries, row-major.
+     */
+    public record ClipboardImage(int[] pixels, int width, int height) {}
 
     /* ---------- constants ---------- */
 
@@ -529,6 +572,39 @@ public final class Pt {
     public static final int popup_policy_native = 1;
     public static final int popup_policy_window = 2;
 
+    public static final int popup_placement_below = 0;
+    public static final int popup_placement_above = 1;
+    public static final int popup_placement_right = 2;
+    public static final int popup_placement_left = 3;
+    public static final int popup_max_open = 16;
+
+    public static final int font_fallback_max_families = 8;
+    public static final int font_fallback_max_overrides = 16;
+
+    public static final int select_max_items = 1024;
+    public static final int picker_max_candidates = 256;
+    public static final int color_max_presets = 64;
+
+    public static final int date_format_iso = 0;
+    public static final int date_format_dmy = 1;
+    public static final int date_format_mdy = 2;
+
+    public static final int icon_max_dimension = 4096;
+    public static final int icon_cache_max_entries = 32;
+    public static final int icon_cache_max_pixels = 4194304;
+    public static final int icon_image_cache_max_entries = 8;
+    public static final int icon_path_max = 4096;
+    public static final int icon_search_dirs_max = 32;
+    public static final int icon_name_max = 128;
+    public static final int icon_window_size = 32;
+    public static final int icon_window_max_scale = 4;
+
+    public static final int table_max_columns = 1024;
+    public static final int table_column_key_max = 64;
+    public static final int table_column_layout_max = 262144;
+
+    public static final int clipboard_image_max_dimension = 8192;
+
     public static final int fd_event_read = 1 << 0;
     public static final int fd_event_write = 1 << 1;
     public static final int fd_event_error = 1 << 2;
@@ -599,6 +675,7 @@ public final class Pt {
     private static final AddressLayout ptr = ValueLayout.ADDRESS;    private static final ValueLayout.OfInt i32 = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfLong i64 = ValueLayout.JAVA_LONG;
     private static final ValueLayout.OfFloat f32 = ValueLayout.JAVA_FLOAT;
+    private static final ValueLayout.OfDouble f64 = ValueLayout.JAVA_DOUBLE;
     private static final ValueLayout.OfBoolean bool = ValueLayout.JAVA_BOOLEAN;
 
     static {
@@ -637,6 +714,35 @@ public final class Pt {
         return arena.allocateFrom(text, StandardCharsets.UTF_8);
     }
 
+    /** Allocates a {@code const char *const *} array; NULL for null or empty input. */
+    private static MemorySegment cstring_array(Arena arena, String[] values) {
+        if (values == null || values.length == 0) {
+            return MemorySegment.NULL;
+        }
+        MemorySegment array = arena.allocate(ValueLayout.ADDRESS, values.length);
+        for (int index = 0; index < values.length; index++) {
+            String value = values[index];
+            array.setAtIndex(ValueLayout.ADDRESS, index,
+                    value == null ? MemorySegment.NULL : cstring(arena, value));
+        }
+        return array;
+    }
+
+    /** pt_date is i32 year plus u8 month and day; the two trailing bytes are padding. */
+    private static MemorySegment nativeDate(Arena arena, PtDate date) {
+        MemorySegment segment = arena.allocate(pt_date_layout);
+        segment.set(ValueLayout.JAVA_INT, 0, date.year());
+        segment.set(ValueLayout.JAVA_BYTE, 4, (byte) date.month());
+        segment.set(ValueLayout.JAVA_BYTE, 5, (byte) date.day());
+        return segment;
+    }
+
+    private static PtDate readDate(MemorySegment segment) {
+        return new PtDate(segment.get(ValueLayout.JAVA_INT, 0),
+                segment.get(ValueLayout.JAVA_BYTE, 4) & 0xFF,
+                segment.get(ValueLayout.JAVA_BYTE, 5) & 0xFF);
+    }
+
     private static FunctionDescriptor desc(ValueLayout layout, ValueLayout... arguments) {
         return FunctionDescriptor.of(layout, arguments);
     }
@@ -663,6 +769,20 @@ public final class Pt {
             FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle app_set_font_family = bind("pt_app_set_font_family",
             FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle app_set_font_fallbacks = bind("pt_app_set_font_fallbacks",
+            FunctionDescriptor.ofVoid(ptr, ptr, i32));
+    private static final MethodHandle app_get_font_fallback_count = bind(
+            "pt_app_get_font_fallback_count", desc(i32, ptr));
+    private static final MethodHandle app_get_font_fallback = bind("pt_app_get_font_fallback",
+            desc(ptr, ptr, i32));
+    private static final MethodHandle app_set_font_fallbacks_for_family = bind(
+            "pt_app_set_font_fallbacks_for_family", FunctionDescriptor.ofVoid(ptr, ptr, ptr, i32));
+    private static final MethodHandle app_get_font_fallback_count_for_family = bind(
+            "pt_app_get_font_fallback_count_for_family", desc(i32, ptr, ptr));
+    private static final MethodHandle app_get_font_fallback_for_family = bind(
+            "pt_app_get_font_fallback_for_family", desc(ptr, ptr, ptr, i32));
+    private static final MethodHandle app_font_uncovered_count = bind(
+            "pt_app_font_uncovered_count", desc(i32, ptr, ptr, ptr, i64));
     private static final MethodHandle app_set_reduced_motion = bind("pt_app_set_reduced_motion",
             FunctionDescriptor.ofVoid(ptr, bool));
     private static final MethodHandle app_get_reduced_motion = bind("pt_app_get_reduced_motion",
@@ -736,6 +856,12 @@ public final class Pt {
             desc(bool, ptr, ptr));
     private static final MethodHandle window_clipboard_get = bind("pt_window_clipboard_get",
             desc(ptr, ptr));
+    private static final MethodHandle window_clipboard_set_image_png = bind(
+            "pt_window_clipboard_set_image_png", desc(bool, ptr, ptr, i32, i32));
+    private static final MethodHandle window_clipboard_get_image_png = bind(
+            "pt_window_clipboard_get_image_png", desc(ptr, ptr, ptr, ptr));
+    private static final MethodHandle window_clipboard_set_uri_list = bind(
+            "pt_window_clipboard_set_uri_list", desc(bool, ptr, ptr, i32));
     private static final MethodHandle window_primary_set = bind("pt_window_primary_set",
             desc(bool, ptr, ptr));
     private static final MethodHandle window_primary_get = bind("pt_window_primary_get",
@@ -853,6 +979,30 @@ public final class Pt {
             desc(f32, ptr, ptr, f32, i32, i32, ptr, i64));
     private static final MethodHandle paint_font_metrics = bind("pt_paint_font_metrics",
             desc(bool, ptr, ptr, f32, i32, i32, ptr, ptr, ptr, ptr));
+
+    /* Popups */
+    public static final MemoryLayout popup_anchor_layout = MemoryLayout.structLayout(
+            ValueLayout.JAVA_FLOAT.withName("x"),
+            ValueLayout.JAVA_FLOAT.withName("y"),
+            ValueLayout.JAVA_FLOAT.withName("width"),
+            ValueLayout.JAVA_FLOAT.withName("height"));
+    private static final MethodHandle popup_create = bind("pt_popup_create", desc(ptr, ptr, ptr));
+    private static final MethodHandle popup_destroy = bind("pt_popup_destroy",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle popup_show = bind("pt_popup_show",
+            FunctionDescriptor.of(bool, ptr, popup_anchor_layout));
+    private static final MethodHandle popup_reposition = bind("pt_popup_reposition",
+            FunctionDescriptor.of(bool, ptr, popup_anchor_layout));
+    private static final MethodHandle popup_dismiss = bind("pt_popup_dismiss",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle popup_is_open = bind("pt_popup_is_open", desc(bool, ptr));
+    private static final MethodHandle popup_content = bind("pt_popup_content", desc(ptr, ptr));
+    private static final MethodHandle popup_set_on_dismiss = bind("pt_popup_set_on_dismiss",
+            FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle popup_set_placement = bind("pt_popup_set_placement",
+            FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle popup_get_placement = bind("pt_popup_get_placement",
+            desc(i32, ptr));
 
     /* Overlays */
     private static final MethodHandle menu_create = bind("pt_menu_create", desc(ptr, ptr));
@@ -1237,6 +1387,29 @@ public final class Pt {
     private static final MethodHandle icon_set_size = bind("pt_icon_set_size",
             FunctionDescriptor.ofVoid(ptr, f32));
     private static final MethodHandle icon_get_size = bind("pt_icon_get_size", desc(f32, ptr));
+    private static final MethodHandle icon_image_load_file = bind("pt_icon_image_load_file",
+            desc(ptr, ptr));
+    private static final MethodHandle icon_image_load_memory = bind("pt_icon_image_load_memory",
+            desc(ptr, ptr, i64));
+    private static final MethodHandle icon_image_from_name = bind("pt_icon_image_from_name",
+            desc(ptr, ptr, i32));
+    private static final MethodHandle icon_image_ref = bind("pt_icon_image_ref", desc(ptr, ptr));
+    private static final MethodHandle icon_image_destroy = bind("pt_icon_image_destroy",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle icon_image_width = bind("pt_icon_image_width",
+            desc(i32, ptr));
+    private static final MethodHandle icon_image_height = bind("pt_icon_image_height",
+            desc(i32, ptr));
+    private static final MethodHandle button_set_icon_image = bind("pt_button_set_icon_image",
+            FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle button_get_icon_image = bind("pt_button_get_icon_image",
+            desc(ptr, ptr));
+    private static final MethodHandle button_set_icon_tint = bind("pt_button_set_icon_tint",
+            FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle window_set_icon = bind("pt_window_set_icon",
+            FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle window_get_icon = bind("pt_window_get_icon",
+            desc(ptr, ptr));
     private static final MethodHandle table_create = bind("pt_table_create", desc(ptr, ptr));
     private static final MethodHandle table_set_column_count = bind("pt_table_set_column_count",
             FunctionDescriptor.ofVoid(ptr, i32));
@@ -1339,6 +1512,14 @@ public final class Pt {
             "pt_table_set_on_columns_reordered", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle table_set_on_row_drag = bind("pt_table_set_on_row_drag",
             FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle table_set_column_key = bind("pt_table_set_column_key",
+            FunctionDescriptor.ofVoid(ptr, i32, ptr));
+    private static final MethodHandle table_get_column_key = bind("pt_table_get_column_key",
+            desc(ptr, ptr, i32));
+    private static final MethodHandle table_columns_save = bind("pt_table_columns_save",
+            desc(ptr, ptr));
+    private static final MethodHandle table_columns_restore = bind("pt_table_columns_restore",
+            desc(bool, ptr, ptr));
 
     private static final MethodHandle tree_create = bind("pt_tree_create", desc(ptr, ptr));
     private static final MethodHandle tree_add_node = bind("pt_tree_add_node",
@@ -1473,6 +1654,154 @@ public final class Pt {
     private static final MethodHandle combobox_set_on_text_change = bind(
             "pt_combobox_set_on_text_change", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
 
+    /* Pickers: searchable select, date, number and colour. */
+    private static final MethodHandle select_create = bind("pt_select_create", desc(ptr, ptr));
+    private static final MethodHandle select_set_placeholder = bind(
+            "pt_select_set_placeholder", FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle select_get_placeholder = bind(
+            "pt_select_get_placeholder", desc(ptr, ptr));
+    private static final MethodHandle select_add_item = bind("pt_select_add_item",
+            FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle select_insert_item = bind("pt_select_insert_item",
+            FunctionDescriptor.ofVoid(ptr, i32, ptr));
+    private static final MethodHandle select_add_item_with_data = bind(
+            "pt_select_add_item_with_data", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle select_remove_item = bind("pt_select_remove_item",
+            FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle select_clear = bind("pt_select_clear",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle select_get_item_count = bind("pt_select_get_item_count",
+            desc(i32, ptr));
+    private static final MethodHandle select_get_item_text = bind("pt_select_get_item_text",
+            desc(ptr, ptr, i32));
+    private static final MethodHandle select_get_item_data = bind("pt_select_get_item_data",
+            desc(ptr, ptr, i32));
+    private static final MethodHandle select_set_item_data = bind("pt_select_set_item_data",
+            FunctionDescriptor.ofVoid(ptr, i32, ptr));
+    private static final MethodHandle select_get_selected = bind("pt_select_get_selected",
+            desc(i32, ptr));
+    private static final MethodHandle select_set_selected = bind("pt_select_set_selected",
+            FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle select_clear_selection = bind(
+            "pt_select_clear_selection", FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle select_get_query = bind("pt_select_get_query",
+            desc(ptr, ptr));
+    private static final MethodHandle select_set_query = bind("pt_select_set_query",
+            FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle select_get_match_count = bind(
+            "pt_select_get_match_count", desc(i32, ptr));
+    private static final MethodHandle select_get_match_item = bind(
+            "pt_select_get_match_item", desc(i32, ptr, i32));
+    private static final MethodHandle select_set_max_popup_rows = bind(
+            "pt_select_set_max_popup_rows", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle select_get_max_popup_rows = bind(
+            "pt_select_get_max_popup_rows", desc(i32, ptr));
+    private static final MethodHandle select_open = bind("pt_select_open",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle select_close = bind("pt_select_close",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle select_is_open = bind("pt_select_is_open", desc(bool, ptr));
+    private static final MethodHandle select_set_on_change = bind("pt_select_set_on_change",
+            FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+
+    public static final MemoryLayout pt_date_layout = MemoryLayout.structLayout(
+            ValueLayout.JAVA_INT.withName("year"),
+            ValueLayout.JAVA_BYTE.withName("month"),
+            ValueLayout.JAVA_BYTE.withName("day"),
+            MemoryLayout.paddingLayout(2));
+    private static final MethodHandle date_today = bind("pt_date_today",
+            FunctionDescriptor.of(pt_date_layout));
+    private static final MethodHandle date_is_valid = bind("pt_date_is_valid",
+            FunctionDescriptor.of(bool, pt_date_layout));
+    private static final MethodHandle date_picker_create = bind("pt_date_picker_create",
+            desc(ptr, ptr));
+    private static final MethodHandle date_picker_set_date = bind("pt_date_picker_set_date",
+            FunctionDescriptor.of(bool, ptr, pt_date_layout));
+    private static final MethodHandle date_picker_get_date = bind("pt_date_picker_get_date",
+            FunctionDescriptor.of(pt_date_layout, ptr));
+    private static final MethodHandle date_picker_clear = bind("pt_date_picker_clear",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle date_picker_set_format = bind(
+            "pt_date_picker_set_format", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle date_picker_get_format = bind(
+            "pt_date_picker_get_format", desc(i32, ptr));
+    private static final MethodHandle date_picker_set_text = bind("pt_date_picker_set_text",
+            desc(bool, ptr, ptr));
+    private static final MethodHandle date_picker_get_text = bind("pt_date_picker_get_text",
+            desc(ptr, ptr));
+    private static final MethodHandle date_picker_set_placeholder = bind(
+            "pt_date_picker_set_placeholder", FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle date_picker_get_placeholder = bind(
+            "pt_date_picker_get_placeholder", desc(ptr, ptr));
+    private static final MethodHandle date_picker_open = bind("pt_date_picker_open",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle date_picker_close = bind("pt_date_picker_close",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle date_picker_is_open = bind("pt_date_picker_is_open",
+            desc(bool, ptr));
+    private static final MethodHandle date_picker_set_on_change = bind(
+            "pt_date_picker_set_on_change", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+
+    private static final MethodHandle number_picker_create = bind("pt_number_picker_create",
+            desc(ptr, ptr));
+    private static final MethodHandle number_picker_set_range = bind(
+            "pt_number_picker_set_range", FunctionDescriptor.ofVoid(ptr, f64, f64));
+    private static final MethodHandle number_picker_get_min = bind("pt_number_picker_get_min",
+            desc(f64, ptr));
+    private static final MethodHandle number_picker_get_max = bind("pt_number_picker_get_max",
+            desc(f64, ptr));
+    private static final MethodHandle number_picker_set_step = bind("pt_number_picker_set_step",
+            FunctionDescriptor.ofVoid(ptr, f64));
+    private static final MethodHandle number_picker_get_step = bind("pt_number_picker_get_step",
+            desc(f64, ptr));
+    private static final MethodHandle number_picker_set_value = bind(
+            "pt_number_picker_set_value", FunctionDescriptor.ofVoid(ptr, f64));
+    private static final MethodHandle number_picker_get_value = bind(
+            "pt_number_picker_get_value", desc(f64, ptr));
+    private static final MethodHandle number_picker_has_value = bind(
+            "pt_number_picker_has_value", desc(bool, ptr));
+    private static final MethodHandle number_picker_clear = bind("pt_number_picker_clear",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle number_picker_step_by = bind("pt_number_picker_step_by",
+            FunctionDescriptor.ofVoid(ptr, f64));
+    private static final MethodHandle number_picker_set_text = bind(
+            "pt_number_picker_set_text", desc(bool, ptr, ptr));
+    private static final MethodHandle number_picker_get_text = bind(
+            "pt_number_picker_get_text", desc(ptr, ptr));
+    private static final MethodHandle number_picker_set_placeholder = bind(
+            "pt_number_picker_set_placeholder", FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle number_picker_get_placeholder = bind(
+            "pt_number_picker_get_placeholder", desc(ptr, ptr));
+    private static final MethodHandle number_picker_set_on_change = bind(
+            "pt_number_picker_set_on_change", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+
+    private static final MethodHandle color_picker_create = bind("pt_color_picker_create",
+            desc(ptr, ptr));
+    private static final MethodHandle color_picker_set_color = bind(
+            "pt_color_picker_set_color", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle color_picker_get_color = bind(
+            "pt_color_picker_get_color", desc(i32, ptr));
+    private static final MethodHandle color_picker_set_hex = bind("pt_color_picker_set_hex",
+            desc(bool, ptr, ptr));
+    private static final MethodHandle color_picker_get_hex = bind("pt_color_picker_get_hex",
+            desc(ptr, ptr));
+    private static final MethodHandle color_picker_add_preset = bind(
+            "pt_color_picker_add_preset", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle color_picker_clear_presets = bind(
+            "pt_color_picker_clear_presets", FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle color_picker_get_preset_count = bind(
+            "pt_color_picker_get_preset_count", desc(i32, ptr));
+    private static final MethodHandle color_picker_get_preset = bind(
+            "pt_color_picker_get_preset", desc(i32, ptr, i32));
+    private static final MethodHandle color_picker_open = bind("pt_color_picker_open",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle color_picker_close = bind("pt_color_picker_close",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle color_picker_is_open = bind("pt_color_picker_is_open",
+            desc(bool, ptr));
+    private static final MethodHandle color_picker_set_on_change = bind(
+            "pt_color_picker_set_on_change", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+
     private static final MethodHandle tabs_create = bind("pt_tabs_create", desc(ptr, ptr));
     private static final MethodHandle tabs_add_page = bind("pt_tabs_add_page", desc(ptr, ptr, ptr));
     private static final MethodHandle tabs_remove_page = bind("pt_tabs_remove_page",
@@ -1558,6 +1887,12 @@ public final class Pt {
     private static final FunctionDescriptor a11y_descriptor = FunctionDescriptor.ofVoid(ptr, ptr,
             i32, ptr);
     private static final FunctionDescriptor dialog_descriptor = FunctionDescriptor.ofVoid(ptr, ptr);
+    private static final FunctionDescriptor date_change_descriptor = FunctionDescriptor.ofVoid(
+            ptr, pt_date_layout, ptr);
+    private static final FunctionDescriptor number_change_descriptor =
+            FunctionDescriptor.ofVoid(ptr, f64, ptr);
+    private static final FunctionDescriptor color_change_descriptor =
+            FunctionDescriptor.ofVoid(ptr, i32, ptr);
     private static final FunctionDescriptor gesture_descriptor = FunctionDescriptor.ofVoid(ptr, ptr,
             ptr);
     private static final FunctionDescriptor drop_enter_descriptor = FunctionDescriptor.of(bool, ptr,
@@ -1805,6 +2140,66 @@ public final class Pt {
             return linker.upcallStub(target.bindTo(handler), dialog_descriptor, arena);
         } catch (ReflectiveOperationException error) {
             throw new IllegalArgumentException("cannot create dialog callback", error);
+        }
+    }
+
+    private static MemorySegment popup_dismiss_upcall(PopupDismissHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findVirtual(PopupDismissHandler.class,
+                    "handle", MethodType.methodType(void.class, MemorySegment.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), click_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create popup dismiss callback", error);
+        }
+    }
+
+    private static void date_change_bridge(DateChangeHandler handler, MemorySegment picker,
+            MemorySegment date, MemorySegment data) {
+        handler.handle(picker, readDate(date), data);
+    }
+
+    private static MemorySegment date_change_upcall(DateChangeHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class, "date_change_bridge",
+                    MethodType.methodType(void.class, DateChangeHandler.class,
+                            MemorySegment.class, MemorySegment.class, MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), date_change_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create date change callback", error);
+        }
+    }
+
+    private static void number_change_bridge(NumberChangeHandler handler, MemorySegment picker,
+            double value, MemorySegment data) {
+        handler.handle(picker, value, data);
+    }
+
+    private static MemorySegment number_change_upcall(NumberChangeHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class,
+                    "number_change_bridge", MethodType.methodType(void.class,
+                            NumberChangeHandler.class, MemorySegment.class, double.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), number_change_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create number change callback", error);
+        }
+    }
+
+    private static void color_change_bridge(ColorChangeHandler handler, MemorySegment picker,
+            int color, MemorySegment data) {
+        handler.handle(picker, color, data);
+    }
+
+    private static MemorySegment color_change_upcall(ColorChangeHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class, "color_change_bridge",
+                    MethodType.methodType(void.class, ColorChangeHandler.class,
+                            MemorySegment.class, int.class, MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), color_change_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create colour change callback", error);
         }
     }
 
@@ -2234,6 +2629,72 @@ public final class Pt {
         }
     }
 
+    /**
+     * Installs the process-wide fallback chain. An empty or null array restores
+     * the built-in Fontconfig order; the native side clamps to
+     * {@link #font_fallback_max_families} and skips empty entries.
+     */
+    public static void app_set_font_fallbacks(MemorySegment app, String[] families) {
+        try (Arena arena = Arena.ofConfined()) {
+            int count = families == null ? 0 : families.length;
+            invoke(app_set_font_fallbacks, app, cstring_array(arena, families), count);
+        }
+    }
+
+    public static int app_get_font_fallback_count(MemorySegment app) {
+        return (int) invoke(app_get_font_fallback_count, app);
+    }
+
+    /** Borrowed family name, or null for a null app or an out-of-range index. */
+    public static String app_get_font_fallback(MemorySegment app, int index) {
+        return optionalText((MemorySegment) invoke(app_get_font_fallback, app, index));
+    }
+
+    /** Replaces the fallback chain for one primary family; empty clears the override. */
+    public static void app_set_font_fallbacks_for_family(MemorySegment app, String family,
+            String[] families) {
+        try (Arena arena = Arena.ofConfined()) {
+            int count = families == null ? 0 : families.length;
+            invoke(app_set_font_fallbacks_for_family, app,
+                    family == null ? MemorySegment.NULL : cstring(arena, family),
+                    cstring_array(arena, families), count);
+        }
+    }
+
+    public static int app_get_font_fallback_count_for_family(MemorySegment app, String family) {
+        try (Arena arena = Arena.ofConfined()) {
+            return (int) invoke(app_get_font_fallback_count_for_family, app,
+                    family == null ? MemorySegment.NULL : cstring(arena, family));
+        }
+    }
+
+    /** Borrowed override family, or null when no override applies. */
+    public static String app_get_font_fallback_for_family(MemorySegment app, String family,
+            int index) {
+        try (Arena arena = Arena.ofConfined()) {
+            return optionalText((MemorySegment) invoke(app_get_font_fallback_for_family, app,
+                    family == null ? MemorySegment.NULL : cstring(arena, family), index));
+        }
+    }
+
+    /**
+     * Counts text codepoints that no installed face covers, using the fallback
+     * chain. A null or empty family means the app's configured family.
+     */
+    public static int app_font_uncovered_count(MemorySegment app, String family, String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = arena.allocateFrom(text, StandardCharsets.UTF_8);
+            return (int) invoke(app_font_uncovered_count, app,
+                    family == null || family.isEmpty() ? MemorySegment.NULL
+                            : cstring(arena, family),
+                    data, (long) encoded.length);
+        }
+    }
+
     public static void app_set_reduced_motion(MemorySegment app, boolean reduced) {
         invoke(app_set_reduced_motion, app, reduced);
     }
@@ -2444,6 +2905,78 @@ public final class Pt {
             return text.reinterpret(Long.MAX_VALUE).getString(0);
         } finally {
             invoke(free, text);
+        }
+    }
+
+    /**
+     * Publishes premultiplied 0xAARRGGBB pixels as an {@code image/png}
+     * clipboard selection. Returns false for a non-positive size or a native
+     * encode/transfer failure; a buffer shorter than {@code width * height}
+     * raises {@code IllegalArgumentException}.
+     */
+    public static boolean window_clipboard_set_image_png(MemorySegment window, int[] pixels,
+            int width, int height) {
+        Objects.requireNonNull(pixels, "pixels");
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        long count = (long) width * height;
+        if (count > pixels.length) {
+            throw new IllegalArgumentException("pixel buffer has fewer entries than width * height");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buffer = arena.allocate(ValueLayout.JAVA_INT, count);
+            MemorySegment.copy(pixels, 0, buffer, ValueLayout.JAVA_INT, 0, (int) count);
+            return (boolean) invoke(window_clipboard_set_image_png, window, buffer, width, height);
+        }
+    }
+
+    /**
+     * Decodes the clipboard {@code image/png} selection into copied
+     * premultiplied pixels, or returns null when the clipboard holds no
+     * decodable image. The native buffer is released with {@code pt_free}.
+     */
+    public static ClipboardImage window_clipboard_get_image_png(MemorySegment window) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment width = arena.allocate(i32);
+            MemorySegment height = arena.allocate(i32);
+            MemorySegment pixels = (MemorySegment) invoke(window_clipboard_get_image_png, window,
+                    width, height);
+            if (pixels.address() == 0) {
+                return null;
+            }
+            try {
+                int w = width.get(i32, 0);
+                int h = height.get(i32, 0);
+                int count = Math.max(0, w * h);
+                int[] copy = new int[count];
+                if (count > 0) {
+                    MemorySegment view = pixels.reinterpret((long) count * Integer.BYTES);
+                    MemorySegment.copy(view, ValueLayout.JAVA_INT, 0, copy, 0, count);
+                }
+                return new ClipboardImage(copy, w, h);
+            } finally {
+                invoke(free, pixels);
+            }
+        }
+    }
+
+    /**
+     * Publishes {@code text/uri-list}. Entries are absolute paths or formed
+     * URIs; a null entry raises {@code NullPointerException}. Returns false for
+     * an empty list, a relative path or a native write failure.
+     */
+    public static boolean window_clipboard_set_uri_list(MemorySegment window, String[] uris) {
+        Objects.requireNonNull(uris, "uris");
+        if (uris.length == 0) {
+            return false;
+        }
+        for (String uri : uris) {
+            Objects.requireNonNull(uri, "uri");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(window_clipboard_set_uri_list, window,
+                    cstring_array(arena, uris), uris.length);
         }
     }
 
@@ -2966,6 +3499,83 @@ public final class Pt {
 
     public static boolean toast_is_visible(MemorySegment toast) {
         return (boolean) invoke(toast_is_visible, toast);
+    }
+
+    /* ---------- application-owned popups ---------- */
+
+    /**
+     * Creates a closed popup that adopts {@code content}. The content must be a
+     * widget of {@code window} (or detached) and not the window root. Returns
+     * NULL and records the error on a rejected parent or content.
+     */
+    public static MemorySegment popup_create(MemorySegment window, MemorySegment content) {
+        return (MemorySegment) invoke(popup_create, window, content);
+    }
+
+    /** Destroys the popup and its content tree; never runs the dismiss callback. */
+    public static void popup_destroy(MemorySegment popup) {
+        invoke(popup_destroy, popup);
+    }
+
+    /** Opens or repositions the popup at a logical-pixel anchor in its parent. */
+    public static boolean popup_show(MemorySegment popup, PopupAnchor anchor) {
+        Objects.requireNonNull(anchor, "anchor");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(popup_show, popup, nativeAnchor(arena, anchor));
+        }
+    }
+
+    /** Updates an open popup; returns false while closed or for an invalid anchor. */
+    public static boolean popup_reposition(MemorySegment popup, PopupAnchor anchor) {
+        Objects.requireNonNull(anchor, "anchor");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(popup_reposition, popup, nativeAnchor(arena, anchor));
+        }
+    }
+
+    /**
+     * Closes the popup and runs the dismiss callback after the open state is
+     * cleared. A no-op while closed.
+     */
+    public static void popup_dismiss(MemorySegment popup) {
+        invoke(popup_dismiss, popup);
+    }
+
+    public static boolean popup_is_open(MemorySegment popup) {
+        return (boolean) invoke(popup_is_open, popup);
+    }
+
+    /** Borrowed content widget, valid until the popup is destroyed. */
+    public static MemorySegment popup_content(MemorySegment popup) {
+        return (MemorySegment) invoke(popup_content, popup);
+    }
+
+    /**
+     * Registers the dismiss handler. The upcall stub lives in {@code arena}, so
+     * keep it open while the popup can be dismissed. A null handler clears it.
+     */
+    public static void popup_set_on_dismiss(MemorySegment popup, PopupDismissHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : popup_dismiss_upcall(handler, arena);
+        invoke(popup_set_on_dismiss, popup, stub, MemorySegment.NULL);
+    }
+
+    public static void popup_set_placement(MemorySegment popup, int placement) {
+        invoke(popup_set_placement, popup, placement);
+    }
+
+    public static int popup_get_placement(MemorySegment popup) {
+        return (int) invoke(popup_get_placement, popup);
+    }
+
+    private static MemorySegment nativeAnchor(Arena arena, PopupAnchor anchor) {
+        MemorySegment segment = arena.allocate(popup_anchor_layout);
+        segment.set(f32, 0, anchor.x());
+        segment.set(f32, 4, anchor.y());
+        segment.set(f32, 8, anchor.width());
+        segment.set(f32, 12, anchor.height());
+        return segment;
     }
 
     public static MemorySegment box(MemorySegment parent, int direction) {
@@ -3663,6 +4273,83 @@ public final class Pt {
         return (float) invoke(icon_get_size, icon);
     }
 
+    /* Reference-counted raster icon images. Every load/lookup returns one
+     * reference owned by the caller; the button and window slots take their own
+     * reference, so drop the caller's with icon_image_destroy. */
+
+    public static MemorySegment icon_image_load_file(String path) {
+        Objects.requireNonNull(path, "path");
+        try (Arena arena = Arena.ofConfined()) {
+            return (MemorySegment) invoke(icon_image_load_file, cstring(arena, path));
+        }
+    }
+
+    /** Loads PNG bytes; the caller keeps ownership of {@code data}. */
+    public static MemorySegment icon_image_load_memory(MemorySegment data, long size) {
+        return (MemorySegment) invoke(icon_image_load_memory, data, size);
+    }
+
+    /** Convenience overload that copies the array into a temporary arena. */
+    public static MemorySegment icon_image_load_memory(byte[] data) {
+        Objects.requireNonNull(data, "data");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buffer = arena.allocate(data.length, 1);
+            MemorySegment.copy(data, 0, buffer, ValueLayout.JAVA_BYTE, 0, data.length);
+            return (MemorySegment) invoke(icon_image_load_memory, buffer, (long) data.length);
+        }
+    }
+
+    /** Looks a PNG up in the hicolor theme; NULL on a miss or invalid name. */
+    public static MemorySegment icon_image_from_name(String name, int size) {
+        Objects.requireNonNull(name, "name");
+        try (Arena arena = Arena.ofConfined()) {
+            return (MemorySegment) invoke(icon_image_from_name, cstring(arena, name), size);
+        }
+    }
+
+    /** Adds one reference and returns the same handle; NULL stays NULL. */
+    public static MemorySegment icon_image_ref(MemorySegment image) {
+        return (MemorySegment) invoke(icon_image_ref, image);
+    }
+
+    /** Drops one reference; the last drop frees the image. NULL is accepted. */
+    public static void icon_image_destroy(MemorySegment image) {
+        invoke(icon_image_destroy, image);
+    }
+
+    public static int icon_image_width(MemorySegment image) {
+        return (int) invoke(icon_image_width, image);
+    }
+
+    public static int icon_image_height(MemorySegment image) {
+        return (int) invoke(icon_image_height, image);
+    }
+
+    /** Sets the button slot; the button takes a reference. NULL clears it. */
+    public static void button_set_icon_image(MemorySegment button, MemorySegment image) {
+        invoke(button_set_icon_image, button, image);
+    }
+
+    /** Borrowed image owned by the button; NULL when the slot is empty. */
+    public static MemorySegment button_get_icon_image(MemorySegment button) {
+        return (MemorySegment) invoke(button_get_icon_image, button);
+    }
+
+    /** 0xRRGGBBAA theme tint; 0 restores the image's own colours. */
+    public static void button_set_icon_tint(MemorySegment button, int tint) {
+        invoke(button_set_icon_tint, button, tint);
+    }
+
+    /** Best-effort window icon; the window takes a reference. NULL removes it. */
+    public static void window_set_icon(MemorySegment window, MemorySegment image) {
+        invoke(window_set_icon, window, image);
+    }
+
+    /** Borrowed image owned by the window; NULL when the slot is empty. */
+    public static MemorySegment window_get_icon(MemorySegment window) {
+        return (MemorySegment) invoke(window_get_icon, window);
+    }
+
     public static void table_set_column_count(MemorySegment table, int count) {
         invoke(table_set_column_count, table, count);
     }
@@ -3937,6 +4624,45 @@ public final class Pt {
         MemorySegment stub = handler == null ? MemorySegment.NULL
                 : table_row_drag_upcall(handler, arena);
         invoke(table_set_on_row_drag, table, stub, MemorySegment.NULL);
+    }
+
+    /** Sets a stable column key; NULL or "" clears it. Truncated at the native cap. */
+    public static void table_set_column_key(MemorySegment table, int column, String key) {
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(table_set_column_key, table, column,
+                    key == null ? MemorySegment.NULL : cstring(arena, key));
+        }
+    }
+
+    /** Borrowed column key; never null, "" for a column without a key. */
+    public static String table_get_column_key(MemorySegment table, int column) {
+        MemorySegment text = (MemorySegment) invoke(table_get_column_key, table, column);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /**
+     * Serializes the display order, widths, hidden flags and multi-column sort
+     * into a versioned ASCII blob. Returns "" when the native side rejects the
+     * layout; the caller-owned buffer is released with {@code pt_free}.
+     */
+    public static String table_columns_save(MemorySegment table) {
+        MemorySegment text = (MemorySegment) invoke(table_columns_save, table);
+        if (text.address() == 0) {
+            return "";
+        }
+        try {
+            return text.reinterpret(Long.MAX_VALUE).getString(0);
+        } finally {
+            invoke(free, text);
+        }
+    }
+
+    /** Validates the whole blob first and applies it atomically on success. */
+    public static boolean table_columns_restore(MemorySegment table, String blob) {
+        Objects.requireNonNull(blob, "blob");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(table_columns_restore, table, cstring(arena, blob));
+        }
     }
 
     public static MemorySegment tree_add_node(MemorySegment tree, MemorySegment parent,
@@ -4619,6 +5345,370 @@ public final class Pt {
             boolean found = (boolean) invoke(widget_get_a11y_value, widget, value);
             return found ? value.get(f32, 0) : null;
         }
+    }
+
+    /* ---------- pickers ---------- */
+
+    /** Creates a searchable select, owned by {@code parent} when non-null. */
+    public static MemorySegment select_create(MemorySegment parent) {
+        return (MemorySegment) invoke(select_create, parent);
+    }
+
+    public static void select_set_placeholder(MemorySegment select, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_set_placeholder, select, cstring(arena, text));
+        }
+    }
+
+    public static String select_get_placeholder(MemorySegment select) {
+        MemorySegment text = (MemorySegment) invoke(select_get_placeholder, select);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void select_add_item(MemorySegment select, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_add_item, select, cstring(arena, text));
+        }
+    }
+
+    /** Inserts at {@code index}, clamped to the current count. */
+    public static void select_insert_item(MemorySegment select, int index, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_insert_item, select, index, cstring(arena, text));
+        }
+    }
+
+    /** Appends an item whose data pointer stays owned by the caller. */
+    public static void select_add_item_with_data(MemorySegment select, String text,
+            MemorySegment data) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_add_item_with_data, select, cstring(arena, text), data);
+        }
+    }
+
+    public static void select_remove_item(MemorySegment select, int index) {
+        invoke(select_remove_item, select, index);
+    }
+
+    public static void select_clear(MemorySegment select) {
+        invoke(select_clear, select);
+    }
+
+    public static int select_get_item_count(MemorySegment select) {
+        return (int) invoke(select_get_item_count, select);
+    }
+
+    public static String select_get_item_text(MemorySegment select, int index) {
+        MemorySegment text = (MemorySegment) invoke(select_get_item_text, select, index);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static MemorySegment select_get_item_data(MemorySegment select, int index) {
+        return (MemorySegment) invoke(select_get_item_data, select, index);
+    }
+
+    public static void select_set_item_data(MemorySegment select, int index,
+            MemorySegment data) {
+        invoke(select_set_item_data, select, index, data);
+    }
+
+    public static int select_get_selected(MemorySegment select) {
+        return (int) invoke(select_get_selected, select);
+    }
+
+    /** Selects silently; an out-of-range index clears the selection. */
+    public static void select_set_selected(MemorySegment select, int index) {
+        invoke(select_set_selected, select, index);
+    }
+
+    public static void select_clear_selection(MemorySegment select) {
+        invoke(select_clear_selection, select);
+    }
+
+    public static String select_get_query(MemorySegment select) {
+        MemorySegment text = (MemorySegment) invoke(select_get_query, select);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /** Copies the filter text and filters without opening the popup. */
+    public static void select_set_query(MemorySegment select, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_set_query, select, cstring(arena, text));
+        }
+    }
+
+    public static int select_get_match_count(MemorySegment select) {
+        return (int) invoke(select_get_match_count, select);
+    }
+
+    /** Visible position to model index; {@link #list_index_none} when out of range. */
+    public static int select_get_match_item(MemorySegment select, int position) {
+        return (int) invoke(select_get_match_item, select, position);
+    }
+
+    /** Clamps the popup row limit to 1..{@link #picker_max_candidates}. */
+    public static void select_set_max_popup_rows(MemorySegment select, int rows) {
+        invoke(select_set_max_popup_rows, select, rows);
+    }
+
+    public static int select_get_max_popup_rows(MemorySegment select) {
+        return (int) invoke(select_get_max_popup_rows, select);
+    }
+
+    public static void select_open(MemorySegment select) {
+        invoke(select_open, select);
+    }
+
+    public static void select_close(MemorySegment select) {
+        invoke(select_close, select);
+    }
+
+    public static boolean select_is_open(MemorySegment select) {
+        return (boolean) invoke(select_is_open, select);
+    }
+
+    /** Fires when the user commits an item; programmatic selection stays silent. */
+    public static void select_set_on_change(MemorySegment select, IndexHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL : index_upcall(handler, arena);
+        invoke(select_set_on_change, select, stub, MemorySegment.NULL);
+    }
+
+    /** Today's local civil date, or the empty date when out of range. */
+    public static PtDate date_today() {
+        try (Arena arena = Arena.ofConfined()) {
+            return readDate((MemorySegment) invoke(date_today, arena));
+        }
+    }
+
+    public static boolean date_is_valid(PtDate date) {
+        Objects.requireNonNull(date, "date");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(date_is_valid, nativeDate(arena, date));
+        }
+    }
+
+    public static MemorySegment date_picker_create(MemorySegment parent) {
+        return (MemorySegment) invoke(date_picker_create, parent);
+    }
+
+    /** Sets the committed date silently; an invalid date changes nothing. */
+    public static boolean date_picker_set_date(MemorySegment picker, PtDate date) {
+        Objects.requireNonNull(date, "date");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(date_picker_set_date, picker, nativeDate(arena, date));
+        }
+    }
+
+    public static PtDate date_picker_get_date(MemorySegment picker) {
+        try (Arena arena = Arena.ofConfined()) {
+            return readDate((MemorySegment) invoke(date_picker_get_date, arena, picker));
+        }
+    }
+
+    public static void date_picker_clear(MemorySegment picker) {
+        invoke(date_picker_clear, picker);
+    }
+
+    /** Invalid formats select ISO. The committed text is rewritten immediately. */
+    public static void date_picker_set_format(MemorySegment picker, int format) {
+        invoke(date_picker_set_format, picker, format);
+    }
+
+    public static int date_picker_get_format(MemorySegment picker) {
+        return (int) invoke(date_picker_get_format, picker);
+    }
+
+    /** Parses and commits; an invalid date restores the previous value and text. */
+    public static boolean date_picker_set_text(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(date_picker_set_text, picker, cstring(arena, text));
+        }
+    }
+
+    public static String date_picker_get_text(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(date_picker_get_text, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void date_picker_set_placeholder(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(date_picker_set_placeholder, picker, cstring(arena, text));
+        }
+    }
+
+    public static String date_picker_get_placeholder(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(date_picker_get_placeholder, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void date_picker_open(MemorySegment picker) {
+        invoke(date_picker_open, picker);
+    }
+
+    public static void date_picker_close(MemorySegment picker) {
+        invoke(date_picker_close, picker);
+    }
+
+    public static boolean date_picker_is_open(MemorySegment picker) {
+        return (boolean) invoke(date_picker_is_open, picker);
+    }
+
+    public static void date_picker_set_on_change(MemorySegment picker, DateChangeHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : date_change_upcall(handler, arena);
+        invoke(date_picker_set_on_change, picker, stub, MemorySegment.NULL);
+    }
+
+    public static MemorySegment number_picker_create(MemorySegment parent) {
+        return (MemorySegment) invoke(number_picker_create, parent);
+    }
+
+    /** Sets the inclusive range; non-finite or inverted bounds are rejected. */
+    public static void number_picker_set_range(MemorySegment picker, double minimum,
+            double maximum) {
+        invoke(number_picker_set_range, picker, minimum, maximum);
+    }
+
+    public static double number_picker_get_min(MemorySegment picker) {
+        return (double) invoke(number_picker_get_min, picker);
+    }
+
+    public static double number_picker_get_max(MemorySegment picker) {
+        return (double) invoke(number_picker_get_max, picker);
+    }
+
+    /** Sets a finite positive increment; invalid values are rejected silently. */
+    public static void number_picker_set_step(MemorySegment picker, double step) {
+        invoke(number_picker_set_step, picker, step);
+    }
+
+    public static double number_picker_get_step(MemorySegment picker) {
+        return (double) invoke(number_picker_get_step, picker);
+    }
+
+    /** Sets a value clamped into the range; a non-finite value is ignored. */
+    public static void number_picker_set_value(MemorySegment picker, double value) {
+        invoke(number_picker_set_value, picker, value);
+    }
+
+    /** The value, or 0.0 while empty; use {@link #number_picker_has_value} to tell. */
+    public static double number_picker_get_value(MemorySegment picker) {
+        return (double) invoke(number_picker_get_value, picker);
+    }
+
+    public static boolean number_picker_has_value(MemorySegment picker) {
+        return (boolean) invoke(number_picker_has_value, picker);
+    }
+
+    public static void number_picker_clear(MemorySegment picker) {
+        invoke(number_picker_clear, picker);
+    }
+
+    /** Steps by {@code steps * step}, clamped; this path reports on_change. */
+    public static void number_picker_step_by(MemorySegment picker, double steps) {
+        invoke(number_picker_step_by, picker, steps);
+    }
+
+    public static boolean number_picker_set_text(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(number_picker_set_text, picker, cstring(arena, text));
+        }
+    }
+
+    public static String number_picker_get_text(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(number_picker_get_text, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void number_picker_set_placeholder(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(number_picker_set_placeholder, picker, cstring(arena, text));
+        }
+    }
+
+    public static String number_picker_get_placeholder(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(number_picker_get_placeholder, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /** Fires after user input changes the value; {@code step_by} is the reachable path. */
+    public static void number_picker_set_on_change(MemorySegment picker,
+            NumberChangeHandler handler, Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : number_change_upcall(handler, arena);
+        invoke(number_picker_set_on_change, picker, stub, MemorySegment.NULL);
+    }
+
+    public static MemorySegment color_picker_create(MemorySegment parent) {
+        return (MemorySegment) invoke(color_picker_create, parent);
+    }
+
+    public static void color_picker_set_color(MemorySegment picker, int color) {
+        invoke(color_picker_set_color, picker, color);
+    }
+
+    public static int color_picker_get_color(MemorySegment picker) {
+        return (int) invoke(color_picker_get_color, picker);
+    }
+
+    /** Parses #RRGGBB / #RRGGBBAA; an invalid string keeps the old colour and text. */
+    public static boolean color_picker_set_hex(MemorySegment picker, String hex) {
+        Objects.requireNonNull(hex, "hex");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(color_picker_set_hex, picker, cstring(arena, hex));
+        }
+    }
+
+    /** #RRGGBB for opaque colours, #RRGGBBAA otherwise. */
+    public static String color_picker_get_hex(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(color_picker_get_hex, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void color_picker_add_preset(MemorySegment picker, int color) {
+        invoke(color_picker_add_preset, picker, color);
+    }
+
+    public static void color_picker_clear_presets(MemorySegment picker) {
+        invoke(color_picker_clear_presets, picker);
+    }
+
+    public static int color_picker_get_preset_count(MemorySegment picker) {
+        return (int) invoke(color_picker_get_preset_count, picker);
+    }
+
+    public static int color_picker_get_preset(MemorySegment picker, int index) {
+        return (int) invoke(color_picker_get_preset, picker, index);
+    }
+
+    public static void color_picker_open(MemorySegment picker) {
+        invoke(color_picker_open, picker);
+    }
+
+    public static void color_picker_close(MemorySegment picker) {
+        invoke(color_picker_close, picker);
+    }
+
+    public static boolean color_picker_is_open(MemorySegment picker) {
+        return (boolean) invoke(color_picker_is_open, picker);
+    }
+
+    public static void color_picker_set_on_change(MemorySegment picker, ColorChangeHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : color_change_upcall(handler, arena);
+        invoke(color_picker_set_on_change, picker, stub, MemorySegment.NULL);
     }
 
     public static final class Transition implements AutoCloseable {

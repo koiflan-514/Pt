@@ -71,7 +71,64 @@ public final class PtTest {
                 java.nio.file.Path.of("/proc/self/fd", Integer.toString(fd)));
     }
 
-    public static void main(String[] args) {
+    private static void putBe32(java.io.ByteArrayOutputStream out, int value) {
+        out.write(value >>> 24);
+        out.write(value >>> 16);
+        out.write(value >>> 8);
+        out.write(value);
+    }
+
+    private static void pngChunk(java.io.ByteArrayOutputStream out, String type, byte[] data) {
+        putBe32(out, data.length);
+        byte[] tag = type.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        out.write(tag, 0, tag.length);
+        out.write(data, 0, data.length);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(tag);
+        crc.update(data);
+        putBe32(out, (int) crc.getValue());
+    }
+
+    /**
+     * Encodes premultiplied ARGB pixels as an 8-bit RGBA PNG. The headless
+     * clipboard and icon decoders reject anything but a real PNG, so the tests
+     * build one with the JDK's own deflater instead of shipping a fixture.
+     */
+    private static byte[] png(int width, int height, int[] pixels) throws Exception {
+        int stride = width * 4;
+        byte[] raw = new byte[(stride + 1) * height];
+        for (int y = 0; y < height; y++) {
+            int row = y * (stride + 1);
+            raw[row] = 0;
+            for (int x = 0; x < width; x++) {
+                int pixel = pixels[y * width + x];
+                int at = row + 1 + x * 4;
+                raw[at] = (byte) (pixel >>> 16);
+                raw[at + 1] = (byte) (pixel >>> 8);
+                raw[at + 2] = (byte) pixel;
+                raw[at + 3] = (byte) (pixel >>> 24);
+            }
+        }
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+        deflater.setInput(raw);
+        deflater.finish();
+        byte[] compressed = new byte[raw.length + 256];
+        int length = deflater.deflate(compressed);
+        deflater.end();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(new byte[] {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'});
+        byte[] header = {
+            (byte) (width >>> 24), (byte) (width >>> 16), (byte) (width >>> 8), (byte) width,
+            (byte) (height >>> 24), (byte) (height >>> 16), (byte) (height >>> 8), (byte) height,
+            8, 6, 0, 0, 0,
+        };
+        pngChunk(out, "IHDR", header);
+        pngChunk(out, "IDAT", java.util.Arrays.copyOf(compressed, length));
+        pngChunk(out, "IEND", new byte[0]);
+        return out.toByteArray();
+    }
+
+    public static void main(String[] args) throws Exception {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment app = Pt.app_create("pt.tests.java");
             check(app.address() != 0, "app_create");
@@ -1147,6 +1204,617 @@ public final class PtTest {
             check(fired[0], "timer fired");
             check(!cancelled[0], "timer cancelled");
             check(Pt.window_is_open(window), "window open");
+
+            /* ---------- 1.2 popups, fallbacks, clipboard, columns, icons ---------- */
+
+            /* Application-owned popups. */
+            check(Pt.popup_max_open == 16, "popup max open constant");
+            MemorySegment popupContent = Pt.box(MemorySegment.NULL, Pt.direction_column);
+            MemorySegment popup = Pt.popup_create(window, popupContent);
+            check(popup.address() != 0, "popup create");
+            check(!Pt.popup_is_open(popup), "popup starts closed");
+            check(Pt.popup_content(popup).address() == popupContent.address(), "popup content");
+            check(Pt.popup_get_placement(popup) == Pt.popup_placement_below,
+                    "popup placement default");
+            check(Pt.popup_show(popup, new Pt.PopupAnchor(100.0f, 80.0f, 40.0f, 20.0f)),
+                    "popup show");
+            check(Pt.popup_is_open(popup), "popup open");
+            check(Pt.popup_show(popup, new Pt.PopupAnchor(120.0f, 90.0f, 0.0f, 0.0f)),
+                    "popup re-show reposition");
+            check(Pt.popup_reposition(popup, new Pt.PopupAnchor(40.0f, 60.0f, 10.0f, 10.0f)),
+                    "popup reposition open");
+            Pt.popup_set_placement(popup, Pt.popup_placement_above);
+            check(Pt.popup_get_placement(popup) == Pt.popup_placement_above,
+                    "popup placement above");
+            Pt.popup_set_placement(popup, 99);
+            check(Pt.popup_get_placement(popup) == Pt.popup_placement_below,
+                    "popup invalid placement falls back");
+            final int[] popupDismissals = {0};
+            final long[] popupDismissHandle = {0};
+            final boolean[] popupClosedInCallback = {false};
+            Pt.popup_set_on_dismiss(popup, (target, data) -> {
+                popupDismissals[0] += 1;
+                popupDismissHandle[0] = target.address();
+                popupClosedInCallback[0] = !Pt.popup_is_open(target);
+            }, arena);
+            Pt.popup_dismiss(popup);
+            check(popupDismissals[0] == 1, "popup dismiss callback");
+            check(popupDismissHandle[0] == popup.address(), "popup dismiss handle");
+            check(popupClosedInCallback[0], "popup closed before callback");
+            check(!Pt.popup_is_open(popup), "popup closed");
+            Pt.popup_dismiss(popup);
+            check(popupDismissals[0] == 1, "popup dismiss closed is silent");
+            check(!Pt.popup_reposition(popup, new Pt.PopupAnchor(0.0f, 0.0f, 1.0f, 1.0f)),
+                    "popup reposition closed");
+            check(!Pt.popup_show(popup, new Pt.PopupAnchor(Float.NaN, 0.0f, 1.0f, 1.0f)),
+                    "popup NaN anchor rejected");
+            check(!Pt.popup_show(popup, new Pt.PopupAnchor(0.0f, 0.0f, -1.0f, 1.0f)),
+                    "popup negative anchor rejected");
+            check(!Pt.last_error().isEmpty(), "popup error recorded");
+            check(Pt.popup_show(popup, new Pt.PopupAnchor(10.0f, 10.0f, 5.0f, 5.0f)),
+                    "popup show after rejection");
+            Pt.popup_destroy(popup);
+            check(popupDismissals[0] == 1, "popup destroy silent");
+
+            /* A callback stub lives in its caller's arena; clearing it through
+             * the public setter before the next dismissal keeps a closed arena
+             * out of the native dispatch path. */
+            MemorySegment lifetimePopup = Pt.popup_create(window,
+                    Pt.box(MemorySegment.NULL, Pt.direction_column));
+            final int[] lifetimeDismissals = {0};
+            try (Arena callbackArena = Arena.ofConfined()) {
+                Pt.popup_set_on_dismiss(lifetimePopup,
+                        (target, data) -> lifetimeDismissals[0] += 1, callbackArena);
+                check(Pt.popup_show(lifetimePopup,
+                        new Pt.PopupAnchor(20.0f, 20.0f, 12.0f, 12.0f)),
+                        "popup lifetime show");
+                Pt.popup_dismiss(lifetimePopup);
+                check(lifetimeDismissals[0] == 1, "popup callback before arena close");
+            }
+            Pt.popup_set_on_dismiss(lifetimePopup, null, arena);
+            check(Pt.popup_show(lifetimePopup,
+                    new Pt.PopupAnchor(20.0f, 20.0f, 12.0f, 12.0f)), "popup lifetime re-show");
+            Pt.popup_dismiss(lifetimePopup);
+            check(lifetimeDismissals[0] == 1, "no callback after arena close");
+            Pt.popup_destroy(lifetimePopup);
+
+            /* Open-limit rejection and null tolerance. */
+            MemorySegment[] limitPopups = new MemorySegment[Pt.popup_max_open + 1];
+            for (int index = 0; index < limitPopups.length; index++) {
+                limitPopups[index] = Pt.popup_create(window,
+                        Pt.box(MemorySegment.NULL, Pt.direction_column));
+                check(limitPopups[index].address() != 0, "popup limit create");
+            }
+            for (int index = 0; index < Pt.popup_max_open; index++) {
+                check(Pt.popup_show(limitPopups[index],
+                        new Pt.PopupAnchor(20.0f + index, 20.0f, 8.0f, 8.0f)),
+                        "popup limit show");
+            }
+            check(!Pt.popup_show(limitPopups[Pt.popup_max_open],
+                    new Pt.PopupAnchor(20.0f, 20.0f, 8.0f, 8.0f)), "popup limit rejected");
+            check(!Pt.popup_is_open(limitPopups[Pt.popup_max_open]), "popup limit stays closed");
+            Pt.popup_dismiss(limitPopups[0]);
+            check(Pt.popup_show(limitPopups[Pt.popup_max_open],
+                    new Pt.PopupAnchor(20.0f, 20.0f, 8.0f, 8.0f)), "popup limit admits after close");
+            for (MemorySegment handle : limitPopups) {
+                Pt.popup_destroy(handle);
+            }
+            check(!Pt.popup_is_open(MemorySegment.NULL), "popup null is closed");
+            check(Pt.popup_content(MemorySegment.NULL).address() == 0, "popup null content");
+            Pt.popup_dismiss(MemorySegment.NULL);
+            Pt.popup_destroy(MemorySegment.NULL);
+
+            /* Font fallback chains and per-family overrides (UTF-8 names). */
+            Pt.app_set_font_fallbacks(app,
+                    new String[] {"Noto Sans CJK SC", "DejaVu Sans", "", "Noto Sans"});
+            check(Pt.app_get_font_fallback_count(app) == 3, "fallback blank skipped");
+            check(Pt.app_get_font_fallback(app, 0).equals("Noto Sans CJK SC"),
+                    "fallback first");
+            check(Pt.app_get_font_fallback(app, 2).equals("Noto Sans"), "fallback last");
+            check(Pt.app_get_font_fallback(app, 3) == null, "fallback out of range");
+            check(Pt.app_get_font_fallback(app, -1) == null, "fallback negative index");
+            String[] manyFallbacks = new String[10];
+            for (int index = 0; index < manyFallbacks.length; index++) {
+                manyFallbacks[index] = "fam" + index;
+            }
+            Pt.app_set_font_fallbacks(app, manyFallbacks);
+            check(Pt.app_get_font_fallback_count(app) == Pt.font_fallback_max_families,
+                    "fallback clamp");
+            check(Pt.app_get_font_fallback(app, 7).equals("fam7"), "fallback clamped last");
+            Pt.app_set_font_fallbacks(app, null);
+            check(Pt.app_get_font_fallback_count(app) == 0, "fallback reset");
+            String[] unicodeFallback = {"Noto Sans 汉字", "DejaVu Sans"};
+            Pt.app_set_font_fallbacks(app, unicodeFallback);
+            check(Pt.app_get_font_fallback(app, 0).equals("Noto Sans 汉字"),
+                    "fallback UTF-8 round trip");
+            Pt.app_set_font_fallbacks_for_family(app, "serif",
+                    new String[] {"Liberation Serif", "DejaVu Serif"});
+            check(Pt.app_get_font_fallback_count_for_family(app, "serif") == 2,
+                    "family fallback count");
+            check(Pt.app_get_font_fallback_for_family(app, "serif", 0)
+                    .equals("Liberation Serif"), "family fallback first");
+            check(Pt.app_get_font_fallback_for_family(app, "serif", 2) == null,
+                    "family fallback out of range");
+            check(Pt.app_get_font_fallback_count_for_family(app, "monospace") == 0,
+                    "family fallback isolation");
+            check(Pt.app_get_font_fallback_count(app) == 2, "family leaves app chain");
+            Pt.app_set_font_fallbacks_for_family(app, "serif", null);
+            check(Pt.app_get_font_fallback_count_for_family(app, "serif") == 0,
+                    "family fallback cleared");
+            check(Pt.app_font_uncovered_count(app, null, "") == 0, "uncovered empty text");
+            check(Pt.app_font_uncovered_count(app, null, "\u0378") == 1,
+                    "uncovered unassigned codepoint");
+            check(Pt.app_font_uncovered_count(app, "sans-serif", "\u0378") == 1,
+                    "uncovered explicit family");
+            Pt.app_set_font_fallbacks(app, null);
+            Pt.app_set_font_fallbacks_for_family(app, "serif", null);
+
+            /* Clipboard image and URI-list media. */
+            int[] clipboardPixels = {
+                0x00000000, 0x00FFFFFF, 0x01FFFFFF, 0x80402010,
+                0x7F3F1F0F, 0xFF102030, 0xFFFFFFFF, 0x80FF0000,
+            };
+            check(Pt.window_clipboard_set_image_png(window, clipboardPixels, 4, 2),
+                    "clipboard image set");
+            Pt.ClipboardImage decoded = Pt.window_clipboard_get_image_png(window);
+            check(decoded != null, "clipboard image get");
+            if (decoded != null) {
+                int[] clipboardExpected = {
+                    0x00000000, 0x00000000, 0x01010101, 0x80402010,
+                    0x7F3F1F0F, 0xFF102030, 0xFFFFFFFF, 0x80800000,
+                };
+                check(decoded.width() == 4 && decoded.height() == 2,
+                        "clipboard image dimensions");
+                check(decoded.pixels().length == 8, "clipboard image pixel count");
+                boolean same = true;
+                for (int index = 0; index < clipboardExpected.length; index++) {
+                    same &= decoded.pixels()[index] == clipboardExpected[index];
+                }
+                check(same, "clipboard image premultiplied round trip");
+            }
+            check(Pt.window_clipboard_get(window).isEmpty(), "image replaces text");
+            check(!Pt.window_clipboard_set_image_png(window, clipboardPixels, 0, 1),
+                    "clipboard image zero width");
+            check(!Pt.window_clipboard_set_image_png(window, clipboardPixels, -1, 1),
+                    "clipboard image negative width");
+            boolean shortBuffer = false;
+            try {
+                Pt.window_clipboard_set_image_png(window, clipboardPixels, 4, 3);
+            } catch (IllegalArgumentException error) {
+                shortBuffer = true;
+            }
+            check(shortBuffer, "clipboard image short buffer");
+            int[] oversized = new int[Pt.clipboard_image_max_dimension + 1];
+            check(!Pt.window_clipboard_set_image_png(window, oversized,
+                    Pt.clipboard_image_max_dimension + 1, 1), "clipboard image oversized");
+            check(Pt.window_clipboard_set_uri_list(window,
+                    new String[] {"/tmp/a b.txt", "https://example.test/x"}),
+                    "clipboard uri list set");
+            check(Pt.window_clipboard_get_image_png(window) == null,
+                    "uri list replaces image");
+            check(!Pt.window_clipboard_set_uri_list(window, new String[] {"relative.txt"}),
+                    "clipboard uri relative rejected");
+            check(!Pt.window_clipboard_set_uri_list(window, new String[0]),
+                    "clipboard uri empty rejected");
+            boolean nullUri = false;
+            try {
+                Pt.window_clipboard_set_uri_list(window, new String[] {null});
+            } catch (NullPointerException error) {
+                nullUri = true;
+            }
+            check(nullUri, "clipboard uri null entry");
+
+            /* Column persistence: keys, round trip, atomic rejection. */
+            MemorySegment sourceTable = Pt.table(column);
+            Pt.table_set_column_count(sourceTable, 3);
+            String[] columnKeys = {"id", "name", "size"};
+            for (int index = 0; index < columnKeys.length; index++) {
+                Pt.table_set_column_title(sourceTable, index,
+                        columnKeys[index].substring(0, 1).toUpperCase()
+                                + columnKeys[index].substring(1));
+                Pt.table_set_column_key(sourceTable, index, columnKeys[index]);
+            }
+            check(Pt.table_get_column_key(sourceTable, 1).equals("name"), "column key get");
+            check(Pt.table_get_column_key(sourceTable, 9).isEmpty(), "column key out of range");
+            Pt.table_set_column_width(sourceTable, 0, 90.0f);
+            Pt.table_set_column_width(sourceTable, 1, 220.5f);
+            Pt.table_set_column_width(sourceTable, 2, 77.25f);
+            Pt.table_set_column_hidden(sourceTable, 2, true);
+            Pt.table_set_sort_columns(sourceTable, new int[] {1},
+                    new int[] {Pt.sort_descending});
+            check(Pt.table_move_column(sourceTable, 0, 2), "column move");
+            String blob = Pt.table_columns_save(sourceTable);
+            check(blob.startsWith("PTCOLS 1"), "columns save magic");
+            check(blob.contains("6e616d65"), "columns save contains key");
+
+            MemorySegment targetTable = Pt.table(column);
+            Pt.table_set_column_count(targetTable, 3);
+            for (int index = 0; index < columnKeys.length; index++) {
+                Pt.table_set_column_key(targetTable, index, columnKeys[index]);
+            }
+            Pt.table_set_column_width(targetTable, 0, 10.0f);
+            check(Pt.table_columns_restore(targetTable, blob), "columns restore");
+            check(Pt.table_get_column_key(targetTable, 0).equals("name"),
+                    "columns restore order first");
+            check(Pt.table_get_column_key(targetTable, 2).equals("id"),
+                    "columns restore order last");
+            check(Math.abs(Pt.table_get_column_width(targetTable, 0) - 220.5f) < 0.001f,
+                    "columns restore width");
+            check(Pt.table_get_column_hidden(targetTable, 1), "columns restore hidden");
+            check(!Pt.table_get_column_hidden(targetTable, 0), "columns restore visible");
+            int[] restoredSort = Pt.table_get_sort_columns(targetTable);
+            check(restoredSort.length == 2 && restoredSort[0] == 0
+                    && restoredSort[1] == Pt.sort_descending, "columns restore sort");
+            check(Pt.table_columns_save(targetTable).equals(blob),
+                    "columns save is stable");
+            check(!Pt.table_columns_restore(targetTable, "not a layout"),
+                    "columns restore rejects malformed");
+            check(Math.abs(Pt.table_get_column_width(targetTable, 0) - 220.5f) < 0.001f,
+                    "columns restore rejection is atomic");
+            MemorySegment shortTable = Pt.table(column);
+            Pt.table_set_column_count(shortTable, 2);
+            Pt.table_set_column_key(shortTable, 0, "id");
+            Pt.table_set_column_key(shortTable, 1, "name");
+            check(!Pt.table_columns_restore(shortTable, blob), "columns restore count mismatch");
+            MemorySegment keyTable = Pt.table(column);
+            Pt.table_set_column_count(keyTable, 2);
+            Pt.table_set_column_key(keyTable, 0, "alpha");
+            Pt.table_set_column_key(keyTable, 1, "beta");
+            Pt.table_set_column_key(keyTable, 1, "alpha");
+            check(Pt.table_get_column_key(keyTable, 1).equals("beta"),
+                    "column duplicate key rejected");
+            String longKey = "x".repeat(70);
+            Pt.table_set_column_key(keyTable, 1, longKey);
+            check(Pt.table_get_column_key(keyTable, 1).length()
+                    == Pt.table_column_key_max, "column key truncation");
+            Pt.table_set_column_key(keyTable, 0, "标识");
+            check(Pt.table_get_column_key(keyTable, 0).equals("标识"),
+                    "column UTF-8 key");
+            MemorySegment notTable = Pt.label(column, "not a table");
+            check(Pt.table_columns_save(notTable).isEmpty(), "columns save non-table");
+            Pt.widget_destroy(sourceTable);
+            Pt.widget_destroy(targetTable);
+            Pt.widget_destroy(shortTable);
+            Pt.widget_destroy(keyTable);
+
+            /* Reference-counted raster icons, button and window slots. */
+            int[] iconPixels = new int[16];
+            for (int index = 0; index < iconPixels.length; index++) {
+                iconPixels[index] = 0x80FF0000 | index;
+            }
+            byte[] iconBytes = png(4, 4, iconPixels);
+            MemorySegment rasterIcon = Pt.icon_image_load_memory(iconBytes);
+            check(rasterIcon.address() != 0, "icon load memory");
+            check(Pt.icon_image_width(rasterIcon) == 4 && Pt.icon_image_height(rasterIcon) == 4,
+                    "icon dimensions");
+            MemorySegment iconRef = Pt.icon_image_ref(rasterIcon);
+            check(iconRef.address() == rasterIcon.address(), "icon ref identity");
+            check(Pt.icon_image_width(MemorySegment.NULL) == 0, "icon null width");
+            check(Pt.icon_image_height(MemorySegment.NULL) == 0, "icon null height");
+            Pt.icon_image_ref(MemorySegment.NULL);
+            Pt.icon_image_destroy(MemorySegment.NULL);
+            check(Pt.icon_image_load_memory(new byte[0]).address() == 0,
+                    "icon empty bytes rejected");
+            check(Pt.icon_image_load_memory(new byte[] {1, 2, 3}).address() == 0,
+                    "icon corrupt bytes rejected");
+            java.nio.file.Path iconPath = java.nio.file.Files.createTempFile("pt-icon", ".png");
+            try {
+                java.nio.file.Files.write(iconPath, iconBytes);
+                MemorySegment fileIcon = Pt.icon_image_load_file(iconPath.toString());
+                check(fileIcon.address() != 0, "icon load file");
+                if (fileIcon.address() != 0) {
+                    check(Pt.icon_image_width(fileIcon) == 4, "icon file dimensions");
+                    Pt.icon_image_destroy(fileIcon);
+                }
+            } finally {
+                java.nio.file.Files.deleteIfExists(iconPath);
+            }
+            check(Pt.icon_image_load_file("/tmp/pt-definitely-missing-icon.png").address() == 0,
+                    "icon missing file rejected");
+            check(Pt.icon_image_from_name("pt-definitely-missing", 32).address() == 0,
+                    "icon missing name rejected");
+            check(Pt.icon_image_from_name("../escape", 32).address() == 0,
+                    "icon path name rejected");
+            MemorySegment iconButton = Pt.button(column, "Save");
+            Pt.button_set_icon_image(iconButton, rasterIcon);
+            check(Pt.button_get_icon_image(iconButton).address() == rasterIcon.address(),
+                    "button icon slot");
+            Pt.button_set_icon_tint(iconButton, 0xFF3366FF);
+            Pt.button_set_icon_tint(iconButton, 0);
+            Pt.icon_image_destroy(rasterIcon);
+            check(Pt.icon_image_width(Pt.button_get_icon_image(iconButton)) == 4,
+                    "button keeps icon reference");
+            Pt.window_set_icon(window, iconRef);
+            check(Pt.window_get_icon(window).address() == iconRef.address(),
+                    "window icon slot");
+            Pt.icon_image_destroy(iconRef);
+            check(Pt.icon_image_width(Pt.window_get_icon(window)) == 4,
+                    "window keeps icon reference");
+            Pt.button_set_icon_image(iconButton, MemorySegment.NULL);
+            check(Pt.button_get_icon_image(iconButton).address() == 0,
+                    "button icon cleared");
+            Pt.window_set_icon(window, MemorySegment.NULL);
+            check(Pt.window_get_icon(window).address() == 0, "window icon cleared");
+
+            /* Searchable select. */
+            MemorySegment select = Pt.select_create(column);
+            check(select.address() != 0, "select create");
+            check(Pt.select_get_placeholder(select).isEmpty(), "select placeholder default");
+            Pt.select_set_placeholder(select, "Pick one");
+            check(Pt.select_get_placeholder(select).equals("Pick one"), "select placeholder");
+            Pt.select_add_item(select, "Apple");
+            Pt.select_add_item(select, "Banana");
+            Pt.select_insert_item(select, 1, "Apricot");
+            Pt.select_insert_item(select, 99, "Cherry");
+            check(Pt.select_get_item_count(select) == 4, "select item count");
+            check(Pt.select_get_item_text(select, 1).equals("Apricot"), "select item text");
+            check(Pt.select_get_item_text(select, 99).isEmpty(), "select item text out of range");
+            check(Pt.select_get_item_data(select, 0).address() == 0, "select item data null");
+            try (Arena dataArena = Arena.ofConfined()) {
+                MemorySegment selectPayload = dataArena.allocate(ValueLayout.JAVA_INT, 0xCAFE);
+                Pt.select_add_item_with_data(select, "Date", selectPayload);
+                check(Pt.select_get_item_data(select, 4).address() == selectPayload.address(),
+                        "select item data");
+                Pt.select_set_item_data(select, 0, selectPayload);
+                check(Pt.select_get_item_data(select, 0).address() == selectPayload.address(),
+                        "select item data set");
+                Pt.select_set_item_data(select, 99, selectPayload);
+            }
+            check(Pt.select_get_selected(select) == Pt.list_index_none,
+                    "select no selection");
+            Pt.select_set_selected(select, 2);
+            check(Pt.select_get_selected(select) == 2, "select selection");
+            Pt.select_set_selected(select, 99);
+            check(Pt.select_get_selected(select) == Pt.list_index_none,
+                    "select out-of-range clears");
+            Pt.select_set_selected(select, 1);
+            Pt.select_clear_selection(select);
+            check(Pt.select_get_selected(select) == Pt.list_index_none,
+                    "select clear selection");
+            Pt.select_set_query(select, "ap");
+            check(Pt.select_get_query(select).equals("ap"), "select query");
+            check(Pt.select_get_match_count(select) == 2, "select match count");
+            check(Pt.select_get_match_item(select, 0) == 0, "select match first");
+            check(Pt.select_get_match_item(select, 99) == Pt.list_index_none,
+                    "select match out of range");
+            Pt.select_set_query(select, "");
+            check(Pt.select_get_match_count(select) == 5, "select query cleared");
+            check(Pt.select_get_max_popup_rows(select) == 8, "select popup rows default");
+            Pt.select_set_max_popup_rows(select, 0);
+            check(Pt.select_get_max_popup_rows(select) == 1, "select popup rows clamp low");
+            Pt.select_set_max_popup_rows(select, 500);
+            check(Pt.select_get_max_popup_rows(select) == Pt.picker_max_candidates,
+                    "select popup rows clamp high");
+            final int[] selectChoice = {Pt.list_index_none};
+            Pt.select_set_on_change(select, (widget, index, data) -> selectChoice[0] = index,
+                    arena);
+            Pt.select_set_selected(select, 2);
+            check(selectChoice[0] == Pt.list_index_none, "select programmatic silent");
+            Pt.select_open(select);
+            check(Pt.select_is_open(select), "select open");
+            Pt.select_close(select);
+            check(!Pt.select_is_open(select), "select close");
+            Pt.select_remove_item(select, 0);
+            check(Pt.select_get_item_count(select) == 4, "select remove item");
+            Pt.select_remove_item(select, 99);
+            check(Pt.select_get_item_count(select) == 4, "select remove out of range");
+            Pt.select_clear(select);
+            check(Pt.select_get_item_count(select) == 0, "select clear");
+            Pt.select_open(select);
+            check(!Pt.select_is_open(select), "select open empty model is a no-op");
+
+            /* Date picker and pt_date by value. */
+            Pt.PtDate today = Pt.date_today();
+            check(!today.isEmpty() && today.year() >= 1 && today.year() <= 9999,
+                    "date today");
+            check(Pt.date_is_valid(today), "date today valid");
+            check(Pt.date_is_valid(new Pt.PtDate(2024, 2, 29)), "date leap day valid");
+            check(!Pt.date_is_valid(new Pt.PtDate(2023, 2, 29)), "date non-leap day invalid");
+            check(!Pt.date_is_valid(new Pt.PtDate(2024, 13, 1)), "date month invalid");
+            check(!Pt.date_is_valid(new Pt.PtDate(2024, 1, 0)), "date day invalid");
+            check(!Pt.date_is_valid(Pt.PtDate.empty()), "date empty invalid");
+            check(Pt.PtDate.empty().isEmpty() && new Pt.PtDate(2024, 1, 1).isEmpty() == false,
+                    "date empty predicate");
+            MemorySegment datePicker = Pt.date_picker_create(column);
+            check(datePicker.address() != 0, "date picker create");
+            check(Pt.date_picker_get_date(datePicker).isEmpty(), "date picker starts empty");
+            check(Pt.date_picker_get_text(datePicker).isEmpty(), "date picker empty text");
+            check(Pt.date_picker_get_format(datePicker) == Pt.date_format_iso,
+                    "date picker default format");
+            Pt.PtDate committed = new Pt.PtDate(2025, 12, 31);
+            check(Pt.date_picker_set_date(datePicker, committed), "date picker set date");
+            check(Pt.date_picker_get_date(datePicker).equals(committed), "date picker date");
+            check(Pt.date_picker_get_text(datePicker).equals("2025-12-31"),
+                    "date picker ISO text");
+            Pt.date_picker_set_format(datePicker, Pt.date_format_dmy);
+            check(Pt.date_picker_get_format(datePicker) == Pt.date_format_dmy,
+                    "date picker format");
+            check(Pt.date_picker_get_text(datePicker).equals("31/12/2025"),
+                    "date picker DMY text");
+            Pt.date_picker_set_format(datePicker, 99);
+            check(Pt.date_picker_get_format(datePicker) == Pt.date_format_iso,
+                    "date picker invalid format");
+            check(Pt.date_picker_set_text(datePicker, "2026-11-22"), "date picker set ISO text");
+            check(Pt.date_picker_get_date(datePicker).equals(new Pt.PtDate(2026, 11, 22)),
+                    "date picker parsed text");
+            check(!Pt.date_picker_set_text(datePicker, "2026-02-30"),
+                    "date picker invalid text rejected");
+            check(Pt.date_picker_get_text(datePicker).equals("2026-11-22"),
+                    "date picker invalid text keeps value");
+            check(!Pt.date_picker_set_date(datePicker, new Pt.PtDate(2026, 2, 30)),
+                    "date picker invalid date rejected");
+            check(Pt.date_picker_get_date(datePicker).equals(new Pt.PtDate(2026, 11, 22)),
+                    "date picker invalid date keeps value");
+            check(Pt.date_picker_set_text(datePicker, ""), "date picker empty text clears");
+            check(Pt.date_picker_get_date(datePicker).isEmpty(), "date picker cleared by text");
+            Pt.date_picker_set_placeholder(datePicker, "Pick a date");
+            check(Pt.date_picker_get_placeholder(datePicker).equals("Pick a date"),
+                    "date picker placeholder");
+            final int[] dateChanges = {0};
+            final int[] dateSeen = {0, 0, 0};
+            Pt.date_picker_set_on_change(datePicker, (widget, date, data) -> {
+                dateChanges[0] += 1;
+                dateSeen[0] = date.year();
+                dateSeen[1] = date.month();
+                dateSeen[2] = date.day();
+            }, arena);
+            Pt.date_picker_set_date(datePicker, new Pt.PtDate(2027, 1, 2));
+            check(dateChanges[0] == 0, "date picker programmatic silent");
+            Pt.date_picker_open(datePicker);
+            check(Pt.date_picker_is_open(datePicker), "date picker open");
+            Pt.date_picker_close(datePicker);
+            check(!Pt.date_picker_is_open(datePicker), "date picker close");
+            Pt.date_picker_clear(datePicker);
+            check(Pt.date_picker_get_date(datePicker).isEmpty(), "date picker clear");
+
+            /* Number picker: clamping, step callback and text parsing. */
+            MemorySegment numberPicker = Pt.number_picker_create(column);
+            check(numberPicker.address() != 0, "number picker create");
+            check(!Pt.number_picker_has_value(numberPicker), "number picker starts empty");
+            check(Math.abs(Pt.number_picker_get_min(numberPicker)) < 0.0001
+                    && Math.abs(Pt.number_picker_get_max(numberPicker) - 100.0) < 0.0001,
+                    "number picker default range");
+            check(Math.abs(Pt.number_picker_get_step(numberPicker) - 1.0) < 0.0001,
+                    "number picker default step");
+            check(Pt.number_picker_get_value(numberPicker) == 0.0
+                    && Pt.number_picker_get_text(numberPicker).isEmpty(),
+                    "number picker empty value");
+            Pt.number_picker_set_range(numberPicker, 0.0, 10.0);
+            check(Math.abs(Pt.number_picker_get_max(numberPicker) - 10.0) < 0.0001,
+                    "number picker range");
+            Pt.number_picker_set_range(numberPicker, 20.0, 10.0);
+            check(Math.abs(Pt.number_picker_get_max(numberPicker) - 10.0) < 0.0001,
+                    "number picker inverted range rejected");
+            Pt.number_picker_set_range(numberPicker, Double.NaN, 10.0);
+            check(Math.abs(Pt.number_picker_get_min(numberPicker)) < 0.0001,
+                    "number picker NaN range rejected");
+            Pt.number_picker_set_value(numberPicker, 20.0);
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 10.0) < 0.0001,
+                    "number picker value clamps");
+            check(Pt.number_picker_has_value(numberPicker), "number picker has value");
+            check(Pt.number_picker_get_text(numberPicker).equals("10"),
+                    "number picker text follows value");
+            Pt.number_picker_set_value(numberPicker, Double.NaN);
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 10.0) < 0.0001,
+                    "number picker NaN value ignored");
+            Pt.number_picker_set_step(numberPicker, 0.5);
+            check(Math.abs(Pt.number_picker_get_step(numberPicker) - 0.5) < 0.0001,
+                    "number picker step");
+            Pt.number_picker_set_step(numberPicker, 0.0);
+            check(Math.abs(Pt.number_picker_get_step(numberPicker) - 0.5) < 0.0001,
+                    "number picker zero step rejected");
+            final int[] numberChanges = {0};
+            final double[] numberSeen = {Double.NaN};
+            Pt.number_picker_set_on_change(numberPicker, (widget, value, data) -> {
+                numberChanges[0] += 1;
+                numberSeen[0] = value;
+            }, arena);
+            Pt.number_picker_step_by(numberPicker, -2.0);
+            check(numberChanges[0] == 1 && Math.abs(numberSeen[0] - 9.0) < 0.0001,
+                    "number picker step callback");
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 9.0) < 0.0001,
+                    "number picker step value");
+            Pt.number_picker_set_text(numberPicker, "3,5");
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 3.5) < 0.0001,
+                    "number picker comma decimal");
+            check(Pt.number_picker_get_text(numberPicker).equals("3.5"),
+                    "number picker canonical text");
+            check(!Pt.number_picker_set_text(numberPicker, "abc"),
+                    "number picker invalid text rejected");
+            check(Pt.number_picker_get_text(numberPicker).equals("3.5"),
+                    "number picker invalid text keeps value");
+            check(Pt.number_picker_set_text(numberPicker, ""), "number picker empty text");
+            check(!Pt.number_picker_has_value(numberPicker), "number picker text clears value");
+            Pt.number_picker_step_by(numberPicker, 1.0);
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 0.5) < 0.0001,
+                    "number picker step from empty");
+            Pt.number_picker_set_placeholder(numberPicker, "Amount");
+            check(Pt.number_picker_get_placeholder(numberPicker).equals("Amount"),
+                    "number picker placeholder");
+            Pt.number_picker_clear(numberPicker);
+            check(!Pt.number_picker_has_value(numberPicker)
+                    && Pt.number_picker_get_text(numberPicker).isEmpty(),
+                    "number picker clear");
+            final int[] lifetimeSteps = {0};
+            MemorySegment lifetimeNumber = Pt.number_picker_create(column);
+            try (Arena callbackArena = Arena.ofConfined()) {
+                Pt.number_picker_set_on_change(lifetimeNumber,
+                        (widget, value, data) -> lifetimeSteps[0] += 1, callbackArena);
+                Pt.number_picker_step_by(lifetimeNumber, 1.0);
+                check(lifetimeSteps[0] == 1, "number callback before arena close");
+            }
+            Pt.number_picker_set_on_change(lifetimeNumber, null, arena);
+            Pt.number_picker_step_by(lifetimeNumber, 1.0);
+            check(lifetimeSteps[0] == 1, "number no callback after arena close");
+
+            /* Colour picker: hex parsing, presets and silent programmatic paths. */
+            MemorySegment colorPicker = Pt.color_picker_create(column);
+            check(colorPicker.address() != 0, "color picker create");
+            check(Pt.color_picker_get_color(colorPicker) == 0x000000FF,
+                    "color picker default black");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#000000"),
+                    "color picker default hex");
+            check(Pt.color_picker_get_preset_count(colorPicker) == 24,
+                    "color picker default presets");
+            Pt.color_picker_set_color(colorPicker, 0x112233FF);
+            check(Pt.color_picker_get_color(colorPicker) == 0x112233FF,
+                    "color picker set color");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#112233"),
+                    "color picker opaque hex");
+            check(Pt.color_picker_set_hex(colorPicker, "#10203040"),
+                    "color picker set alpha hex");
+            check(Pt.color_picker_get_color(colorPicker) == 0x10203040,
+                    "color picker alpha hex color");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#10203040"),
+                    "color picker alpha hex text");
+            check(Pt.color_picker_set_hex(colorPicker, "A1B2C3"),
+                    "color picker hex without hash");
+            check(Pt.color_picker_get_color(colorPicker) == 0xA1B2C3FF,
+                    "color picker hex without hash color");
+            check(!Pt.color_picker_set_hex(colorPicker, "zzz"),
+                    "color picker invalid hex rejected");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#A1B2C3"),
+                    "color picker invalid hex keeps text");
+            Pt.color_picker_add_preset(colorPicker, 0xFF0000FF);
+            check(Pt.color_picker_get_preset_count(colorPicker) == 25,
+                    "color picker preset add");
+            check(Pt.color_picker_get_preset(colorPicker, 24) == 0xFF0000FF,
+                    "color picker preset value");
+            Pt.color_picker_clear_presets(colorPicker);
+            check(Pt.color_picker_get_preset_count(colorPicker) == 0,
+                    "color picker presets cleared");
+            for (int index = 0; index < Pt.color_max_presets + 1; index++) {
+                Pt.color_picker_add_preset(colorPicker, 0x010203FF + index);
+            }
+            check(Pt.color_picker_get_preset_count(colorPicker) == Pt.color_max_presets,
+                    "color picker preset cap");
+            check(Pt.color_picker_get_preset(colorPicker, Pt.color_max_presets) == 0,
+                    "color picker preset out of range");
+            final int[] colorChanges = {0};
+            final int[] colorSeen = {0};
+            Pt.color_picker_set_on_change(colorPicker, (widget, color, data) -> {
+                colorChanges[0] += 1;
+                colorSeen[0] = color;
+            }, arena);
+            Pt.color_picker_set_color(colorPicker, 0x556677FF);
+            check(colorChanges[0] == 0, "color picker programmatic silent");
+            Pt.color_picker_set_hex(colorPicker, "#010203");
+            check(colorChanges[0] == 0, "color picker hex silent");
+            Pt.color_picker_open(colorPicker);
+            check(Pt.color_picker_is_open(colorPicker), "color picker open");
+            Pt.color_picker_close(colorPicker);
+            check(!Pt.color_picker_is_open(colorPicker), "color picker close");
+            check(Pt.select_get_item_count(MemorySegment.NULL) == 0, "select null count");
+            check(!Pt.select_is_open(MemorySegment.NULL), "select null closed");
+            check(Pt.date_picker_get_date(MemorySegment.NULL).isEmpty(), "date picker null");
+            check(!Pt.number_picker_has_value(MemorySegment.NULL), "number picker null");
+            check(Pt.color_picker_get_preset_count(MemorySegment.NULL) == 0,
+                    "color picker null");
+            Pt.widget_destroy(select);
+            Pt.widget_destroy(datePicker);
+            Pt.widget_destroy(numberPicker);
+            Pt.widget_destroy(lifetimeNumber);
+            Pt.widget_destroy(colorPicker);
 
             final boolean[] allowed = {false};
             Pt.window_set_close_handler(window, (target, data) -> allowed[0], arena);
