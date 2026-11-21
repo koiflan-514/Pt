@@ -13,9 +13,10 @@ Before tagging a release:
    `include/pt/base.h`.
 2. Update the status line and any new limitations in `README.md`,
    `docs/ROADMAP.md`, `docs/performance.md` and `docs/comparison.md`.
-3. Run the validation matrix below from a clean tree. For a 1.0 release also
-   run `tools/release-check.sh --full`, which turns the machine-verifiable half
-   of the checklist in [api-policy.md](api-policy.md) into a pass/fail report.
+3. Run the validation matrix below from a clean tree. For every 1.x release
+   also run `tools/release-check.sh --full`, which turns the machine-verifiable
+   half of the checklist in [api-policy.md](api-policy.md) into a pass/fail
+   report.
 4. Produce the tarball with `make dist`, which also writes
    `pt-<version>.tar.gz.sha256` beside it, verify that a rebuild with the same
    `SOURCE_DATE_EPOCH` reproduces the digest, and build the release from an
