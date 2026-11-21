@@ -7,9 +7,13 @@
 package pt;
 
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 
+@SuppressWarnings("restricted")
 public final class PtTest {
     private PtTest() {}
 
@@ -21,6 +25,43 @@ public final class PtTest {
         if (!condition) {
             failures += 1;
             System.err.println("FAIL: " + label);
+        }
+    }
+
+    /** Creates a libc pipe so the fd-watch test can dispatch a real event. */
+    private static int[] nativePipe() {
+        try {
+            Linker linker = Linker.nativeLinker();
+            MethodHandle pipe = linker.downcallHandle(
+                    linker.defaultLookup().find("pipe").orElseThrow(),
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment descriptors = arena.allocate(ValueLayout.JAVA_INT, 2);
+                if ((int) pipe.invokeExact(descriptors) != 0) {
+                    return null;
+                }
+                return new int[] {descriptors.get(ValueLayout.JAVA_INT, 0),
+                        descriptors.get(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT.byteSize())};
+            }
+        } catch (Throwable error) {
+            return null;
+        }
+    }
+
+    private static boolean nativeWrite(int fd, byte value) {
+        try {
+            Linker linker = Linker.nativeLinker();
+            MethodHandle write = linker.downcallHandle(
+                    linker.defaultLookup().find("write").orElseThrow(),
+                    FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buffer = arena.allocate(ValueLayout.JAVA_BYTE);
+                buffer.set(ValueLayout.JAVA_BYTE, 0, value);
+                return (long) write.invokeExact(fd, buffer, 1L) == 1L;
+            }
+        } catch (Throwable error) {
+            return false;
         }
     }
 
@@ -779,6 +820,151 @@ public final class PtTest {
             check(!Pt.drop_stream_active(MemorySegment.NULL), "stream active null");
             Pt.drop_stream_cancel(MemorySegment.NULL);
             check(!Pt.window_get_drag_active(window), "drag still idle after null streams");
+
+            /* Offscreen painting drives the custom-paint callback without a
+             * compositor, so the whole paint context surface is exercised. */
+            MemorySegment offscreen = Pt.window_create(app, "offscreen", 64, 48);
+            check(offscreen.address() != 0, "offscreen window");
+            final int[] paint_calls = {0};
+            final boolean[] paint_contract = {true};
+            Pt.widget_set_paint_callback(Pt.window_root(offscreen),
+                    (widget, context, data) -> {
+                        paint_calls[0] += 1;
+                        if (!(Pt.paint_width(context) >= 1.0f)
+                                || !(Pt.paint_height(context) >= 1.0f)
+                                || !(Pt.paint_scale(context) > 0.0f)) {
+                            paint_contract[0] = false;
+                        }
+                        float[] clip = Pt.paint_clip_rect(context);
+                        if (clip != null && (clip[2] <= 0.0f || clip[3] <= 0.0f)) {
+                            paint_contract[0] = false;
+                        }
+                        Pt.paint_push_clip(context, 0.0f, 0.0f, 32.0f, 24.0f);
+                        Pt.paint_fill_rect(context, 0.0f, 0.0f, 12.0f, 12.0f,
+                                Pt.rgb(0xAA3300));
+                        Pt.paint_fill_rounded_rect(context, 12.0f, 0.0f, 12.0f, 12.0f,
+                                3.0f, Pt.rgb(0x224466));
+                        Pt.paint_stroke_rect(context, 1.0f, 1.0f, 20.0f, 10.0f, 1.0f,
+                                Pt.rgb(0xFFFFFF));
+                        Pt.paint_draw_line(context, 0.0f, 20.0f, 20.0f, 20.0f, 1.0f,
+                                Pt.rgb(0x000000));
+                        Pt.paint_draw_text(context, "DejaVu Sans", 10.0f,
+                                Pt.font_weight_regular, Pt.font_slant_upright, 2.0f, 14.0f,
+                                "Pt", Pt.rgb(0x000000));
+                        Pt.paint_font_has_glyph(context, "DejaVu Sans", 10.0f, 0x50);
+                        Pt.paint_measure_text(context, "DejaVu Sans", 10.0f,
+                                Pt.font_weight_regular, Pt.font_slant_upright, "Pt");
+                        Pt.FontMetrics metrics = Pt.paint_font_metrics(context,
+                                "DejaVu Sans", 10.0f, Pt.font_weight_regular,
+                                Pt.font_slant_upright);
+                        if (metrics != null && metrics.line_height() <= 0.0f) {
+                            paint_contract[0] = false;
+                        }
+                        Pt.paint_pop_clip(context);
+                    }, arena);
+            int[] pixels = new int[64 * 48];
+            check(Pt.window_paint_pixels(offscreen, pixels, 64, 48), "offscreen paint");
+            check(paint_calls[0] == 1, "paint callback dispatch");
+            check(paint_contract[0], "paint context contract");
+            int mark = Pt.rgb(0xAA3300);
+            int expected = ((mark & 0xFF) << 24) | ((mark >> 8) & 0xFFFFFF);
+            boolean marked = false;
+            for (int pixel : pixels) {
+                if (pixel == expected) {
+                    marked = true;
+                    break;
+                }
+            }
+            check(marked, "paint pixels landed");
+            check(!Pt.window_paint_pixels(MemorySegment.NULL, pixels, 64, 48),
+                    "paint null window");
+            check(!Pt.window_paint_pixels(offscreen, pixels, 0, 48), "paint invalid width");
+            check(!Pt.window_paint_pixels(offscreen, pixels, 64, -1), "paint invalid height");
+            boolean short_buffer_rejected = false;
+            try {
+                Pt.window_paint_pixels(offscreen, new int[1], 64, 48);
+            } catch (IllegalArgumentException expected_error) {
+                short_buffer_rejected = true;
+            }
+            check(short_buffer_rejected, "paint buffer validation");
+            Pt.widget_request_redraw(Pt.window_root(offscreen));
+            Pt.widget_request_redraw_rect(Pt.window_root(offscreen), 0.0f, 0.0f, 4.0f, 4.0f);
+            Pt.widget_clear_paint_callback(Pt.window_root(offscreen));
+            check(Pt.window_paint_pixels(offscreen, pixels, 64, 48), "paint after clear");
+            check(paint_calls[0] == 1, "paint callback cleared");
+
+            /* Primary selection mirrors the clipboard ownership contract. */
+            check(Pt.window_primary_get(window).isEmpty(), "primary empty");
+            check(Pt.window_primary_set(window, "middle-click text"), "primary set");
+            check(Pt.window_primary_get(window).equals("middle-click text"), "primary get");
+            check(Pt.window_primary_set(window, null), "primary clear");
+            check(Pt.window_primary_get(window).isEmpty(), "primary cleared");
+            check(!Pt.window_primary_set(MemorySegment.NULL, "no window"),
+                    "primary null window");
+            check(Pt.window_primary_get(MemorySegment.NULL).isEmpty(), "primary null get");
+
+            /* Input callbacks have no public injection entry point; assert that
+             * registration, replacement and the headless event loop keep them
+             * idle instead of firing spuriously. */
+            final int[] focus_calls = {0};
+            final int[] key_event_calls = {0};
+            final int[] pointer_calls = {0};
+            final int[] ime_commits = {0};
+            final int[] ime_preedits = {0};
+            final int[] ime_bounds = {0, 0};
+            final String[] ime_text = {null};
+            Pt.window_set_focus_handler(window, (target, focused, data) -> focus_calls[0] += 1,
+                    arena);
+            Pt.window_set_key_event_handler(window, (target, key, modifiers, utf8, data) -> {
+                key_event_calls[0] += 1;
+                return false;
+            }, arena);
+            Pt.window_set_pointer_handler(window, (target, event, data) -> {
+                pointer_calls[0] += 1;
+                return false;
+            }, arena);
+            Pt.window_set_ime_callbacks(window, (target, text, data) -> ime_commits[0] += 1,
+                    (target, text, begin, end, data) -> {
+                        ime_preedits[0] += 1;
+                        ime_text[0] = text;
+                        ime_bounds[0] = begin;
+                        ime_bounds[1] = end;
+                    }, arena);
+            Pt.window_set_ime_enabled(window, true);
+            Pt.window_set_ime_cursor_rect(window, 4, 6, 8, 18);
+            Pt.window_set_ime_enabled(window, false);
+            check(ime_preedits[0] == 1 && "".equals(ime_text[0]) && ime_bounds[0] == -1
+                    && ime_bounds[1] == -1, "ime disable dispatches empty preedit");
+            Pt.window_set_ime_cursor_rect(window, 0, 0, 0, 0);
+            Pt.window_set_focus_handler(window, null, arena);
+            Pt.window_set_key_event_handler(window, null, arena);
+            Pt.window_set_pointer_handler(window, null, arena);
+            Pt.window_set_ime_callbacks(window, null, null, arena);
+            check(Pt.pointer_phase_enter == 0 && Pt.pointer_phase_down == 3
+                    && Pt.pointer_phase_cancel == 6, "pointer phase constants");
+
+            /* A real pipe proves the fd watch dispatches through the poll loop. */
+            check(Pt.fd_event_read == 1 && Pt.fd_event_write == 2
+                    && Pt.fd_event_error == 4 && Pt.fd_event_hangup == 8,
+                    "fd event constants");
+            int[] descriptors = nativePipe();
+            check(descriptors != null, "native pipe");
+            if (descriptors != null) {
+                final int[] fd_events = {0};
+                long watch = Pt.app_watch_fd(app, descriptors[0], Pt.fd_event_read,
+                        (source, events, data) -> fd_events[0] = events, arena);
+                check(watch != 0, "fd watch id");
+                check(Pt.app_watch_fd(app, -1, Pt.fd_event_read,
+                        (source, events, data) -> { }, arena) == 0, "fd watch invalid fd");
+                check(nativeWrite(descriptors[1], (byte) 1), "fd pipe write");
+                check(Pt.app_run_for(app, 80) == 0, "fd watch run_for");
+                check((fd_events[0] & Pt.fd_event_read) != 0, "fd callback dispatch");
+                Pt.app_unwatch_fd(app, watch);
+                Pt.app_unwatch_fd(app, watch);
+            }
+            check(focus_calls[0] == 0 && key_event_calls[0] == 0 && pointer_calls[0] == 0
+                    && ime_commits[0] == 0 && ime_preedits[0] == 1,
+                    "input callbacks idle headless");
 
             boolean offer_target_accepted = true;
             try {

@@ -190,6 +190,43 @@ public final class Pt {
         void handle(MemorySegment tree, MemorySegment node, String text, MemorySegment data);
     }
 
+    @FunctionalInterface
+    public interface PaintHandler {
+        void handle(MemorySegment widget, MemorySegment context, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface FdHandler {
+        void handle(MemorySegment app, int events, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface FocusHandler {
+        void handle(MemorySegment window, boolean focused, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface KeyEventHandler {
+        boolean handle(MemorySegment window, int key, int modifiers, String utf8,
+                MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface PointerHandler {
+        boolean handle(MemorySegment window, PointerEvent event, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface ImeCommitHandler {
+        void handle(MemorySegment window, String text, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface ImePreeditHandler {
+        void handle(MemorySegment window, String text, int cursor_begin, int cursor_end,
+                MemorySegment data);
+    }
+
     public record A11yText(String text, int caret, int selection_start, int selection_end) {}
 
     public record GestureEvent(int kind, int phase, int fingers, float x, float y, float dx,
@@ -216,6 +253,22 @@ public final class Pt {
                     view.get(ValueLayout.JAVA_FLOAT, 28), view.get(ValueLayout.JAVA_FLOAT, 32));
         }
     }
+
+    /** Normalized pointer event in logical window coordinates. */
+    public record PointerEvent(int phase, float x, float y, float delta_x, float delta_y,
+            int button, int modifiers, int click_count, boolean pressed) {
+        private static PointerEvent read(MemorySegment event) {
+            MemorySegment view = event.reinterpret(36);
+            return new PointerEvent(view.get(ValueLayout.JAVA_INT, 0),
+                    view.get(ValueLayout.JAVA_FLOAT, 4), view.get(ValueLayout.JAVA_FLOAT, 8),
+                    view.get(ValueLayout.JAVA_FLOAT, 12), view.get(ValueLayout.JAVA_FLOAT, 16),
+                    view.get(ValueLayout.JAVA_INT, 20), view.get(ValueLayout.JAVA_INT, 24),
+                    view.get(ValueLayout.JAVA_INT, 28), view.get(ValueLayout.JAVA_BOOLEAN, 32));
+        }
+    }
+
+    /** Logical font metrics for a resolved family, size and style. */
+    public record FontMetrics(float ascent, float descent, float line_height, float cell_width) {}
 
     public record TextSpan(int start, int length, int weight, int slant, int color, int flags,
             String family, float size) {
@@ -455,6 +508,19 @@ public final class Pt {
     public static final int popup_policy_native = 1;
     public static final int popup_policy_window = 2;
 
+    public static final int fd_event_read = 1 << 0;
+    public static final int fd_event_write = 1 << 1;
+    public static final int fd_event_error = 1 << 2;
+    public static final int fd_event_hangup = 1 << 3;
+
+    public static final int pointer_phase_enter = 0;
+    public static final int pointer_phase_leave = 1;
+    public static final int pointer_phase_motion = 2;
+    public static final int pointer_phase_down = 3;
+    public static final int pointer_phase_up = 4;
+    public static final int pointer_phase_axis = 5;
+    public static final int pointer_phase_cancel = 6;
+
     public static final int combobox_select_only = 0;
     public static final int combobox_filterable = 1;
 
@@ -585,6 +651,10 @@ public final class Pt {
             desc(i64, ptr, i32, ptr, ptr));
     private static final MethodHandle app_cancel_timeout = bind("pt_app_cancel_timeout",
             FunctionDescriptor.ofVoid(ptr, i64));
+    private static final MethodHandle app_watch_fd = bind("pt_app_watch_fd",
+            desc(i64, ptr, i32, i32, ptr, ptr));
+    private static final MethodHandle app_unwatch_fd = bind("pt_app_unwatch_fd",
+            FunctionDescriptor.ofVoid(ptr, i64));
     private static final MethodHandle get_last_error = bind("pt_get_last_error", desc(ptr));
     private static final MethodHandle free = bind("pt_free", FunctionDescriptor.ofVoid(ptr));
 
@@ -625,6 +695,10 @@ public final class Pt {
             desc(bool, ptr, ptr));
     private static final MethodHandle window_clipboard_get = bind("pt_window_clipboard_get",
             desc(ptr, ptr));
+    private static final MethodHandle window_primary_set = bind("pt_window_primary_set",
+            desc(bool, ptr, ptr));
+    private static final MethodHandle window_primary_get = bind("pt_window_primary_get",
+            desc(ptr, ptr));
     private static final MethodHandle window_request_redraw = bind("pt_window_request_redraw",
             FunctionDescriptor.ofVoid(ptr));
     private static final MethodHandle window_focus = bind("pt_window_focus",
@@ -643,6 +717,18 @@ public final class Pt {
             "pt_window_set_close_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_key_callback = bind(
             "pt_window_set_key_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle window_set_focus_callback = bind(
+            "pt_window_set_focus_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle window_set_key_event_callback = bind(
+            "pt_window_set_key_event_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle window_set_pointer_callback = bind(
+            "pt_window_set_pointer_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle window_set_ime_callbacks = bind(
+            "pt_window_set_ime_callbacks", FunctionDescriptor.ofVoid(ptr, ptr, ptr, ptr));
+    private static final MethodHandle window_set_ime_enabled = bind(
+            "pt_window_set_ime_enabled", FunctionDescriptor.ofVoid(ptr, bool));
+    private static final MethodHandle window_set_ime_cursor_rect = bind(
+            "pt_window_set_ime_cursor_rect", FunctionDescriptor.ofVoid(ptr, i32, i32, i32, i32));
     private static final MethodHandle window_set_gesture_callback = bind(
             "pt_window_set_gesture_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_long_press_delay = bind(
@@ -679,6 +765,44 @@ public final class Pt {
             "pt_window_set_stylus_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle app_set_a11y_callback = bind(
             "pt_app_set_a11y_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+
+    /* Custom painting and offscreen output */
+    private static final MethodHandle widget_set_paint_callback = bind(
+            "pt_widget_set_paint_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    private static final MethodHandle widget_clear_paint_callback = bind(
+            "pt_widget_clear_paint_callback", FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle widget_request_redraw = bind(
+            "pt_widget_request_redraw", FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle widget_request_redraw_rect = bind(
+            "pt_widget_request_redraw_rect", FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32));
+    private static final MethodHandle window_paint_pixels = bind("pt_window_paint_pixels",
+            desc(bool, ptr, ptr, i32, i32));
+    private static final MethodHandle paint_width = bind("pt_paint_width", desc(f32, ptr));
+    private static final MethodHandle paint_height = bind("pt_paint_height", desc(f32, ptr));
+    private static final MethodHandle paint_scale = bind("pt_paint_scale", desc(f32, ptr));
+    private static final MethodHandle paint_clip_rect = bind("pt_paint_clip_rect",
+            desc(bool, ptr, ptr, ptr, ptr, ptr));
+    private static final MethodHandle paint_push_clip = bind("pt_paint_push_clip",
+            FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32));
+    private static final MethodHandle paint_pop_clip = bind("pt_paint_pop_clip",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle paint_fill_rect = bind("pt_paint_fill_rect",
+            FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32, i32));
+    private static final MethodHandle paint_fill_rounded_rect = bind(
+            "pt_paint_fill_rounded_rect", FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32, f32,
+                    i32));
+    private static final MethodHandle paint_stroke_rect = bind("pt_paint_stroke_rect",
+            FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32, f32, i32));
+    private static final MethodHandle paint_draw_line = bind("pt_paint_draw_line",
+            FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32, f32, i32));
+    private static final MethodHandle paint_draw_text = bind("pt_paint_draw_text",
+            FunctionDescriptor.ofVoid(ptr, ptr, f32, i32, i32, f32, f32, ptr, i64, i32));
+    private static final MethodHandle paint_font_has_glyph = bind("pt_paint_font_has_glyph",
+            desc(bool, ptr, ptr, f32, i32));
+    private static final MethodHandle paint_measure_text = bind("pt_paint_measure_text",
+            desc(f32, ptr, ptr, f32, i32, i32, ptr, i64));
+    private static final MethodHandle paint_font_metrics = bind("pt_paint_font_metrics",
+            desc(bool, ptr, ptr, f32, i32, i32, ptr, ptr, ptr, ptr));
 
     /* Overlays */
     private static final MethodHandle menu_create = bind("pt_menu_create", desc(ptr, ptr));
@@ -1367,6 +1491,20 @@ public final class Pt {
     private static final FunctionDescriptor close_descriptor = FunctionDescriptor.of(bool, ptr, ptr);
     private static final FunctionDescriptor key_descriptor = FunctionDescriptor.of(bool, ptr, i32,
             i32, ptr);
+    private static final FunctionDescriptor paint_descriptor = FunctionDescriptor.ofVoid(ptr, ptr,
+            ptr);
+    private static final FunctionDescriptor fd_descriptor = FunctionDescriptor.ofVoid(ptr, i32,
+            ptr);
+    private static final FunctionDescriptor focus_descriptor = FunctionDescriptor.ofVoid(ptr, bool,
+            ptr);
+    private static final FunctionDescriptor key_event_descriptor = FunctionDescriptor.of(bool, ptr,
+            i32, i32, ptr, ptr);
+    private static final FunctionDescriptor pointer_descriptor = FunctionDescriptor.of(bool, ptr,
+            ptr, ptr);
+    private static final FunctionDescriptor ime_commit_descriptor = FunctionDescriptor.ofVoid(ptr,
+            ptr, ptr);
+    private static final FunctionDescriptor ime_preedit_descriptor = FunctionDescriptor.ofVoid(ptr,
+            ptr, i32, i32, ptr);
     private static final FunctionDescriptor a11y_descriptor = FunctionDescriptor.ofVoid(ptr, ptr,
             i32, ptr);
     private static final FunctionDescriptor dialog_descriptor = FunctionDescriptor.ofVoid(ptr, ptr);
@@ -1487,6 +1625,105 @@ public final class Pt {
             return linker.upcallStub(target.bindTo(handler), key_descriptor, arena);
         } catch (ReflectiveOperationException error) {
             throw new IllegalArgumentException("cannot create key callback", error);
+        }
+    }
+
+    private static MemorySegment paint_upcall(PaintHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findVirtual(PaintHandler.class, "handle",
+                    MethodType.methodType(void.class, MemorySegment.class, MemorySegment.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), paint_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create paint callback", error);
+        }
+    }
+
+    private static MemorySegment fd_upcall(FdHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findVirtual(FdHandler.class, "handle",
+                    MethodType.methodType(void.class, MemorySegment.class, int.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), fd_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create fd callback", error);
+        }
+    }
+
+    private static MemorySegment focus_upcall(FocusHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findVirtual(FocusHandler.class, "handle",
+                    MethodType.methodType(void.class, MemorySegment.class, boolean.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), focus_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create focus callback", error);
+        }
+    }
+
+    private static boolean key_event_bridge(KeyEventHandler handler, MemorySegment window,
+            int key, int modifiers, MemorySegment utf8, MemorySegment data) {
+        return handler.handle(window, key, modifiers, nativeText(utf8), data);
+    }
+
+    private static MemorySegment key_event_upcall(KeyEventHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class, "key_event_bridge",
+                    MethodType.methodType(boolean.class, KeyEventHandler.class,
+                            MemorySegment.class, int.class, int.class, MemorySegment.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), key_event_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create key event callback", error);
+        }
+    }
+
+    private static boolean pointer_bridge(PointerHandler handler, MemorySegment window,
+            MemorySegment event, MemorySegment data) {
+        return handler.handle(window, PointerEvent.read(event), data);
+    }
+
+    private static MemorySegment pointer_upcall(PointerHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class, "pointer_bridge",
+                    MethodType.methodType(boolean.class, PointerHandler.class,
+                            MemorySegment.class, MemorySegment.class, MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), pointer_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create pointer callback", error);
+        }
+    }
+
+    private static void ime_commit_bridge(ImeCommitHandler handler, MemorySegment window,
+            MemorySegment text, MemorySegment data) {
+        handler.handle(window, nativeText(text), data);
+    }
+
+    private static MemorySegment ime_commit_upcall(ImeCommitHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class, "ime_commit_bridge",
+                    MethodType.methodType(void.class, ImeCommitHandler.class,
+                            MemorySegment.class, MemorySegment.class, MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), ime_commit_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create IME commit callback", error);
+        }
+    }
+
+    private static void ime_preedit_bridge(ImePreeditHandler handler, MemorySegment window,
+            MemorySegment text, int cursor_begin, int cursor_end, MemorySegment data) {
+        handler.handle(window, nativeText(text), cursor_begin, cursor_end, data);
+    }
+
+    private static MemorySegment ime_preedit_upcall(ImePreeditHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class, "ime_preedit_bridge",
+                    MethodType.methodType(void.class, ImePreeditHandler.class,
+                            MemorySegment.class, MemorySegment.class, int.class, int.class,
+                            MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), ime_preedit_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create IME preedit callback", error);
         }
     }
 
@@ -1985,6 +2222,17 @@ public final class Pt {
         invoke(app_cancel_timeout, app, timer_id);
     }
 
+    public static long app_watch_fd(MemorySegment app, int fd, int events, FdHandler handler,
+            Arena arena) {
+        Objects.requireNonNull(handler, "handler");
+        MemorySegment stub = fd_upcall(handler, arena);
+        return (long) invoke(app_watch_fd, app, fd, events, stub, MemorySegment.NULL);
+    }
+
+    public static void app_unwatch_fd(MemorySegment app, long watch_id) {
+        invoke(app_unwatch_fd, app, watch_id);
+    }
+
     public static void app_set_a11y_handler(MemorySegment app, A11yHandler handler, Arena arena) {
         MemorySegment stub = handler == null ? MemorySegment.NULL : a11y_upcall(handler, arena);
         invoke(app_set_a11y_callback, app, stub, MemorySegment.NULL);
@@ -2111,6 +2359,199 @@ public final class Pt {
             return text.reinterpret(Long.MAX_VALUE).getString(0);
         } finally {
             invoke(free, text);
+        }
+    }
+
+    public static boolean window_primary_set(MemorySegment window, String text) {
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(window_primary_set, window,
+                    text == null ? MemorySegment.NULL : cstring(arena, text));
+        }
+    }
+
+    public static String window_primary_get(MemorySegment window) {
+        MemorySegment text = (MemorySegment) invoke(window_primary_get, window);
+        if (text.address() == 0) {
+            return "";
+        }
+        try {
+            return text.reinterpret(Long.MAX_VALUE).getString(0);
+        } finally {
+            invoke(free, text);
+        }
+    }
+
+    public static void window_set_focus_handler(MemorySegment window, FocusHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL : focus_upcall(handler, arena);
+        invoke(window_set_focus_callback, window, stub, MemorySegment.NULL);
+    }
+
+    public static void window_set_key_event_handler(MemorySegment window, KeyEventHandler handler,
+            Arena arena) {
+        MemorySegment stub =
+                handler == null ? MemorySegment.NULL : key_event_upcall(handler, arena);
+        invoke(window_set_key_event_callback, window, stub, MemorySegment.NULL);
+    }
+
+    public static void window_set_pointer_handler(MemorySegment window, PointerHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL : pointer_upcall(handler, arena);
+        invoke(window_set_pointer_callback, window, stub, MemorySegment.NULL);
+    }
+
+    public static void window_set_ime_callbacks(MemorySegment window, ImeCommitHandler commit,
+            ImePreeditHandler preedit, Arena arena) {
+        MemorySegment commit_stub =
+                commit == null ? MemorySegment.NULL : ime_commit_upcall(commit, arena);
+        MemorySegment preedit_stub =
+                preedit == null ? MemorySegment.NULL : ime_preedit_upcall(preedit, arena);
+        invoke(window_set_ime_callbacks, window, commit_stub, preedit_stub, MemorySegment.NULL);
+    }
+
+    public static void window_set_ime_enabled(MemorySegment window, boolean enabled) {
+        invoke(window_set_ime_enabled, window, enabled);
+    }
+
+    public static void window_set_ime_cursor_rect(MemorySegment window, int x, int y, int width,
+            int height) {
+        invoke(window_set_ime_cursor_rect, window, x, y, width, height);
+    }
+
+    /**
+     * Paints one full window frame offscreen at scale 1.0 into {@code pixels}
+     * and copies the result back. Each word is 0xAARRGGBB. Returns false when
+     * the window is NULL or the size is invalid; a buffer smaller than
+     * {@code width * height} is rejected before the call.
+     */
+    public static boolean window_paint_pixels(MemorySegment window, int[] pixels, int width,
+            int height) {
+        Objects.requireNonNull(pixels, "pixels");
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        long count = (long) width * height;
+        if (count > pixels.length) {
+            throw new IllegalArgumentException("pixel buffer has fewer entries than width * height");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buffer = arena.allocate(ValueLayout.JAVA_INT, count);
+            boolean painted =
+                    (boolean) invoke(window_paint_pixels, window, buffer, width, height);
+            if (painted) {
+                System.arraycopy(buffer.toArray(ValueLayout.JAVA_INT), 0, pixels, 0, (int) count);
+            }
+            return painted;
+        }
+    }
+
+    /* ---------- custom paint context ---------- */
+
+    public static float paint_width(MemorySegment context) {
+        return (float) invoke(paint_width, context);
+    }
+
+    public static float paint_height(MemorySegment context) {
+        return (float) invoke(paint_height, context);
+    }
+
+    public static float paint_scale(MemorySegment context) {
+        return (float) invoke(paint_scale, context);
+    }
+
+    /** Returns the damage clip as {@code {x, y, width, height}}, or null if empty. */
+    public static float[] paint_clip_rect(MemorySegment context) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment x = arena.allocate(f32);
+            MemorySegment y = arena.allocate(f32);
+            MemorySegment width = arena.allocate(f32);
+            MemorySegment height = arena.allocate(f32);
+            boolean found = (boolean) invoke(paint_clip_rect, context, x, y, width, height);
+            if (!found) {
+                return null;
+            }
+            return new float[] {x.get(f32, 0), y.get(f32, 0), width.get(f32, 0),
+                    height.get(f32, 0)};
+        }
+    }
+
+    public static void paint_push_clip(MemorySegment context, float x, float y, float width,
+            float height) {
+        invoke(paint_push_clip, context, x, y, width, height);
+    }
+
+    public static void paint_pop_clip(MemorySegment context) {
+        invoke(paint_pop_clip, context);
+    }
+
+    public static void paint_fill_rect(MemorySegment context, float x, float y, float width,
+            float height, int color) {
+        invoke(paint_fill_rect, context, x, y, width, height, color);
+    }
+
+    public static void paint_fill_rounded_rect(MemorySegment context, float x, float y,
+            float width, float height, float radius, int color) {
+        invoke(paint_fill_rounded_rect, context, x, y, width, height, radius, color);
+    }
+
+    public static void paint_stroke_rect(MemorySegment context, float x, float y, float width,
+            float height, float line_width, int color) {
+        invoke(paint_stroke_rect, context, x, y, width, height, line_width, color);
+    }
+
+    public static void paint_draw_line(MemorySegment context, float x0, float y0, float x1,
+            float y1, float line_width, int color) {
+        invoke(paint_draw_line, context, x0, y0, x1, y1, line_width, color);
+    }
+
+    public static void paint_draw_text(MemorySegment context, String family, float size,
+            int weight, int slant, float x, float baseline, String text, int color) {
+        Objects.requireNonNull(family, "family");
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
+            invoke(paint_draw_text, context, cstring(arena, family), size, weight, slant, x,
+                    baseline, cstring(arena, text), (long) encoded.length, color);
+        }
+    }
+
+    public static boolean paint_font_has_glyph(MemorySegment context, String family, float size,
+            int codepoint) {
+        Objects.requireNonNull(family, "family");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(paint_font_has_glyph, context, cstring(arena, family), size,
+                    codepoint);
+        }
+    }
+
+    public static float paint_measure_text(MemorySegment context, String family, float size,
+            int weight, int slant, String text) {
+        Objects.requireNonNull(family, "family");
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
+            return (float) invoke(paint_measure_text, context, cstring(arena, family), size,
+                    weight, slant, cstring(arena, text), (long) encoded.length);
+        }
+    }
+
+    /** Returns logical font metrics, or null when the font cannot be resolved. */
+    public static FontMetrics paint_font_metrics(MemorySegment context, String family, float size,
+            int weight, int slant) {
+        Objects.requireNonNull(family, "family");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment ascent = arena.allocate(f32);
+            MemorySegment descent = arena.allocate(f32);
+            MemorySegment line_height = arena.allocate(f32);
+            MemorySegment cell_width = arena.allocate(f32);
+            boolean resolved = (boolean) invoke(paint_font_metrics, context,
+                    cstring(arena, family), size, weight, slant, ascent, descent, line_height,
+                    cell_width);
+            if (!resolved) {
+                return null;
+            }
+            return new FontMetrics(ascent.get(f32, 0), descent.get(f32, 0),
+                    line_height.get(f32, 0), cell_width.get(f32, 0));
         }
     }
 
@@ -2573,6 +3014,25 @@ public final class Pt {
             ++length;
         }
         return new String(raw, 0, length, StandardCharsets.UTF_8);
+    }
+
+    public static void widget_set_paint_callback(MemorySegment widget, PaintHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL : paint_upcall(handler, arena);
+        invoke(widget_set_paint_callback, widget, stub, MemorySegment.NULL);
+    }
+
+    public static void widget_clear_paint_callback(MemorySegment widget) {
+        invoke(widget_clear_paint_callback, widget);
+    }
+
+    public static void widget_request_redraw(MemorySegment widget) {
+        invoke(widget_request_redraw, widget);
+    }
+
+    public static void widget_request_redraw_rect(MemorySegment widget, float x, float y,
+            float width, float height) {
+        invoke(widget_request_redraw_rect, widget, x, y, width, height);
     }
 
     public static void widget_set_input_purpose(MemorySegment widget, int purpose) {
