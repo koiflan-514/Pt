@@ -312,6 +312,57 @@ char *pt_window_clipboard_get(pt_window *window) {
     return pt_platform_clipboard_get(window);
 }
 
+bool pt_window_clipboard_set_image_png(pt_window *window, const pt_color *pixels, int width,
+                                       int height) {
+    if (!window || !pixels || width <= 0 || height <= 0) {
+        pt_set_error("invalid clipboard image arguments");
+        return false;
+    }
+    if (width > pt_clipboard_image_max_dimension ||
+        height > pt_clipboard_image_max_dimension) {
+        pt_set_error("clipboard image dimensions exceed %d",
+                     pt_clipboard_image_max_dimension);
+        return false;
+    }
+    size_t size = 0;
+    uint8_t *png = pt_png_encode_argb_premultiplied(pixels, width, height, &size);
+    if (!png) {
+        return false;
+    }
+    bool ok = pt_platform_clipboard_set_data(window, "image/png", png, size);
+    free(png);
+    return ok;
+}
+
+pt_color *pt_window_clipboard_get_image_png(pt_window *window, int *width, int *height) {
+    if (!window) {
+        if (width) {
+            *width = 0;
+        }
+        if (height) {
+            *height = 0;
+        }
+        pt_set_error("invalid clipboard image arguments");
+        return NULL;
+    }
+    return pt_platform_clipboard_get_image(window, width, height);
+}
+
+bool pt_window_clipboard_set_uri_list(pt_window *window, const char *const *uris,
+                                      uint32_t count) {
+    if (!window || !uris || count == 0) {
+        pt_set_error("invalid text/uri-list clipboard arguments");
+        return false;
+    }
+    char *list = pt_uri_list_encode(uris, count);
+    if (!list) {
+        return false;
+    }
+    bool ok = pt_platform_clipboard_set_data(window, "text/uri-list", list, strlen(list));
+    free(list);
+    return ok;
+}
+
 bool pt_window_primary_set(pt_window *window, const char *text) {
     if (!window || window->primary_serial == 0) {
         return false;

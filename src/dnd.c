@@ -906,6 +906,148 @@ char *pt_uri_list_get(const char *text, uint32_t index) {
     return NULL;
 }
 
+#define pt_uri_list_max_bytes (16u * 1024u * 1024u)
+#define pt_uri_list_max_entries 4096u
+
+static bool uri_has_scheme(const char *text) {
+    if (!text || !((text[0] >= 'A' && text[0] <= 'Z') ||
+                   (text[0] >= 'a' && text[0] <= 'z'))) {
+        return false;
+    }
+    for (size_t i = 1; text[i]; ++i) {
+        char c = text[i];
+        if (c == ':') {
+            return true;
+        }
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.')) {
+            return false;
+        }
+    }
+    return false;
+}
+
+static bool uri_is_plain(const char *text) {
+    for (const unsigned char *cursor = (const unsigned char *)text; *cursor; ++cursor) {
+        if (*cursor < 0x20u || *cursor == 0x7Fu) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool uri_reserve(char **buffer, size_t *capacity, size_t needed) {
+    if (needed > pt_uri_list_max_bytes) {
+        pt_set_error("text/uri-list exceeds the clipboard limit");
+        return false;
+    }
+    while (*capacity <= needed) {
+        size_t next = *capacity * 2u;
+        if (next > pt_uri_list_max_bytes) {
+            next = pt_uri_list_max_bytes;
+        }
+        if (next <= *capacity) {
+            break;
+        }
+        *capacity = next;
+    }
+    *buffer = pt_realloc_mem(*buffer, *capacity);
+    return true;
+}
+
+static void uri_append_percent(char *buffer, size_t *length, unsigned char byte) {
+    static const char hex[] = "0123456789ABCDEF";
+    buffer[(*length)++] = '%';
+    buffer[(*length)++] = hex[byte >> 4];
+    buffer[(*length)++] = hex[byte & 0x0Fu];
+}
+
+/* Encodes a list of absolute filesystem paths, or already-formed URIs, into a
+ * CRLF-separated text/uri-list payload. Path components are percent-encoded
+ * (UTF-8 bytes included) and prefixed with file://; an entry that already
+ * carries a URI scheme is copied verbatim so a pre-encoded file:// URI is not
+ * double-encoded. The caller owns the returned string (release with free). */
+char *pt_uri_list_encode(const char *const *uris, uint32_t count) {
+    if (!uris || count == 0 || count > pt_uri_list_max_entries) {
+        pt_set_error("a non-empty URI list is required");
+        return NULL;
+    }
+    size_t capacity = 256;
+    size_t length = 0;
+    char *buffer = pt_alloc(capacity);
+    for (uint32_t i = 0; i < count; ++i) {
+        const char *entry = uris[i];
+        if (!entry || entry[0] == '\0' || !uri_is_plain(entry)) {
+            free(buffer);
+            pt_set_error("invalid text/uri-list entry");
+            return NULL;
+        }
+        size_t entry_length = strlen(entry);
+        bool has_scheme = uri_has_scheme(entry);
+        if (!has_scheme && entry[0] != '/') {
+            free(buffer);
+            pt_set_error("text/uri-list paths must be absolute");
+            return NULL;
+        }
+        /* Percent encoding expands one byte to three, so reserve the worst
+         * case plus "file://" and CRLF before writing. */
+        size_t needed = 0;
+        if (has_scheme) {
+            if (entry_length > pt_uri_list_max_bytes ||
+                length > pt_uri_list_max_bytes - entry_length) {
+                free(buffer);
+                pt_set_error("text/uri-list exceeds the clipboard limit");
+                return NULL;
+            }
+            needed = length + entry_length + 2u;
+        } else {
+            size_t encoded = entry_length * 3u;
+            if (entry_length > pt_uri_list_max_bytes / 3u ||
+                encoded > pt_uri_list_max_bytes - 9u ||
+                length > pt_uri_list_max_bytes - 9u - encoded) {
+                free(buffer);
+                pt_set_error("text/uri-list exceeds the clipboard limit");
+                return NULL;
+            }
+            needed = length + 9u + encoded;
+        }
+        if (needed >= pt_uri_list_max_bytes) {
+            free(buffer);
+            pt_set_error("text/uri-list exceeds the clipboard limit");
+            return NULL;
+        }
+        if (!uri_reserve(&buffer, &capacity, needed)) {
+            free(buffer);
+            return NULL;
+        }
+        if (has_scheme) {
+            memcpy(buffer + length, entry, entry_length);
+            length += entry_length;
+        } else {
+            static const char prefix[] = "file://";
+            memcpy(buffer + length, prefix, sizeof(prefix) - 1u);
+            length += sizeof(prefix) - 1u;
+            for (const unsigned char *cursor = (const unsigned char *)entry; *cursor;
+                 ++cursor) {
+                unsigned char byte = *cursor;
+                bool plain = (byte >= 'A' && byte <= 'Z') ||
+                             (byte >= 'a' && byte <= 'z') ||
+                             (byte >= '0' && byte <= '9') || byte == '-' ||
+                             byte == '.' || byte == '_' || byte == '~' || byte == '/';
+                if (plain) {
+                    buffer[length++] = (char)byte;
+                } else {
+                    uri_append_percent(buffer, &length, byte);
+                }
+            }
+        }
+        buffer[length++] = '\r';
+        buffer[length++] = '\n';
+    }
+    buffer[length] = '\0';
+    return buffer;
+}
+
 void pt_window_set_drag_image(pt_window *window, const pt_color *pixels, int width, int height) {
     if (!window) {
         return;

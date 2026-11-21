@@ -241,7 +241,9 @@ struct pt_platform {
     float axis_velocity;
     bool axis_momentum_armed;
 
-    char *clipboard_text;
+    char *clipboard_mime;
+    char *clipboard_data;
+    size_t clipboard_size;
     char *pending_preedit;
     char *pending_commit;
     int32_t pending_preedit_begin;
