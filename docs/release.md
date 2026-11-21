@@ -997,17 +997,17 @@ close; this record is inside the release archive, so it does not quote a digest.
 
 ## 1.2.0 validation record (2026-11-22)
 
-Environment: the integrated `m19/integration` tree at `a5179a1` on the reference
+Environment: the integrated `m19/integration` tree at `859233f` on the reference
 machine (CachyOS, Wayland, niri 26.04) with the 1.0 toolchain (GCC 16.2.1,
-Python 3.14.8, OpenJDK 25.0.2), plus the docs branch that carries the version
-bump, the generated reference and the bilingual guides. The four wave-1
-branches, the wave-2 picker and icon branches and the stub generator were merged
-before this record; the three-language wrappers, their tests, the 1.2 examples
-and the final gate are the parallel integration work that closes the tag.
+Python 3.14.8, OpenJDK 25.0.2). The four wave-1 branches, the wave-2 picker and
+icon branches, the stub generator, the three-language wrappers, the 1.2
+examples (`0c6b1f7`, `f013ac3`) and the docs branch that carries the version
+bump, the generated reference and the bilingual guides are merged on this tree.
 
-The shared C surface, tests and documentation are complete on this tree. Figures
-marked `pending final gate run` are deliberately not quoted from an earlier
-release; they are filled in by the final gate pass.
+Every figure below was measured by the final gate pass on `859233f`:
+`tools/ci.sh` run to completion (exit 0) and `tools/release-check.sh --full`.
+None is quoted from an earlier release. Only the annotated tag is left to the
+repository owner.
 
 ### Scope
 
@@ -1076,15 +1076,15 @@ observable behaviour must be listed here before the tag.
 | Version agreement | pass: `include/pt/base.h`, `Makefile` `VERSION`, README and the generated reference all say 1.2.0; SONAME `libpt.so.1` |
 | API baseline | pass: `api/pt.api` 554 functions / 907 entries; the reference names all 554 baseline functions |
 | Since audit | pass: 554/554 declarations carry Since 1.0/1.1/1.2; generated entries expose them |
-| C suites (headless) | pass: 34 suites, 6,913 checks; `test_popup` 314, `test_font_fallback` 131, `test_clipboard_media` 871, `test_column_persist` 1,390, `test_picker` 550, `test_icon` 178 |
+| C suites (headless) | pass: 35 suites, 6,913 checks; `test_popup` 314, `test_font_fallback` 131, `test_clipboard_media` 871, `test_column_persist` 1,390, `test_picker` 550, `test_icon` 178 |
 | ABI pins | pass: `tests/test_abi.c` 13 checks, including the new popup/icon/picker limits and `pt_date` offsets |
 | Bilingual documentation | pass: 9 public guides, no structural drift; code blocks byte-identical |
-| Binding parity | pending final gate run: target 554/554 in C++/Python/Java with an empty allowlist |
-| `make check` / `make check-bindings` | pending final gate run |
-| `make perf-check` | pending final gate run |
-| Live Wayland / live typing | pending final gate run |
-| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pending final gate run |
-| `tools/release-check.sh --full` | pending final gate run; on this tree the non-full report passes version, baseline, reference, examples and bilingual gates and reports the in-flight parity gap (106 functions per language) plus the two human items |
+| Binding parity | pass: 554/554 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted; the 0.6-0.10 surface audits are complete |
+| `make check` / `make check-bindings` | pass: all C suites green, C++ 763 checks, Python 64 tests, Java 620 checks, 0 failures; exported-symbol, baseline and generated-reference audits clean |
+| `make perf-check` | pass: every guard ceiling holds; dense full paint 6.078 ms, 4K full paint 8.571 ms, first frame 13.494 ms, idle 300 ms CPU 0.451 ms (startup bench: first frame 12.40 ms, idle 500 ms CPU 0.772 ms) |
+| Live Wayland / live typing | pass under niri: `check-wayland` 48 checks, focused-entry idle guard 26.6 ms over 5000 ms after one external-input retry; `check-typing` PASS live typing (ptdirect, text-input-v3) |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pass: ASan+UBSan C suites with leak detection plus sanitized C++ 763 / Python 64 / Java 620, 0 failures; staged install reports SONAME `libpt.so.1`, pkg-config 1.2.0, exported ABI matching the baseline, C/C++/Python/Java consumers and uninstall; two `make dist` runs reproduced sha256 `54ce8abd…c521ac` (sidecar matches), the extracted tree rebuilt with `werror=1` and passed `make check`; `tools/ci.sh` exited 0 with `CI verification passed for Pt 1.2.0` |
+| `tools/release-check.sh --full` | automated gates pass for 1.2.0; two human items remain (freeze commit/tag, live-suite sign-off — the live suites above were run on this tree) |
 
 ### ABI statement
 
@@ -1095,12 +1095,30 @@ opaque handles (`pt_popup`, `pt_icon_image`), plus the documented limit macros.
 No existing enum value, struct field order or signature changed.
 `tests/test_abi.c` pins the new caps, the date field offsets, the popup
 placement values, the anchor layout and the callback pointer widths.
-`abidiff` (libabigail) is still not installed on the reference machine, so the
-release-time comparison is symbol-level: `nm -D --defined-only` on the 1.1.0 tag
-build and the 1.2.0 build is expected to show 448 → 554 exported `pt_*` symbols,
-**0 removed, 106 added**, and `readelf -d` keeps SONAME `libpt.so.1`. The actual
-counts and output belong to the final gate record; run `abidiff` where libabigail
-is available.
+`abidiff` (libabigail) is still not installed on the reference machine (there is
+no `libabigail` package and no elevated privileges to add one), so the
+release-time comparison was done at the symbol level instead: `nm -D
+--defined-only` on a fresh `make lib` build of the `1.1.0` tag (`e6ba0c1`,
+checked out in a temporary worktree) and on the 1.2.0 build shows **448 → 554**
+exported `pt_*` symbols, **0 removed, 106 added**, with no symbol type changes
+among the 448 common symbols; `readelf -d` confirms SONAME stays `libpt.so.1`
+on both. The 106 additions group as 70 picker functions, 12 icon-image
+functions (7 `pt_icon_image_*`, 3 button image/tint, 2 window icon), 10 popup
+functions, 7 font-fallback functions, 4 column-persistence functions and 3
+clipboard-media functions (plus the limit macros, the two structs, the two
+enums, the three callback typedefs and the two opaque handles that add no
+symbols). A type-level comparison with `abidiff` is still recommended on a
+machine that has libabigail before publishing.
+
+### Final integration surface
+
+The three-language wrappers, their dispatch tests and the 1.2 examples are on
+this tree. `bindings/cpp`, `bindings/python` and `bindings/java` cover 554/554
+with an empty allowlist (C++ 763 checks, Python 64 tests, Java 620 checks), and
+13 new examples exercise the new surface in all four languages: `0c6b1f7` adds
+the six C demos (popup, pickers, icon button, clipboard image, font fallback,
+column persistence) and `f013ac3` adds the C++ pickers/popup, Python
+pickers/popup and Java pickers/popup/icon ports.
 
 ### Known issues
 
@@ -1120,20 +1138,18 @@ is available.
 - Pickers are locale-independent by design (explicit date picture, `.` decimal
   separator, hex colour). Localized month and group separators are the
   application's responsibility.
-- The 1.2 examples are not in the tree yet; no example exercises popups,
-  pickers, icon images, clipboard media, font fallback or column persistence.
-  The Java demos are the explicit gap for the final integration.
-- The three-language wrappers and their dispatch tests are in flight. The
-  parity target is 554/554 with an empty allowlist; `make check` is the
-  authority.
 - M18's `preedit_hint` presentation and
   `show_input_panel`/`hide_input_panel` remain deferred; the custom IME event
   surface and full-state resend are unchanged.
 - Binding raw-callback dispatch assertions still need a live seat; registration
   and callback-free paths are headless-tested for all three bindings.
 
-The annotated tag is created from the final gate tree after the pending items
-close; this record is inside the release archive, so it does not quote a digest.
+The annotated tag is created from the final gate tree once the owner confirms the
+freeze. Because this record ships inside the release archive, editing it changes
+the archive digest: the sha256 quoted above is what the full gate measured for
+`859233f`, and `make dist` on the tagged tree reproduces its own digest exactly
+— re-measure there rather than trusting a digest quoted from inside the
+archive.
 
 ## Packaging notes
 
