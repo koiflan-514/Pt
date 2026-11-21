@@ -71,7 +71,64 @@ public final class PtTest {
                 java.nio.file.Path.of("/proc/self/fd", Integer.toString(fd)));
     }
 
-    public static void main(String[] args) {
+    private static void putBe32(java.io.ByteArrayOutputStream out, int value) {
+        out.write(value >>> 24);
+        out.write(value >>> 16);
+        out.write(value >>> 8);
+        out.write(value);
+    }
+
+    private static void pngChunk(java.io.ByteArrayOutputStream out, String type, byte[] data) {
+        putBe32(out, data.length);
+        byte[] tag = type.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        out.write(tag, 0, tag.length);
+        out.write(data, 0, data.length);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(tag);
+        crc.update(data);
+        putBe32(out, (int) crc.getValue());
+    }
+
+    /**
+     * Encodes premultiplied ARGB pixels as an 8-bit RGBA PNG. The headless
+     * clipboard and icon decoders reject anything but a real PNG, so the tests
+     * build one with the JDK's own deflater instead of shipping a fixture.
+     */
+    private static byte[] png(int width, int height, int[] pixels) throws Exception {
+        int stride = width * 4;
+        byte[] raw = new byte[(stride + 1) * height];
+        for (int y = 0; y < height; y++) {
+            int row = y * (stride + 1);
+            raw[row] = 0;
+            for (int x = 0; x < width; x++) {
+                int pixel = pixels[y * width + x];
+                int at = row + 1 + x * 4;
+                raw[at] = (byte) (pixel >>> 16);
+                raw[at + 1] = (byte) (pixel >>> 8);
+                raw[at + 2] = (byte) pixel;
+                raw[at + 3] = (byte) (pixel >>> 24);
+            }
+        }
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+        deflater.setInput(raw);
+        deflater.finish();
+        byte[] compressed = new byte[raw.length + 256];
+        int length = deflater.deflate(compressed);
+        deflater.end();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(new byte[] {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'});
+        byte[] header = {
+            (byte) (width >>> 24), (byte) (width >>> 16), (byte) (width >>> 8), (byte) width,
+            (byte) (height >>> 24), (byte) (height >>> 16), (byte) (height >>> 8), (byte) height,
+            8, 6, 0, 0, 0,
+        };
+        pngChunk(out, "IHDR", header);
+        pngChunk(out, "IDAT", java.util.Arrays.copyOf(compressed, length));
+        pngChunk(out, "IEND", new byte[0]);
+        return out.toByteArray();
+    }
+
+    public static void main(String[] args) throws Exception {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment app = Pt.app_create("pt.tests.java");
             check(app.address() != 0, "app_create");
@@ -1147,6 +1204,278 @@ public final class PtTest {
             check(fired[0], "timer fired");
             check(!cancelled[0], "timer cancelled");
             check(Pt.window_is_open(window), "window open");
+
+            /* ---------- 1.2 popups, fallbacks, clipboard, columns, icons ---------- */
+
+            /* Application-owned popups. */
+            check(Pt.popup_max_open == 16, "popup max open constant");
+            MemorySegment popupContent = Pt.box(MemorySegment.NULL, Pt.direction_column);
+            MemorySegment popup = Pt.popup_create(window, popupContent);
+            check(popup.address() != 0, "popup create");
+            check(!Pt.popup_is_open(popup), "popup starts closed");
+            check(Pt.popup_content(popup).address() == popupContent.address(), "popup content");
+            check(Pt.popup_get_placement(popup) == Pt.popup_placement_below,
+                    "popup placement default");
+            check(Pt.popup_show(popup, new Pt.PopupAnchor(100.0f, 80.0f, 40.0f, 20.0f)),
+                    "popup show");
+            check(Pt.popup_is_open(popup), "popup open");
+            check(Pt.popup_show(popup, new Pt.PopupAnchor(120.0f, 90.0f, 0.0f, 0.0f)),
+                    "popup re-show reposition");
+            check(Pt.popup_reposition(popup, new Pt.PopupAnchor(40.0f, 60.0f, 10.0f, 10.0f)),
+                    "popup reposition open");
+            Pt.popup_set_placement(popup, Pt.popup_placement_above);
+            check(Pt.popup_get_placement(popup) == Pt.popup_placement_above,
+                    "popup placement above");
+            Pt.popup_set_placement(popup, 99);
+            check(Pt.popup_get_placement(popup) == Pt.popup_placement_below,
+                    "popup invalid placement falls back");
+            final int[] popupDismissals = {0};
+            final long[] popupDismissHandle = {0};
+            final boolean[] popupClosedInCallback = {false};
+            Pt.popup_set_on_dismiss(popup, (target, data) -> {
+                popupDismissals[0] += 1;
+                popupDismissHandle[0] = target.address();
+                popupClosedInCallback[0] = !Pt.popup_is_open(target);
+            }, arena);
+            Pt.popup_dismiss(popup);
+            check(popupDismissals[0] == 1, "popup dismiss callback");
+            check(popupDismissHandle[0] == popup.address(), "popup dismiss handle");
+            check(popupClosedInCallback[0], "popup closed before callback");
+            check(!Pt.popup_is_open(popup), "popup closed");
+            Pt.popup_dismiss(popup);
+            check(popupDismissals[0] == 1, "popup dismiss closed is silent");
+            check(!Pt.popup_reposition(popup, new Pt.PopupAnchor(0.0f, 0.0f, 1.0f, 1.0f)),
+                    "popup reposition closed");
+            check(!Pt.popup_show(popup, new Pt.PopupAnchor(Float.NaN, 0.0f, 1.0f, 1.0f)),
+                    "popup NaN anchor rejected");
+            check(!Pt.popup_show(popup, new Pt.PopupAnchor(0.0f, 0.0f, -1.0f, 1.0f)),
+                    "popup negative anchor rejected");
+            check(!Pt.last_error().isEmpty(), "popup error recorded");
+            check(Pt.popup_show(popup, new Pt.PopupAnchor(10.0f, 10.0f, 5.0f, 5.0f)),
+                    "popup show after rejection");
+            Pt.popup_destroy(popup);
+            check(popupDismissals[0] == 1, "popup destroy silent");
+
+            /* A callback stub lives in its caller's arena; clearing it through
+             * the public setter before the next dismissal keeps a closed arena
+             * out of the native dispatch path. */
+            MemorySegment lifetimePopup = Pt.popup_create(window,
+                    Pt.box(MemorySegment.NULL, Pt.direction_column));
+            final int[] lifetimeDismissals = {0};
+            try (Arena callbackArena = Arena.ofConfined()) {
+                Pt.popup_set_on_dismiss(lifetimePopup,
+                        (target, data) -> lifetimeDismissals[0] += 1, callbackArena);
+                check(Pt.popup_show(lifetimePopup,
+                        new Pt.PopupAnchor(20.0f, 20.0f, 12.0f, 12.0f)),
+                        "popup lifetime show");
+                Pt.popup_dismiss(lifetimePopup);
+                check(lifetimeDismissals[0] == 1, "popup callback before arena close");
+            }
+            Pt.popup_set_on_dismiss(lifetimePopup, null, arena);
+            check(Pt.popup_show(lifetimePopup,
+                    new Pt.PopupAnchor(20.0f, 20.0f, 12.0f, 12.0f)), "popup lifetime re-show");
+            Pt.popup_dismiss(lifetimePopup);
+            check(lifetimeDismissals[0] == 1, "no callback after arena close");
+            Pt.popup_destroy(lifetimePopup);
+
+            /* Open-limit rejection and null tolerance. */
+            MemorySegment[] limitPopups = new MemorySegment[Pt.popup_max_open + 1];
+            for (int index = 0; index < limitPopups.length; index++) {
+                limitPopups[index] = Pt.popup_create(window,
+                        Pt.box(MemorySegment.NULL, Pt.direction_column));
+                check(limitPopups[index].address() != 0, "popup limit create");
+            }
+            for (int index = 0; index < Pt.popup_max_open; index++) {
+                check(Pt.popup_show(limitPopups[index],
+                        new Pt.PopupAnchor(20.0f + index, 20.0f, 8.0f, 8.0f)),
+                        "popup limit show");
+            }
+            check(!Pt.popup_show(limitPopups[Pt.popup_max_open],
+                    new Pt.PopupAnchor(20.0f, 20.0f, 8.0f, 8.0f)), "popup limit rejected");
+            check(!Pt.popup_is_open(limitPopups[Pt.popup_max_open]), "popup limit stays closed");
+            Pt.popup_dismiss(limitPopups[0]);
+            check(Pt.popup_show(limitPopups[Pt.popup_max_open],
+                    new Pt.PopupAnchor(20.0f, 20.0f, 8.0f, 8.0f)), "popup limit admits after close");
+            for (MemorySegment handle : limitPopups) {
+                Pt.popup_destroy(handle);
+            }
+            check(!Pt.popup_is_open(MemorySegment.NULL), "popup null is closed");
+            check(Pt.popup_content(MemorySegment.NULL).address() == 0, "popup null content");
+            Pt.popup_dismiss(MemorySegment.NULL);
+            Pt.popup_destroy(MemorySegment.NULL);
+
+            /* Font fallback chains and per-family overrides (UTF-8 names). */
+            Pt.app_set_font_fallbacks(app,
+                    new String[] {"Noto Sans CJK SC", "DejaVu Sans", "", "Noto Sans"});
+            check(Pt.app_get_font_fallback_count(app) == 3, "fallback blank skipped");
+            check(Pt.app_get_font_fallback(app, 0).equals("Noto Sans CJK SC"),
+                    "fallback first");
+            check(Pt.app_get_font_fallback(app, 2).equals("Noto Sans"), "fallback last");
+            check(Pt.app_get_font_fallback(app, 3) == null, "fallback out of range");
+            check(Pt.app_get_font_fallback(app, -1) == null, "fallback negative index");
+            String[] manyFallbacks = new String[10];
+            for (int index = 0; index < manyFallbacks.length; index++) {
+                manyFallbacks[index] = "fam" + index;
+            }
+            Pt.app_set_font_fallbacks(app, manyFallbacks);
+            check(Pt.app_get_font_fallback_count(app) == Pt.font_fallback_max_families,
+                    "fallback clamp");
+            check(Pt.app_get_font_fallback(app, 7).equals("fam7"), "fallback clamped last");
+            Pt.app_set_font_fallbacks(app, null);
+            check(Pt.app_get_font_fallback_count(app) == 0, "fallback reset");
+            String[] unicodeFallback = {"Noto Sans 汉字", "DejaVu Sans"};
+            Pt.app_set_font_fallbacks(app, unicodeFallback);
+            check(Pt.app_get_font_fallback(app, 0).equals("Noto Sans 汉字"),
+                    "fallback UTF-8 round trip");
+            Pt.app_set_font_fallbacks_for_family(app, "serif",
+                    new String[] {"Liberation Serif", "DejaVu Serif"});
+            check(Pt.app_get_font_fallback_count_for_family(app, "serif") == 2,
+                    "family fallback count");
+            check(Pt.app_get_font_fallback_for_family(app, "serif", 0)
+                    .equals("Liberation Serif"), "family fallback first");
+            check(Pt.app_get_font_fallback_for_family(app, "serif", 2) == null,
+                    "family fallback out of range");
+            check(Pt.app_get_font_fallback_count_for_family(app, "monospace") == 0,
+                    "family fallback isolation");
+            check(Pt.app_get_font_fallback_count(app) == 2, "family leaves app chain");
+            Pt.app_set_font_fallbacks_for_family(app, "serif", null);
+            check(Pt.app_get_font_fallback_count_for_family(app, "serif") == 0,
+                    "family fallback cleared");
+            check(Pt.app_font_uncovered_count(app, null, "") == 0, "uncovered empty text");
+            check(Pt.app_font_uncovered_count(app, null, "\u0378") == 1,
+                    "uncovered unassigned codepoint");
+            check(Pt.app_font_uncovered_count(app, "sans-serif", "\u0378") == 1,
+                    "uncovered explicit family");
+            Pt.app_set_font_fallbacks(app, null);
+            Pt.app_set_font_fallbacks_for_family(app, "serif", null);
+
+            /* Clipboard image and URI-list media. */
+            int[] clipboardPixels = {
+                0x00000000, 0x00FFFFFF, 0x01FFFFFF, 0x80402010,
+                0x7F3F1F0F, 0xFF102030, 0xFFFFFFFF, 0x80FF0000,
+            };
+            check(Pt.window_clipboard_set_image_png(window, clipboardPixels, 4, 2),
+                    "clipboard image set");
+            Pt.ClipboardImage decoded = Pt.window_clipboard_get_image_png(window);
+            check(decoded != null, "clipboard image get");
+            if (decoded != null) {
+                int[] clipboardExpected = {
+                    0x00000000, 0x00000000, 0x01010101, 0x80402010,
+                    0x7F3F1F0F, 0xFF102030, 0xFFFFFFFF, 0x80800000,
+                };
+                check(decoded.width() == 4 && decoded.height() == 2,
+                        "clipboard image dimensions");
+                check(decoded.pixels().length == 8, "clipboard image pixel count");
+                boolean same = true;
+                for (int index = 0; index < clipboardExpected.length; index++) {
+                    same &= decoded.pixels()[index] == clipboardExpected[index];
+                }
+                check(same, "clipboard image premultiplied round trip");
+            }
+            check(Pt.window_clipboard_get(window).isEmpty(), "image replaces text");
+            check(!Pt.window_clipboard_set_image_png(window, clipboardPixels, 0, 1),
+                    "clipboard image zero width");
+            check(!Pt.window_clipboard_set_image_png(window, clipboardPixels, -1, 1),
+                    "clipboard image negative width");
+            boolean shortBuffer = false;
+            try {
+                Pt.window_clipboard_set_image_png(window, clipboardPixels, 4, 3);
+            } catch (IllegalArgumentException error) {
+                shortBuffer = true;
+            }
+            check(shortBuffer, "clipboard image short buffer");
+            int[] oversized = new int[Pt.clipboard_image_max_dimension + 1];
+            check(!Pt.window_clipboard_set_image_png(window, oversized,
+                    Pt.clipboard_image_max_dimension + 1, 1), "clipboard image oversized");
+            check(Pt.window_clipboard_set_uri_list(window,
+                    new String[] {"/tmp/a b.txt", "https://example.test/x"}),
+                    "clipboard uri list set");
+            check(Pt.window_clipboard_get_image_png(window) == null,
+                    "uri list replaces image");
+            check(!Pt.window_clipboard_set_uri_list(window, new String[] {"relative.txt"}),
+                    "clipboard uri relative rejected");
+            check(!Pt.window_clipboard_set_uri_list(window, new String[0]),
+                    "clipboard uri empty rejected");
+            boolean nullUri = false;
+            try {
+                Pt.window_clipboard_set_uri_list(window, new String[] {null});
+            } catch (NullPointerException error) {
+                nullUri = true;
+            }
+            check(nullUri, "clipboard uri null entry");
+
+            /* Column persistence: keys, round trip, atomic rejection. */
+            MemorySegment sourceTable = Pt.table(column);
+            Pt.table_set_column_count(sourceTable, 3);
+            String[] columnKeys = {"id", "name", "size"};
+            for (int index = 0; index < columnKeys.length; index++) {
+                Pt.table_set_column_title(sourceTable, index,
+                        columnKeys[index].substring(0, 1).toUpperCase()
+                                + columnKeys[index].substring(1));
+                Pt.table_set_column_key(sourceTable, index, columnKeys[index]);
+            }
+            check(Pt.table_get_column_key(sourceTable, 1).equals("name"), "column key get");
+            check(Pt.table_get_column_key(sourceTable, 9).isEmpty(), "column key out of range");
+            Pt.table_set_column_width(sourceTable, 0, 90.0f);
+            Pt.table_set_column_width(sourceTable, 1, 220.5f);
+            Pt.table_set_column_width(sourceTable, 2, 77.25f);
+            Pt.table_set_column_hidden(sourceTable, 2, true);
+            Pt.table_set_sort_columns(sourceTable, new int[] {1},
+                    new int[] {Pt.sort_descending});
+            check(Pt.table_move_column(sourceTable, 0, 2), "column move");
+            String blob = Pt.table_columns_save(sourceTable);
+            check(blob.startsWith("PTCOLS 1"), "columns save magic");
+            check(blob.contains("6e616d65"), "columns save contains key");
+
+            MemorySegment targetTable = Pt.table(column);
+            Pt.table_set_column_count(targetTable, 3);
+            for (int index = 0; index < columnKeys.length; index++) {
+                Pt.table_set_column_key(targetTable, index, columnKeys[index]);
+            }
+            Pt.table_set_column_width(targetTable, 0, 10.0f);
+            check(Pt.table_columns_restore(targetTable, blob), "columns restore");
+            check(Pt.table_get_column_key(targetTable, 0).equals("name"),
+                    "columns restore order first");
+            check(Pt.table_get_column_key(targetTable, 2).equals("id"),
+                    "columns restore order last");
+            check(Math.abs(Pt.table_get_column_width(targetTable, 0) - 220.5f) < 0.001f,
+                    "columns restore width");
+            check(Pt.table_get_column_hidden(targetTable, 1), "columns restore hidden");
+            check(!Pt.table_get_column_hidden(targetTable, 0), "columns restore visible");
+            int[] restoredSort = Pt.table_get_sort_columns(targetTable);
+            check(restoredSort.length == 2 && restoredSort[0] == 0
+                    && restoredSort[1] == Pt.sort_descending, "columns restore sort");
+            check(Pt.table_columns_save(targetTable).equals(blob),
+                    "columns save is stable");
+            check(!Pt.table_columns_restore(targetTable, "not a layout"),
+                    "columns restore rejects malformed");
+            check(Math.abs(Pt.table_get_column_width(targetTable, 0) - 220.5f) < 0.001f,
+                    "columns restore rejection is atomic");
+            MemorySegment shortTable = Pt.table(column);
+            Pt.table_set_column_count(shortTable, 2);
+            Pt.table_set_column_key(shortTable, 0, "id");
+            Pt.table_set_column_key(shortTable, 1, "name");
+            check(!Pt.table_columns_restore(shortTable, blob), "columns restore count mismatch");
+            MemorySegment keyTable = Pt.table(column);
+            Pt.table_set_column_count(keyTable, 2);
+            Pt.table_set_column_key(keyTable, 0, "alpha");
+            Pt.table_set_column_key(keyTable, 1, "beta");
+            Pt.table_set_column_key(keyTable, 1, "alpha");
+            check(Pt.table_get_column_key(keyTable, 1).equals("beta"),
+                    "column duplicate key rejected");
+            String longKey = "x".repeat(70);
+            Pt.table_set_column_key(keyTable, 1, longKey);
+            check(Pt.table_get_column_key(keyTable, 1).length()
+                    == Pt.table_column_key_max, "column key truncation");
+            Pt.table_set_column_key(keyTable, 0, "标识");
+            check(Pt.table_get_column_key(keyTable, 0).equals("标识"),
+                    "column UTF-8 key");
+            MemorySegment notTable = Pt.label(column, "not a table");
+            check(Pt.table_columns_save(notTable).isEmpty(), "columns save non-table");
+            Pt.widget_destroy(sourceTable);
+            Pt.widget_destroy(targetTable);
+            Pt.widget_destroy(shortTable);
+            Pt.widget_destroy(keyTable);
 
             final boolean[] allowed = {false};
             Pt.window_set_close_handler(window, (target, data) -> allowed[0], arena);
