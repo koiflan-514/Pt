@@ -65,6 +65,12 @@ public final class PtTest {
         }
     }
 
+    /** True while the process still has an open descriptor with this number. */
+    private static boolean descriptorOpen(int fd) {
+        return java.nio.file.Files.exists(
+                java.nio.file.Path.of("/proc/self/fd", Integer.toString(fd)));
+    }
+
     public static void main(String[] args) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment app = Pt.app_create("pt.tests.java");
@@ -821,6 +827,41 @@ public final class PtTest {
             Pt.drop_stream_cancel(MemorySegment.NULL);
             check(!Pt.window_get_drag_active(window), "drag still idle after null streams");
 
+            /* Decoration requests and the maximize capability fallback. */
+            check(Pt.window_get_decoration_mode(window) == Pt.decoration_client,
+                    "decoration default client");
+            check(Pt.window_get_effective_decoration_mode(window) == Pt.decoration_client,
+                    "effective decoration default client");
+            Pt.window_set_decorated(window, false);
+            check(Pt.window_get_decoration_mode(window) == Pt.decoration_client,
+                    "set_decorated never requests SSD");
+            check(Pt.window_get_effective_decoration_mode(window) == Pt.decoration_client,
+                    "effective unaffected by set_decorated");
+            Pt.window_set_decorated(window, true);
+            Pt.window_set_decoration_mode(window, Pt.decoration_server);
+            check(Pt.window_get_decoration_mode(window) == Pt.decoration_server,
+                    "decoration server requested");
+            check(Pt.window_get_effective_decoration_mode(window) == Pt.decoration_server,
+                    "headless effective follows request");
+            Pt.window_set_decoration_mode(window, Pt.decoration_auto);
+            check(Pt.window_get_decoration_mode(window) == Pt.decoration_auto,
+                    "decoration auto requested");
+            check(Pt.window_get_effective_decoration_mode(window) == Pt.decoration_client,
+                    "auto falls back to client");
+            Pt.window_set_decoration_mode(window, 99);
+            check(Pt.window_get_decoration_mode(window) == Pt.decoration_auto,
+                    "invalid decoration mode ignored");
+            check(Pt.window_maximize(window), "maximize default resizable");
+            Pt.window_set_resizable(window, false);
+            check(!Pt.window_maximize(window), "maximize non-resizable rejected");
+            Pt.window_set_resizable(window, true);
+            check(Pt.window_maximize(window), "maximize resizable again");
+            check(!Pt.window_maximize(MemorySegment.NULL), "maximize null window");
+            check(Pt.window_get_decoration_mode(MemorySegment.NULL) == Pt.decoration_auto,
+                    "decoration null window");
+            check(Pt.window_get_effective_decoration_mode(MemorySegment.NULL)
+                    == Pt.decoration_auto, "effective decoration null window");
+
             /* Offscreen painting drives the custom-paint callback without a
              * compositor, so the whole paint context surface is exercised. */
             MemorySegment offscreen = Pt.window_create(app, "offscreen", 64, 48);
@@ -887,20 +928,98 @@ public final class PtTest {
                 short_buffer_rejected = true;
             }
             check(short_buffer_rejected, "paint buffer validation");
+
+            check(Pt.paint_pixels_desc_layout.byteSize() == 24, "paint descriptor layout");
+            check(Pt.PaintPixelsDesc.class.isRecord(), "paint descriptor is a record");
+            int[] tightPixels = new int[64 * 48];
+            check(Pt.window_paint_pixels_ex(offscreen, tightPixels, 64, 48),
+                    "paint ex default");
+            int[] paddedPixels = new int[64 * 48];
+            check(Pt.window_paint_pixels_ex(offscreen, paddedPixels, 64, 48,
+                    new Pt.PaintPixelsDesc(80, 0.0f)), "paint ex stride");
+            check(java.util.Arrays.equals(tightPixels, paddedPixels),
+                    "paint ex stride rows match tight snapshot");
+            int[] scaledPixels = new int[128 * 96];
+            check(Pt.window_paint_pixels_ex(offscreen, scaledPixels, 128, 96,
+                    new Pt.PaintPixelsDesc(0, 2.0f)), "paint ex scale 2");
+            boolean scaledMarked = false;
+            for (int pixel : scaledPixels) {
+                if (pixel == expected) {
+                    scaledMarked = true;
+                    break;
+                }
+            }
+            check(scaledMarked, "paint ex scale landed");
+            check(!Pt.window_paint_pixels_ex(MemorySegment.NULL, tightPixels, 64, 48),
+                    "paint ex null window");
+            check(!Pt.window_paint_pixels_ex(offscreen, tightPixels, 0, 48),
+                    "paint ex invalid width");
+            boolean ex_format_rejected = false;
+            try {
+                Pt.window_paint_pixels_ex(offscreen, tightPixels, 64, 48,
+                        new Pt.PaintPixelsDesc(0, 0.0f, 1, new int[3]));
+            } catch (IllegalArgumentException expectedError) {
+                ex_format_rejected = true;
+            }
+            check(ex_format_rejected, "paint ex format validation");
+            boolean ex_reserved_rejected = false;
+            try {
+                Pt.window_paint_pixels_ex(offscreen, tightPixels, 64, 48,
+                        new Pt.PaintPixelsDesc(0, 0.0f, 0, new int[] {1, 0, 0}));
+            } catch (IllegalArgumentException expectedError) {
+                ex_reserved_rejected = true;
+            }
+            check(ex_reserved_rejected, "paint ex reserved validation");
+            boolean ex_stride_rejected = false;
+            try {
+                Pt.window_paint_pixels_ex(offscreen, tightPixels, 64, 48,
+                        new Pt.PaintPixelsDesc(63, 0.0f));
+            } catch (IllegalArgumentException expectedError) {
+                ex_stride_rejected = true;
+            }
+            check(ex_stride_rejected, "paint ex stride validation");
+            boolean ex_scale_rejected = false;
+            try {
+                Pt.window_paint_pixels_ex(offscreen, tightPixels, 64, 48,
+                        new Pt.PaintPixelsDesc(0, -1.0f));
+            } catch (IllegalArgumentException expectedError) {
+                ex_scale_rejected = true;
+            }
+            check(ex_scale_rejected, "paint ex scale validation");
+            boolean ex_short_rejected = false;
+            try {
+                Pt.window_paint_pixels_ex(offscreen, new int[1], 64, 48);
+            } catch (IllegalArgumentException expectedError) {
+                ex_short_rejected = true;
+            }
+            check(ex_short_rejected, "paint ex buffer validation");
+            int callsBeforeClear = paint_calls[0];
+
             Pt.widget_request_redraw(Pt.window_root(offscreen));
             Pt.widget_request_redraw_rect(Pt.window_root(offscreen), 0.0f, 0.0f, 4.0f, 4.0f);
             Pt.widget_clear_paint_callback(Pt.window_root(offscreen));
             check(Pt.window_paint_pixels(offscreen, pixels, 64, 48), "paint after clear");
-            check(paint_calls[0] == 1, "paint callback cleared");
+            check(paint_calls[0] == callsBeforeClear, "paint callback cleared");
 
             /* Primary selection mirrors the clipboard ownership contract. */
             check(Pt.window_primary_get(window).isEmpty(), "primary empty");
-            check(Pt.window_primary_set(window, "middle-click text"), "primary set");
+            // A programmatic set has no triggering event serial: it publishes
+            // nothing and reports false. The explicit serial path is used
+            // from the pointer-release callback in a real application.
+            check(!Pt.window_primary_set(window, "middle-click text"),
+                    "programmatic primary rejected");
+            check(Pt.window_primary_get(window).isEmpty(), "primary untouched");
+            check(!Pt.window_primary_set_serial(window, "middle-click text", 0),
+                    "primary zero serial rejected");
+            check(Pt.window_primary_set_serial(window, "middle-click text", 7),
+                    "primary serial set");
             check(Pt.window_primary_get(window).equals("middle-click text"), "primary get");
-            check(Pt.window_primary_set(window, null), "primary clear");
+            check(Pt.window_primary_set_serial(window, "", 8), "primary clear");
             check(Pt.window_primary_get(window).isEmpty(), "primary cleared");
             check(!Pt.window_primary_set(MemorySegment.NULL, "no window"),
                     "primary null window");
+            check(!Pt.window_primary_set_serial(MemorySegment.NULL, "no window", 9),
+                    "primary null window serial");
             check(Pt.window_primary_get(MemorySegment.NULL).isEmpty(), "primary null get");
 
             /* Input callbacks have no public injection entry point; assert that
@@ -954,6 +1073,9 @@ public final class PtTest {
                 long watch = Pt.app_watch_fd(app, descriptors[0], Pt.fd_event_read,
                         (source, events, data) -> fd_events[0] = events, arena);
                 check(watch != 0, "fd watch id");
+                check(Pt.app_watch_fd(app, descriptors[0], Pt.fd_event_read,
+                        (source, events, data) -> { }, arena) == 0,
+                        "duplicate fd watch rejected");
                 check(Pt.app_watch_fd(app, -1, Pt.fd_event_read,
                         (source, events, data) -> { }, arena) == 0, "fd watch invalid fd");
                 check(nativeWrite(descriptors[1], (byte) 1), "fd pipe write");
@@ -961,6 +1083,27 @@ public final class PtTest {
                 check((fd_events[0] & Pt.fd_event_read) != 0, "fd callback dispatch");
                 Pt.app_unwatch_fd(app, watch);
                 Pt.app_unwatch_fd(app, watch);
+
+                /* An owned watch closes the descriptor on unwatch. */
+                int[] ownedDescriptors = nativePipe();
+                check(ownedDescriptors != null, "owned native pipe");
+                if (ownedDescriptors != null) {
+                    final int[] owned_events = {0};
+                    long ownedWatch = Pt.app_watch_fd_owned(app, ownedDescriptors[0],
+                            Pt.fd_event_read,
+                            (source, events, data) -> owned_events[0] = events, arena);
+                    check(ownedWatch != 0, "owned fd watch id");
+                    check(Pt.app_watch_fd(app, ownedDescriptors[0], Pt.fd_event_read,
+                            (source, events, data) -> { }, arena) == 0,
+                            "owned fd duplicate rejected");
+                    check(descriptorOpen(ownedDescriptors[0]), "owned fd open");
+                    check(nativeWrite(ownedDescriptors[1], (byte) 2), "owned pipe write");
+                    check(Pt.app_run_for(app, 80) == 0, "owned watch run_for");
+                    check((owned_events[0] & Pt.fd_event_read) != 0,
+                            "owned fd callback dispatch");
+                    Pt.app_unwatch_fd(app, ownedWatch);
+                    check(!descriptorOpen(ownedDescriptors[0]), "unwatch closes owned fd");
+                }
             }
             check(focus_calls[0] == 0 && key_event_calls[0] == 0 && pointer_calls[0] == 0
                     && ime_commits[0] == 0 && ime_preedits[0] == 1,
@@ -1012,7 +1155,20 @@ public final class PtTest {
 
             allowed[0] = true;
             Pt.window_close(window);
+
+            int[] destroyDescriptors = nativePipe();
+            check(destroyDescriptors != null, "destroy native pipe");
+            if (destroyDescriptors != null) {
+                long destroyWatch = Pt.app_watch_fd_owned(app, destroyDescriptors[0],
+                        Pt.fd_event_read, (source, events, data) -> { }, arena);
+                check(destroyWatch != 0, "destroy owned watch id");
+                check(descriptorOpen(destroyDescriptors[0]), "destroy owned fd open");
+            }
             Pt.app_destroy(app);
+            if (destroyDescriptors != null) {
+                check(!descriptorOpen(destroyDescriptors[0]),
+                        "app destroy closes owned fd");
+            }
 
             if (failures != 0) {
                 System.err.println("java binding: " + checks + " checks, " + failures

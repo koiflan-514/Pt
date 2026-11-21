@@ -270,6 +270,27 @@ public final class Pt {
     /** Logical font metrics for a resolved family, size and style. */
     public record FontMetrics(float ascent, float descent, float line_height, float cell_width) {}
 
+    /**
+     * Descriptor for {@link #window_paint_pixels_ex}. {@code stride} is in
+     * pixels per row (0 means width), {@code scale} is the device-pixel ratio
+     * (0 means 1.0) and the reserved words must stay zero.
+     */
+    public record PaintPixelsDesc(int stride, float scale, int format, int[] reserved) {
+        public PaintPixelsDesc {
+            if (reserved == null) {
+                reserved = new int[3];
+            }
+        }
+
+        public PaintPixelsDesc(int stride, float scale) {
+            this(stride, scale, pixel_format_argb8888_premultiplied, new int[3]);
+        }
+
+        public PaintPixelsDesc() {
+            this(0, 0.0f);
+        }
+    }
+
     public record TextSpan(int start, int length, int weight, int slant, int color, int flags,
             String family, float size) {
         public TextSpan(int start, int length, int weight, int slant, int color, int flags) {
@@ -513,6 +534,15 @@ public final class Pt {
     public static final int fd_event_error = 1 << 2;
     public static final int fd_event_hangup = 1 << 3;
 
+    /* Decoration preferences. auto prefers client-side and accepts a
+     * compositor-forced server-side mode; server asks the compositor. */
+    public static final int decoration_auto = 0;
+    public static final int decoration_client = 1;
+    public static final int decoration_server = 2;
+
+    /** Offscreen pixel layout; only premultiplied 0xAARRGGBB is supported. */
+    public static final int pixel_format_argb8888_premultiplied = 0;
+
     public static final int pointer_phase_enter = 0;
     public static final int pointer_phase_leave = 1;
     public static final int pointer_phase_motion = 2;
@@ -653,6 +683,8 @@ public final class Pt {
             FunctionDescriptor.ofVoid(ptr, i64));
     private static final MethodHandle app_watch_fd = bind("pt_app_watch_fd",
             desc(i64, ptr, i32, i32, ptr, ptr));
+    private static final MethodHandle app_watch_fd_owned = bind("pt_app_watch_fd_owned",
+            desc(i64, ptr, i32, i32, ptr, ptr));
     private static final MethodHandle app_unwatch_fd = bind("pt_app_unwatch_fd",
             FunctionDescriptor.ofVoid(ptr, i64));
     private static final MethodHandle get_last_error = bind("pt_get_last_error", desc(ptr));
@@ -691,6 +723,15 @@ public final class Pt {
             "pt_window_get_popup_policy", desc(i32, ptr));
     private static final MethodHandle window_set_decorated = bind("pt_window_set_decorated",
             FunctionDescriptor.ofVoid(ptr, bool));
+    private static final MethodHandle window_set_decoration_mode = bind(
+            "pt_window_set_decoration_mode", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle window_get_decoration_mode = bind(
+            "pt_window_get_decoration_mode", desc(i32, ptr));
+    private static final MethodHandle window_get_effective_decoration_mode = bind(
+            "pt_window_get_effective_decoration_mode", desc(i32, ptr));
+    private static final MethodHandle window_maximize = bind("pt_window_maximize", desc(bool, ptr));
+    private static final MethodHandle window_primary_set_serial = bind(
+            "pt_window_primary_set_serial", desc(bool, ptr, ptr, i32));
     private static final MethodHandle window_clipboard_set = bind("pt_window_clipboard_set",
             desc(bool, ptr, ptr));
     private static final MethodHandle window_clipboard_get = bind("pt_window_clipboard_get",
@@ -777,6 +818,15 @@ public final class Pt {
             "pt_widget_request_redraw_rect", FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32));
     private static final MethodHandle window_paint_pixels = bind("pt_window_paint_pixels",
             desc(bool, ptr, ptr, i32, i32));
+    public static final MemoryLayout paint_pixels_desc_layout = MemoryLayout.structLayout(
+            ValueLayout.JAVA_INT.withName("stride"),
+            ValueLayout.JAVA_FLOAT.withName("scale"),
+            ValueLayout.JAVA_INT.withName("format"),
+            ValueLayout.JAVA_INT.withName("reserved0"),
+            ValueLayout.JAVA_INT.withName("reserved1"),
+            ValueLayout.JAVA_INT.withName("reserved2"));
+    private static final MethodHandle window_paint_pixels_ex = bind("pt_window_paint_pixels_ex",
+            desc(bool, ptr, ptr, i32, i32, ptr));
     private static final MethodHandle paint_width = bind("pt_paint_width", desc(f32, ptr));
     private static final MethodHandle paint_height = bind("pt_paint_height", desc(f32, ptr));
     private static final MethodHandle paint_scale = bind("pt_paint_scale", desc(f32, ptr));
@@ -2229,6 +2279,18 @@ public final class Pt {
         return (long) invoke(app_watch_fd, app, fd, events, stub, MemorySegment.NULL);
     }
 
+    /**
+     * Watches {@code fd} and transfers ownership to Pt: the descriptor is
+     * closed on {@link #app_unwatch_fd} and on app destroy, including a
+     * self-unwatch from the callback.
+     */
+    public static long app_watch_fd_owned(MemorySegment app, int fd, int events,
+            FdHandler handler, Arena arena) {
+        Objects.requireNonNull(handler, "handler");
+        MemorySegment stub = fd_upcall(handler, arena);
+        return (long) invoke(app_watch_fd_owned, app, fd, events, stub, MemorySegment.NULL);
+    }
+
     public static void app_unwatch_fd(MemorySegment app, long watch_id) {
         invoke(app_unwatch_fd, app, watch_id);
     }
@@ -2344,6 +2406,29 @@ public final class Pt {
         invoke(window_set_decorated, window, decorated);
     }
 
+    /** Requests a decoration preference; the configure mode stays authoritative. */
+    public static void window_set_decoration_mode(MemorySegment window, int mode) {
+        invoke(window_set_decoration_mode, window, mode);
+    }
+
+    /** The requested decoration mode (decoration_auto for a null window). */
+    public static int window_get_decoration_mode(MemorySegment window) {
+        return (int) invoke(window_get_decoration_mode, window);
+    }
+
+    /** The mode the compositor configured, or the headless fallback. */
+    public static int window_get_effective_decoration_mode(MemorySegment window) {
+        return (int) invoke(window_get_effective_decoration_mode, window);
+    }
+
+    /**
+     * Requests maximize. Returns false for a null window, a non-resizable
+     * window or a compositor without the maximize capability.
+     */
+    public static boolean window_maximize(MemorySegment window) {
+        return (boolean) invoke(window_maximize, window);
+    }
+
     public static boolean window_clipboard_set(MemorySegment window, String text) {
         try (Arena arena = Arena.ofConfined()) {
             return (boolean) invoke(window_clipboard_set, window, cstring(arena, text));
@@ -2366,6 +2451,19 @@ public final class Pt {
         try (Arena arena = Arena.ofConfined()) {
             return (boolean) invoke(window_primary_set, window,
                     text == null ? MemorySegment.NULL : cstring(arena, text));
+        }
+    }
+
+    /**
+     * Publishes the primary selection with an explicit event serial. Returns
+     * false for serial 0 or a null window. Call it from the pointer-release or
+     * key-press callback that produced the selection.
+     */
+    public static boolean window_primary_set_serial(MemorySegment window, String text,
+            int serial) {
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(window_primary_set_serial, window,
+                    text == null ? MemorySegment.NULL : cstring(arena, text), serial);
         }
     }
 
@@ -2440,6 +2538,74 @@ public final class Pt {
                     (boolean) invoke(window_paint_pixels, window, buffer, width, height);
             if (painted) {
                 System.arraycopy(buffer.toArray(ValueLayout.JAVA_INT), 0, pixels, 0, (int) count);
+            }
+            return painted;
+        }
+    }
+
+    /**
+     * Extended offscreen snapshot with default layout (stride = width, scale
+     * 1.0, premultiplied ARGB). See {@link #window_paint_pixels_ex(MemorySegment,
+     * int[], int, int, PaintPixelsDesc)}.
+     */
+    public static boolean window_paint_pixels_ex(MemorySegment window, int[] pixels, int width,
+            int height) {
+        return window_paint_pixels_ex(window, pixels, width, height, new PaintPixelsDesc());
+    }
+
+    /**
+     * Paints one offscreen snapshot with an explicit stride, scale and format.
+     * {@code width} and {@code height} are device pixels, so a scale of 2.0
+     * needs twice the logical size. Returns false for an invalid size;
+     * reserved words, an unsupported format, a short buffer, or an invalid
+     * stride/scale raise {@code IllegalArgumentException}.
+     */
+    public static boolean window_paint_pixels_ex(MemorySegment window, int[] pixels, int width,
+            int height, PaintPixelsDesc descriptor) {
+        Objects.requireNonNull(pixels, "pixels");
+        Objects.requireNonNull(descriptor, "descriptor");
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        int[] reserved = descriptor.reserved();
+        if (reserved.length != 3 || reserved[0] != 0 || reserved[1] != 0 || reserved[2] != 0) {
+            throw new IllegalArgumentException("paint descriptor reserved words must be zero");
+        }
+        if (descriptor.format() != pixel_format_argb8888_premultiplied) {
+            throw new IllegalArgumentException("unsupported paint pixel format");
+        }
+        int stride = descriptor.stride() == 0 ? width : descriptor.stride();
+        if (stride < width) {
+            throw new IllegalArgumentException("paint stride must not be smaller than width");
+        }
+        float scale = descriptor.scale();
+        if (scale != 0.0f && !(Float.isFinite(scale) && scale > 0.0f)) {
+            throw new IllegalArgumentException("paint scale must be finite and positive");
+        }
+        long count = (long) width * height;
+        if (count > pixels.length) {
+            throw new IllegalArgumentException("pixel buffer has fewer entries than width * height");
+        }
+        long bufferEntries = (long) stride * height;
+        if (bufferEntries > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("paint stride is too large");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment buffer = arena.allocate(ValueLayout.JAVA_INT, bufferEntries);
+            MemorySegment nativeDescriptor = arena.allocate(paint_pixels_desc_layout);
+            nativeDescriptor.set(ValueLayout.JAVA_INT, 0, descriptor.stride());
+            nativeDescriptor.set(ValueLayout.JAVA_FLOAT, 4, descriptor.scale());
+            nativeDescriptor.set(ValueLayout.JAVA_INT, 8, descriptor.format());
+            nativeDescriptor.set(ValueLayout.JAVA_INT, 12, 0);
+            nativeDescriptor.set(ValueLayout.JAVA_INT, 16, 0);
+            nativeDescriptor.set(ValueLayout.JAVA_INT, 20, 0);
+            boolean painted = (boolean) invoke(window_paint_pixels_ex, window, buffer, width,
+                    height, nativeDescriptor);
+            if (painted) {
+                int[] paintedPixels = buffer.toArray(ValueLayout.JAVA_INT);
+                for (int row = 0; row < height; row++) {
+                    System.arraycopy(paintedPixels, row * stride, pixels, row * width, width);
+                }
             }
             return painted;
         }
