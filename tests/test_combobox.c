@@ -566,6 +566,19 @@ static void test_destroy_while_open(pt_app *app) {
     fixture_close(&fx);
 }
 
+static void test_picker_hook_is_scoped(void) {
+    /* The 1.2 pickers reuse the combo-box kind for dispatch. A plain combo box
+     * must keep its own overlay popup and item model. */
+    pt_widget *combobox = pt_combobox_create(NULL);
+    pt_combobox_add_item(combobox, "A");
+    pt_check(state_of(combobox)->picker == NULL);
+    pt_check(pt_combobox_get_mode(combobox) == pt_combobox_select_only);
+    pt_check(pt_combobox_is_open(combobox) == false);
+    pt_combobox_clear(combobox);
+    pt_check(pt_combobox_get_item_count(combobox) == 0u);
+    pt_widget_destroy(combobox);
+}
+
 static void test_theme_sizing(pt_app *app) {
     pt_window *window = pt_window_create(app, "combobox-metrics", 560, 420);
     pt_widget *root = pt_window_root(window);
@@ -659,6 +672,7 @@ int main(void) {
     test_a11y(app);
     test_destroy_while_open(app);
     test_callback_destroys_combobox(app);
+    test_picker_hook_is_scoped();
     test_theme_sizing(app);
     pt_app_destroy(app);
     return pt_test_finish("combobox");

@@ -272,3 +272,10 @@ _Static_assert(pt_clipboard_image_max_dimension == 8192,
 _Static_assert(PT_TABLE_MAX_COLUMNS == 1024u, "1024 column limit");
 _Static_assert(PT_TABLE_COLUMN_KEY_MAX == 64u, "64 byte column key limit");
 _Static_assert(PT_TABLE_COLUMN_LAYOUT_MAX == 262144u, "256 KiB layout blob cap");
+
+/* M19: pickers. The candidate caps are part of the public contract: lowering
+ * one silently hides rows an application was promised, so they are pinned like
+ * the other sentinels. The host kinds stay the shipped combo-box kind. */
+_Static_assert(PT_SELECT_MAX_ITEMS == 1024u, "select model cap must stay 1024");
+_Static_assert(PT_PICKER_MAX_CANDIDATES == 256u, "candidate row cap must stay 256");
+_Static_assert(PT_COLOR_MAX_PRESETS == 64u, "colour preset cap must stay 64");

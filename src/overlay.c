@@ -1535,6 +1535,14 @@ bool pt_window_overlays_key(pt_window *window, uint32_t keysym, uint32_t modifie
             if (keysym == XKB_KEY_Escape) {
                 pt_popup_dismiss((pt_popup *)app_popup);
             } else if (keysym == XKB_KEY_Tab) {
+                if (app_popup->owner && pt_picker_popup_tab(app_popup->owner, shift)) {
+                    /* A picker closes its list and lets Tab continue into the
+                     * normal focus order; the popup content never owns focus. */
+                    window->needs_draw = true;
+                    pt_platform_window_schedule_draw(window);
+                    pt_window_overlays_collect(window);
+                    return false;
+                }
                 pt_window_overlays_focus_next(window, shift);
             } else {
                 /* The content widget owns ordinary typing and navigation. */

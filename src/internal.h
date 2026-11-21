@@ -649,7 +649,79 @@ typedef struct pt_combobox_state {
     void *change_data;
     pt_combobox_text_callback on_text_change;
     void *text_change_data;
+    /* Non-NULL when this combo box is one of the 1.2 pickers. Every keyboard,
+     * pointer, layout, measurement, popup and teardown hook then forwards to
+     * src/picker.c; the combo-box item model stays unused. */
+    struct pt_picker *picker;
 } pt_combobox_state;
+
+/* ---------- pickers (1.2) ---------- */
+
+typedef enum pt_picker_kind {
+    pt_picker_kind_select = 0,
+    pt_picker_kind_date,
+    pt_picker_kind_number,
+    pt_picker_kind_color
+} pt_picker_kind;
+
+typedef struct pt_picker_option {
+    char *text;
+    void *data;
+} pt_picker_option;
+
+/* One control's whole private state. The picker is owned by the combo-box
+ * extra of its host widget, so a destroy order that frees the extra after the
+ * host's children is already anticipated: nothing below is used after
+ * pt_picker_free starts, and the popup content is a separate tree. */
+typedef struct pt_picker {
+    pt_picker_kind kind;
+    pt_widget *host;
+    pt_widget *field;
+    pt_popup *popup;
+    pt_widget *content;
+    /* The window that owns the popup, and its app, kept so teardown can tell a
+     * live window from one that already released the popup in overlays_free. */
+    pt_window *window;
+    pt_app *app;
+    uint32_t highlighted;
+    /* True while the widget writes the field text itself. */
+    bool applying;
+
+    /* Searchable select model. */
+    pt_picker_option *options;
+    uint32_t option_count;
+    uint32_t option_capacity;
+    uint32_t *visible;
+    uint32_t visible_count;
+    uint32_t visible_capacity;
+    uint32_t selected;
+    char *query;
+    uint32_t max_rows;
+
+    pt_index_callback on_select;
+    void *select_data;
+} pt_picker;
+
+/* The picker behind a widget, or NULL for anything else (including a plain
+ * combo box). All helpers below validate the widget for their caller. */
+pt_picker *pt_picker_of(const pt_widget *widget);
+pt_picker *pt_picker_of_kind(const pt_widget *widget, pt_picker_kind kind);
+bool pt_picker_key(pt_widget *host, uint32_t keysym, uint32_t modifiers, const char *utf8);
+void pt_picker_pointer_down(pt_widget *host, float x, float y);
+void pt_picker_layout(pt_widget *host, const pt_layout_ctx *ctx, pt_rect inner);
+void pt_picker_preferred(pt_widget *host, const pt_layout_ctx *ctx, float *width,
+                         float *height);
+void pt_picker_open(pt_widget *host);
+void pt_picker_close(pt_widget *host);
+bool pt_picker_is_open(const pt_widget *host);
+void pt_picker_choose(pt_widget *host, uint32_t position);
+void pt_picker_free(pt_widget *host);
+/* Closes the popup and returns true when Tab belongs to the picker's normal
+ * focus order rather than to the popup's content order. Used by overlay.c. */
+bool pt_picker_popup_tab(pt_widget *host, bool shift);
+/* Accessibility hooks used by a11y.c for the host widget. */
+bool pt_picker_a11y_value(const pt_widget *widget, float *value);
+bool pt_picker_a11y_has_popup(const pt_widget *widget);
 
 /* ---------- widgets ---------- */
 

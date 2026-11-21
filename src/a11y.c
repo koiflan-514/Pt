@@ -282,6 +282,10 @@ uint32_t pt_widget_get_a11y_state(const pt_widget *widget) {
         state |= pt_a11y_state_busy;
         break;
     case pt_widget_combobox:
+        /* A number picker has no popup, so it must not advertise expandable. */
+        if (!pt_picker_a11y_has_popup(widget)) {
+            break;
+        }
         state |= pt_a11y_state_expandable;
         if (pt_combobox_is_open(widget)) {
             state |= pt_a11y_state_expanded;
@@ -358,6 +362,8 @@ bool pt_widget_get_a11y_value(const pt_widget *widget, float *value) {
     case pt_widget_segmented:
         *value = (float)widget->segment_selected;
         return true;
+    case pt_widget_combobox:
+        return pt_picker_a11y_value(widget, value);
     default:
         return false;
     }
