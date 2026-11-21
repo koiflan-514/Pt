@@ -222,12 +222,49 @@ typedef struct pt_glyph_cache {
 
 typedef struct pt_shape_entry {
     uint64_t hash;
+    /* Installed-fallback generation this entry was shaped under. A chain change
+     * bumps the generation, so stale entries stop matching instead of being
+     * freed while a caller still holds a pointer. */
+    uint64_t generation;
     char *text;
     size_t len;
-    hb_buffer_t *buffer;
+    struct pt_shaped_run *runs;
+    unsigned int run_count;
+    /* Composed maximum ascent/descent over the faces used, device pixels. */
+    float ascent;
+    float descent;
     struct pt_shape_entry *newer;
     struct pt_shape_entry *older;
 } pt_shape_entry;
+
+/* One HarfBuzz-script segment of a shaped run. `font` is the face the segment
+ * was shaped with; `covered` is false when no installed face had the
+ * characters, in which case `font` is the primary face and renders .notdef. */
+typedef struct pt_shaped_run {
+    size_t start;
+    size_t end;
+    pt_font *font;
+    hb_script_t script;
+    bool covered;
+    hb_buffer_t *buffer;
+} pt_shaped_run;
+
+/* Per-primary-face resolution cache: one slot per codepoint. Bounded at a fixed
+ * capacity so a pathological string cannot grow it without limit; beyond the
+ * load factor new codepoints are resolved without being cached. */
+typedef struct pt_fallback_slot {
+    uint32_t codepoint;
+    pt_font *font;
+    bool resolved;
+    bool covered;
+} pt_fallback_slot;
+
+typedef struct pt_fallback_cache {
+    pt_fallback_slot *slots;
+    size_t capacity;
+    size_t count;
+    uint64_t generation;
+} pt_fallback_cache;
 
 typedef struct pt_shape_cache {
     pt_shape_entry *newest;
@@ -241,6 +278,7 @@ struct pt_font {
     hb_font_t *hb_font;
     pt_glyph_cache glyphs;
     pt_shape_cache shapes;
+    pt_fallback_cache fallbacks;
     char *family;
     int weight;
     int slant;
@@ -294,6 +332,32 @@ pt_font *pt_font_acquire(const char *family, int weight, pt_font_slant slant,
                          float pixel_size);
 void pt_font_manager_shutdown(void);
 float pt_font_measure(const pt_font *font, const char *text, size_t len);
+/* True when the face itself has a glyph for the codepoint. Fallback resolution
+ * is separate; this is the primary-face coverage test. */
+bool pt_font_has_glyph(const pt_font *font, uint32_t codepoint);
+/* Composed metrics for a UTF-8 run: the maximum ascent and descent over the
+ * primary face and every fallback face the run resolves to. Device pixels. */
+void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
+                              float *ascent, float *descent);
+float pt_font_line_height_for(const pt_font *font, const char *text, size_t len);
+/* Script/face segmentation used by measurement and drawing. The returned array
+ * is caller-owned and released with pt_font_runs_free; runs are contiguous,
+ * cover the whole text in logical order and carry the script HarfBuzz shaped
+ * them under. Exposed for tests and diagnostics. */
+typedef struct pt_font_run {
+    size_t start;
+    size_t end;
+    pt_font *font;
+    hb_script_t script;
+    bool covered;
+} pt_font_run;
+int pt_font_runs(const pt_font *font, const char *text, size_t len, pt_font_run **out_runs);
+void pt_font_runs_free(pt_font_run *runs);
+/* Cache bounds used by the tests: entries currently held and faces in the
+ * process font table. */
+size_t pt_font_shape_cache_count(const pt_font *font);
+size_t pt_font_fallback_cache_count(const pt_font *font);
+size_t pt_font_manager_face_count(void);
 int pt_font_wrap_lines(const pt_font *font, const char *text, size_t len, float max_width,
                        pt_text_line **out_lines);
 float pt_font_wrapped_height(const pt_font *font, const char *text, float max_width);
@@ -747,6 +811,8 @@ typedef struct pt_text_layout {
     pt_font *font;
     float scale;
     float line_height;
+    /* Composed ascent over all fallback faces in the text, in logical pixels. */
+    float ascent;
     char *display;
     size_t display_len;
     size_t caret;

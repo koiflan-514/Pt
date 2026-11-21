@@ -23,6 +23,101 @@ static pt_font **font_table;
 static size_t font_table_capacity;
 static size_t font_table_size;
 
+/* Installed fallback configuration. The font cache is process-wide and keyed by
+ * family/weight/slant/size, so the chain is too: one install applies to every
+ * face acquired afterwards. Shape and per-codepoint caches carry the generation
+ * so a change invalidates them lazily without freeing memory a caller holds. */
+typedef struct pt_font_chain {
+    char **families;
+    int count;
+} pt_font_chain;
+
+typedef struct pt_font_override {
+    char *family;
+    pt_font_chain chain;
+    uint64_t stamp;
+} pt_font_override;
+
+static pt_font_chain fallback_default;
+static pt_font_override fallback_overrides[PT_FONT_FALLBACK_MAX_OVERRIDES];
+static int fallback_override_count;
+static uint64_t fallback_stamp;
+static uint64_t fallback_generation = 1;
+
+static void chain_clear(pt_font_chain *chain) {
+    if (!chain) {
+        return;
+    }
+    for (int i = 0; i < chain->count; ++i) {
+        free(chain->families[i]);
+    }
+    free(chain->families);
+    memset(chain, 0, sizeof(*chain));
+}
+
+static void chain_assign(pt_font_chain *chain, const char *const *families, int count) {
+    char **names = NULL;
+    int used = 0;
+    if (families && count > 0) {
+        if (count > PT_FONT_FALLBACK_MAX_FAMILIES) {
+            count = PT_FONT_FALLBACK_MAX_FAMILIES;
+        }
+        names = pt_alloc_zeroed((size_t)count, sizeof(*names));
+        for (int i = 0; i < count; ++i) {
+            if (families[i] && families[i][0]) {
+                names[used++] = pt_strdup(families[i]);
+            }
+        }
+        if (used == 0) {
+            free(names);
+            names = NULL;
+        }
+    }
+    chain_clear(chain);
+    chain->families = names;
+    chain->count = used;
+}
+
+static const pt_font_chain *chain_for_family(const char *family) {
+    if (family) {
+        for (int i = 0; i < fallback_override_count; ++i) {
+            if (strcmp(fallback_overrides[i].family, family) == 0) {
+                return &fallback_overrides[i].chain;
+            }
+        }
+    }
+    if (fallback_default.count > 0) {
+        return &fallback_default;
+    }
+    return NULL;
+}
+
+static void fallback_generation_bump(void) {
+    ++fallback_generation;
+    if (fallback_generation == 0) {
+        fallback_generation = 1;
+    }
+}
+
+/* Repaints the windows of the app that installed the change. The configuration
+ * is shared, so a second application in the same process must request its own
+ * redraw after installing a different chain. */
+static void fallback_repaint(pt_app *app) {
+    if (!app) {
+        return;
+    }
+    for (pt_window *window = app->first_window; window; window = window->next) {
+        pt_window_invalidate_layout(window, NULL);
+        window->needs_draw = true;
+        pt_window_damage_all(window);
+        pt_platform_window_schedule_draw(window);
+    }
+}
+
+static char *family_dup(const char *family) {
+    return family && family[0] ? pt_strdup(family) : NULL;
+}
+
 static size_t glyph_hash(uint32_t key, size_t capacity) {
     return ((size_t)key * 2654435761u) & (capacity - 1);
 }
@@ -56,14 +151,38 @@ static void glyph_clear(pt_glyph *glyph) {
 #define shape_cache_max_entries 256u
 #define shape_cache_max_bytes (256u * 1024u)
 #define shape_cache_max_text 8192u
+/* Per-face codepoint resolution cache. Fixed, so a string of thousands of
+ * distinct codepoints cannot grow it; beyond the load factor resolution still
+ * happens, just uncached. */
+#define fallback_cache_capacity 512u
+
+static void shaped_run_clear(pt_shaped_run *run) {
+    if (!run) {
+        return;
+    }
+    if (run->buffer) {
+        hb_buffer_destroy(run->buffer);
+    }
+    memset(run, 0, sizeof(*run));
+}
+
+static void shape_entry_clear(pt_shape_entry *entry) {
+    if (!entry) {
+        return;
+    }
+    for (unsigned int i = 0; i < entry->run_count; ++i) {
+        shaped_run_clear(&entry->runs[i]);
+    }
+    free(entry->runs);
+    free(entry->text);
+    free(entry);
+}
 
 static void shape_cache_clear(pt_font *font) {
     pt_shape_entry *entry = font->shapes.newest;
     while (entry) {
         pt_shape_entry *older = entry->older;
-        hb_buffer_destroy(entry->buffer);
-        free(entry->text);
-        free(entry);
+        shape_entry_clear(entry);
         entry = older;
     }
     memset(&font->shapes, 0, sizeof(font->shapes));
@@ -92,9 +211,7 @@ static void shape_cache_evict_oldest(pt_font *font) {
     shape_cache_unlink(font, entry);
     font->shapes.count--;
     font->shapes.bytes -= entry->len;
-    hb_buffer_destroy(entry->buffer);
-    free(entry->text);
-    free(entry);
+    shape_entry_clear(entry);
 }
 
 static void shape_cache_insert(pt_font *font, pt_shape_entry *entry) {
@@ -114,11 +231,17 @@ static void shape_cache_insert(pt_font *font, pt_shape_entry *entry) {
     }
 }
 
+static void fallback_cache_clear(pt_font *font) {
+    free(font->fallbacks.slots);
+    memset(&font->fallbacks, 0, sizeof(font->fallbacks));
+}
+
 static void font_destroy(pt_font *font) {
     if (!font) {
         return;
     }
     shape_cache_clear(font);
+    fallback_cache_clear(font);
     if (font->glyphs.slots) {
         for (size_t i = 0; i < font->glyphs.capacity; ++i) {
             if (font->glyphs.slots[i].used) {
@@ -185,6 +308,15 @@ void pt_font_manager_shutdown(void) {
     font_table = NULL;
     font_table_capacity = 0;
     font_table_size = 0;
+    chain_clear(&fallback_default);
+    for (int i = 0; i < fallback_override_count; ++i) {
+        free(fallback_overrides[i].family);
+        chain_clear(&fallback_overrides[i].chain);
+    }
+    memset(fallback_overrides, 0, sizeof(fallback_overrides));
+    fallback_override_count = 0;
+    fallback_stamp = 0;
+    fallback_generation_bump();
     if (font_library) {
         FT_Done_FreeType(font_library);
         font_library = NULL;
@@ -223,7 +355,7 @@ static int fontconfig_weight(int weight) {
 }
 
 static bool load_face(const char *family, int weight, int slant, int size_26_6,
-                      FT_Face *out_face) {
+                      FT_Face *out_face, bool report_error) {
     FcPattern *pattern = FcPatternCreate();
     if (!pattern) {
         return false;
@@ -260,7 +392,7 @@ static bool load_face(const char *family, int weight, int slant, int size_26_6,
             }
         }
     }
-    if (!loaded) {
+    if (!loaded && report_error) {
         pt_set_error("no usable font found for '%s'", family ? family : "sans-serif");
     }
     if (match) {
@@ -270,8 +402,8 @@ static bool load_face(const char *family, int weight, int slant, int size_26_6,
     return loaded;
 }
 
-pt_font *pt_font_acquire(const char *family, int weight, pt_font_slant slant,
-                         float pixel_size) {
+static pt_font *pt_font_acquire_internal(const char *family, int weight, pt_font_slant slant,
+                                         float pixel_size, bool report_error) {
     if (!ensure_library()) {
         return NULL;
     }
@@ -303,14 +435,16 @@ pt_font *pt_font_acquire(const char *family, int weight, pt_font_slant slant,
     font->weight = weight;
     font->slant = (int)slant;
     font->pixel_size = (float)size_26_6 / 64.0f;
-    if (!load_face(name, weight, (int)slant, size_26_6, &font->face)) {
+    if (!load_face(name, weight, (int)slant, size_26_6, &font->face, report_error)) {
         font_destroy(font);
         return NULL;
     }
     font->hb_font = hb_ft_font_create_referenced(font->face);
     if (!font->hb_font) {
         font_destroy(font);
-        pt_set_error("HarfBuzz font creation failed");
+        if (report_error) {
+            pt_set_error("HarfBuzz font creation failed");
+        }
         return NULL;
     }
     hb_ft_font_set_load_flags(font->hb_font, FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP);
@@ -337,13 +471,20 @@ pt_font *pt_font_acquire(const char *family, int weight, pt_font_slant slant,
     return font;
 }
 
+pt_font *pt_font_acquire(const char *family, int weight, pt_font_slant slant,
+                         float pixel_size) {
+    return pt_font_acquire_internal(family, weight, slant, pixel_size, true);
+}
+
 static uint64_t shape_hash(const char *text, size_t len) {
     uint64_t hash = 1469598103934665603ull;
     for (size_t i = 0; i < len; ++i) {
         hash ^= (uint8_t)text[i];
         hash *= 1099511628211ull;
     }
-    return hash ^ ((uint64_t)len << 32);
+    hash ^= ((uint64_t)len << 32);
+    hash ^= fallback_generation * 1099511628211ull;
+    return hash;
 }
 
 static pt_shape_entry *shape_cache_lookup(pt_font *font, const char *text, size_t len,
@@ -351,7 +492,7 @@ static pt_shape_entry *shape_cache_lookup(pt_font *font, const char *text, size_
     pt_shape_entry *entry = font->shapes.newest;
     while (entry) {
         if (entry->hash == hash && entry->len == len &&
-            memcmp(entry->text, text, len) == 0) {
+            entry->generation == fallback_generation && memcmp(entry->text, text, len) == 0) {
             if (entry != font->shapes.newest) {
                 shape_cache_unlink(font, entry);
                 font->shapes.count--;
@@ -365,45 +506,727 @@ static pt_shape_entry *shape_cache_lookup(pt_font *font, const char *text, size_
     return NULL;
 }
 
-static hb_buffer_t *shape_text(pt_font *font, const char *text, size_t len) {
-    uint64_t hash = shape_hash(text, len);
-    pt_shape_entry *entry = shape_cache_lookup(font, text, len, hash);
-    if (entry) {
-        return entry->buffer;
+bool pt_font_has_glyph(const pt_font *font, uint32_t codepoint) {
+    if (!font || !font->face) {
+        return false;
     }
+    return FT_Get_Char_Index(font->face, codepoint) != 0;
+}
+
+/* ---------- fallback resolution ---------- */
+
+static size_t fallback_hash(uint32_t codepoint, size_t capacity) {
+    return ((size_t)codepoint * 2654435761u) & (capacity - 1);
+}
+
+static void fallback_cache_prepare(pt_font *font) {
+    if (font->fallbacks.capacity == 0) {
+        font->fallbacks.slots =
+            pt_alloc_zeroed(fallback_cache_capacity, sizeof(*font->fallbacks.slots));
+        font->fallbacks.capacity = fallback_cache_capacity;
+        font->fallbacks.generation = fallback_generation;
+        return;
+    }
+    if (font->fallbacks.generation != fallback_generation) {
+        memset(font->fallbacks.slots, 0,
+               font->fallbacks.capacity * sizeof(*font->fallbacks.slots));
+        font->fallbacks.count = 0;
+        font->fallbacks.generation = fallback_generation;
+    }
+}
+
+static pt_fallback_slot *fallback_cache_find(pt_font *font, uint32_t codepoint) {
+    size_t index = fallback_hash(codepoint, font->fallbacks.capacity);
+    for (size_t probe = 0; probe < font->fallbacks.capacity; ++probe) {
+        pt_fallback_slot *slot = &font->fallbacks.slots[index];
+        if (!slot->resolved) {
+            return NULL;
+        }
+        if (slot->codepoint == codepoint) {
+            return slot;
+        }
+        index = (index + 1) & (font->fallbacks.capacity - 1);
+    }
+    return NULL;
+}
+
+static pt_fallback_slot *fallback_cache_insert(pt_font *font, uint32_t codepoint) {
+    /* Leave headroom so probe chains stay short; past it resolution is correct
+     * but uncached, which keeps the table bounded. */
+    if ((font->fallbacks.count + 1) * 10 >= font->fallbacks.capacity * 7) {
+        return NULL;
+    }
+    size_t index = fallback_hash(codepoint, font->fallbacks.capacity);
+    for (;;) {
+        pt_fallback_slot *slot = &font->fallbacks.slots[index];
+        if (!slot->resolved) {
+            slot->codepoint = codepoint;
+            slot->resolved = true;
+            font->fallbacks.count++;
+            return slot;
+        }
+        index = (index + 1) & (font->fallbacks.capacity - 1);
+    }
+}
+
+/* Fontconfig's own sort order for a character set, used only when no explicit
+ * chain is installed. Returns a copied family name, or NULL when no face covers
+ * every requested character. */
+static char *fontconfig_family_for_charset(FcCharSet *charset, int weight, int slant,
+                                           int size_26_6) {
+    if (!ensure_library() || !charset) {
+        return NULL;
+    }
+    FcPattern *pattern = FcPatternCreate();
+    if (!pattern) {
+        return NULL;
+    }
+    FcPatternAddCharSet(pattern, FC_CHARSET, charset);
+    FcPatternAddInteger(pattern, FC_WEIGHT, fontconfig_weight(weight));
+    FcPatternAddInteger(pattern, FC_SLANT,
+                        slant == pt_font_slant_italic
+                            ? FC_SLANT_ITALIC
+                            : (slant == pt_font_slant_oblique ? FC_SLANT_OBLIQUE
+                                                              : FC_SLANT_ROMAN));
+    FcPatternAddDouble(pattern, FC_PIXEL_SIZE, (double)size_26_6 / 64.0);
+    FcPatternAddInteger(pattern, FC_HINT_STYLE, FC_HINT_SLIGHT);
+    FcPatternAddBool(pattern, FC_ANTIALIAS, FcTrue);
+    FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+
+    FcResult result = FcResultNoMatch;
+    FcFontSet *set = FcFontSort(NULL, pattern, FcTrue, NULL, &result);
+    char *family = NULL;
+    if (set) {
+        for (int i = 0; i < set->nfont && !family; ++i) {
+            FcCharSet *candidate = NULL;
+            if (FcPatternGetCharSet(set->fonts[i], FC_CHARSET, 0, &candidate) !=
+                    FcResultMatch ||
+                !candidate || !FcCharSetIsSubset(charset, candidate)) {
+                continue;
+            }
+            FcChar8 *name = NULL;
+            if (FcPatternGetString(set->fonts[i], FC_FAMILY, 0, &name) == FcResultMatch &&
+                name && name[0]) {
+                family = pt_strdup((const char *)name);
+            }
+        }
+        FcFontSetDestroy(set);
+    }
+    FcPatternDestroy(pattern);
+    return family;
+}
+
+static char *fontconfig_system_family(int weight, int slant, int size_26_6,
+                                      uint32_t codepoint) {
+    FcCharSet *charset = FcCharSetCreate();
+    if (!charset) {
+        return NULL;
+    }
+    FcCharSetAddChar(charset, codepoint);
+    char *family = fontconfig_family_for_charset(charset, weight, slant, size_26_6);
+    FcCharSetDestroy(charset);
+    return family;
+}
+
+static char *fontconfig_system_family_span(int weight, int slant, int size_26_6,
+                                           const char *text, size_t start, size_t end) {
+    FcCharSet *charset = FcCharSetCreate();
+    if (!charset) {
+        return NULL;
+    }
+    size_t pos = start;
+    while (pos < end) {
+        size_t next = 0;
+        uint32_t codepoint = pt_utf8_decode(text, end, pos, &next);
+        if (next <= pos) {
+            next = pos + 1;
+        }
+        FcCharSetAddChar(charset, codepoint);
+        pos = next;
+    }
+    char *family = fontconfig_family_for_charset(charset, weight, slant, size_26_6);
+    FcCharSetDestroy(charset);
+    return family;
+}
+
+/* Resolves one codepoint through the primary face, the installed chain (or the
+ * Fontconfig sort order when no chain is installed). Returns the face to shape
+ * with; `*covered` is false when that face is the primary tofu fallback. */
+static pt_font *resolve_face(pt_font *base, uint32_t codepoint, bool *covered) {
+    fallback_cache_prepare(base);
+    pt_fallback_slot *slot = fallback_cache_find(base, codepoint);
+    if (slot) {
+        *covered = slot->covered;
+        return slot->font ? slot->font : base;
+    }
+
+    pt_font *chosen = NULL;
+    if (pt_font_has_glyph(base, codepoint)) {
+        chosen = base;
+    } else {
+        const pt_font_chain *chain = chain_for_family(base->family);
+        if (chain) {
+            for (int i = 0; i < chain->count && !chosen; ++i) {
+                if (strcmp(chain->families[i], base->family) == 0) {
+                    continue;
+                }
+                pt_font *candidate =
+                    pt_font_acquire_internal(chain->families[i], base->weight,
+                                             (pt_font_slant)base->slant, base->pixel_size,
+                                             false);
+                if (candidate && pt_font_has_glyph(candidate, codepoint)) {
+                    chosen = candidate;
+                }
+            }
+        } else {
+            int size_26_6 = (int)lroundf(base->pixel_size * 64.0f);
+            char *family = fontconfig_system_family(base->weight, base->slant, size_26_6,
+                                                     codepoint);
+            if (family) {
+                pt_font *candidate =
+                    pt_font_acquire_internal(family, base->weight, (pt_font_slant)base->slant,
+                                             base->pixel_size, false);
+                if (candidate && pt_font_has_glyph(candidate, codepoint)) {
+                    chosen = candidate;
+                }
+                free(family);
+            }
+        }
+    }
+
+    *covered = chosen != NULL;
+    slot = fallback_cache_insert(base, codepoint);
+    if (slot) {
+        slot->font = chosen ? chosen : base;
+        slot->covered = *covered;
+    }
+    return chosen ? chosen : base;
+}
+
+/* ---------- script segmentation and shaping ---------- */
+
+static hb_script_t codepoint_script(uint32_t codepoint) {
+    return hb_unicode_script(hb_unicode_funcs_get_default(), codepoint);
+}
+
+static bool script_is_neutral(hb_script_t script) {
+    return script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED ||
+           script == HB_SCRIPT_UNKNOWN || script == HB_SCRIPT_INVALID;
+}
+
+static bool codepoint_attaches_to_previous(uint32_t codepoint) {
+    if (codepoint == 0x200Du || (codepoint >= 0xFE00u && codepoint <= 0xFE0Fu) ||
+        (codepoint >= 0xE0100u && codepoint <= 0xE01EFu)) {
+        return true;
+    }
+    return hb_unicode_combining_class(hb_unicode_funcs_get_default(), codepoint) != 0;
+}
+
+typedef struct run_builder {
+    pt_shaped_run *runs;
+    unsigned int count;
+    unsigned int capacity;
+} run_builder;
+
+static pt_shaped_run *run_push(run_builder *builder, size_t start, size_t end, pt_font *font,
+                               hb_script_t script, bool covered) {
+    if (builder->count == builder->capacity) {
+        builder->capacity = builder->capacity ? builder->capacity * 2 : 4;
+        builder->runs = pt_realloc_mem(builder->runs, builder->capacity * sizeof(*builder->runs));
+        memset(builder->runs + builder->count, 0,
+               (builder->capacity - builder->count) * sizeof(*builder->runs));
+    }
+    pt_shaped_run *run = &builder->runs[builder->count++];
+    run->start = start;
+    run->end = end;
+    run->font = font;
+    run->script = script;
+    run->covered = covered;
+    return run;
+}
+
+/* A maximal same-script span formed before any font is chosen. Neutral
+ * characters inherit the preceding script; combining marks are inherited by
+ * definition and therefore land in the preceding span. */
+typedef struct script_span {
+    size_t start;
+    size_t end;
+    hb_script_t script;
+} script_span;
+
+typedef struct span_builder {
+    script_span *items;
+    size_t count;
+    size_t capacity;
+} span_builder;
+
+static void span_push(span_builder *builder, size_t start, size_t end, hb_script_t script) {
+    if (builder->count == builder->capacity) {
+        builder->capacity = builder->capacity ? builder->capacity * 2 : 4;
+        builder->items =
+            pt_realloc_mem(builder->items, builder->capacity * sizeof(*builder->items));
+    }
+    builder->items[builder->count++] = (script_span){start, end, script};
+}
+
+static void build_script_spans(const char *text, size_t len, span_builder *builder) {
+    hb_script_t inherited = HB_SCRIPT_INVALID;
+    size_t pos = 0;
+    while (pos < len) {
+        size_t next = 0;
+        uint32_t codepoint = pt_utf8_decode(text, len, pos, &next);
+        if (next <= pos) {
+            next = pos + 1;
+        }
+        hb_script_t script = codepoint_script(codepoint);
+        if (script_is_neutral(script)) {
+            script = inherited;
+        } else {
+            inherited = script;
+        }
+        if (builder->count > 0 && builder->items[builder->count - 1].script == script) {
+            builder->items[builder->count - 1].end = next;
+        } else {
+            span_push(builder, pos, next, script);
+        }
+        pos = next;
+    }
+}
+
+static bool span_covered_by(const pt_font *font, const char *text, size_t start, size_t end) {
+    if (!font) {
+        return false;
+    }
+    size_t pos = start;
+    while (pos < end) {
+        size_t next = 0;
+        uint32_t codepoint = pt_utf8_decode(text, end, pos, &next);
+        if (next <= pos) {
+            next = pos + 1;
+        }
+        if (!pt_font_has_glyph(font, codepoint)) {
+            return false;
+        }
+        pos = next;
+    }
+    return true;
+}
+
+/* Chooses one face for a whole script span: the primary when it covers every
+ * character, otherwise the first chain family that does, otherwise the first
+ * family Fontconfig's sort order offers. Returns NULL when no single face
+ * covers the span, in which case the caller splits it per codepoint. */
+static pt_font *face_for_span(pt_font *base, const char *text, size_t start, size_t end,
+                              bool *covered) {
+    *covered = false;
+    if (span_covered_by(base, text, start, end)) {
+        *covered = true;
+        return base;
+    }
+    const pt_font_chain *chain = chain_for_family(base->family);
+    if (chain) {
+        for (int i = 0; i < chain->count; ++i) {
+            if (strcmp(chain->families[i], base->family) == 0) {
+                continue;
+            }
+            pt_font *candidate =
+                pt_font_acquire_internal(chain->families[i], base->weight,
+                                         (pt_font_slant)base->slant, base->pixel_size, false);
+            if (candidate && span_covered_by(candidate, text, start, end)) {
+                *covered = true;
+                return candidate;
+            }
+        }
+        return NULL;
+    }
+    int size_26_6 = (int)lroundf(base->pixel_size * 64.0f);
+    char *family = fontconfig_system_family_span(base->weight, base->slant, size_26_6, text,
+                                                 start, end);
+    if (!family) {
+        return NULL;
+    }
+    pt_font *candidate = pt_font_acquire_internal(family, base->weight, (pt_font_slant)base->slant,
+                                                  base->pixel_size, false);
+    free(family);
+    if (candidate && span_covered_by(candidate, text, start, end)) {
+        *covered = true;
+        return candidate;
+    }
+    return NULL;
+}
+
+/* Splits text into contiguous script/face runs. A script span becomes one run
+ * when a single face covers it; otherwise it is split per codepoint so a stray
+ * symbol can still resolve. Joiners, variation selectors and combining marks
+ * stay with the face of the preceding run when it can render them. */
+static void build_runs(pt_font *base, const char *text, size_t len, run_builder *builder) {
+    span_builder spans = {0};
+    build_script_spans(text, len, &spans);
+    for (size_t index = 0; index < spans.count; ++index) {
+        script_span span = spans.items[index];
+        bool covered = false;
+        pt_font *face = face_for_span(base, text, span.start, span.end, &covered);
+        if (face) {
+            run_push(builder, span.start, span.end, face, span.script, covered);
+            continue;
+        }
+        size_t pos = span.start;
+        while (pos < span.end) {
+            size_t next = 0;
+            uint32_t codepoint = pt_utf8_decode(text, span.end, pos, &next);
+            if (next <= pos) {
+                next = pos + 1;
+            }
+            hb_script_t script = span.script;
+            pt_font *fallback_face = NULL;
+            bool fallback_covered = false;
+            bool attached = false;
+            if (codepoint_attaches_to_previous(codepoint) && builder->count > 0) {
+                pt_shaped_run *previous = &builder->runs[builder->count - 1];
+                if (codepoint == 0x200Du || (codepoint >= 0xFE00u && codepoint <= 0xFE0Fu) ||
+                    (codepoint >= 0xE0100u && codepoint <= 0xE01EFu) ||
+                    pt_font_has_glyph(previous->font, codepoint)) {
+                    fallback_face = previous->font;
+                    fallback_covered = previous->covered;
+                    script = previous->script;
+                    attached = true;
+                }
+            }
+            if (!attached) {
+                fallback_face = resolve_face(base, codepoint, &fallback_covered);
+            }
+            if (builder->count > 0) {
+                pt_shaped_run *run = &builder->runs[builder->count - 1];
+                if (run->font == fallback_face && run->script == script &&
+                    run->covered == fallback_covered) {
+                    run->end = next;
+                    pos = next;
+                    continue;
+                }
+            }
+            run_push(builder, pos, next, fallback_face, script, fallback_covered);
+            pos = next;
+        }
+    }
+    free(spans.items);
+}
+
+static hb_buffer_t *shape_run(pt_font *font, const char *text, size_t start, size_t end,
+                              hb_script_t script) {
     hb_buffer_t *buffer = hb_buffer_create();
-    hb_buffer_add_utf8(buffer, text, (int)len, 0, (int)len);
-    hb_buffer_guess_segment_properties(buffer);
-    hb_shape(font->hb_font, buffer, NULL, 0);
-    if (len > shape_cache_max_text) {
-        return buffer;
+    if (!buffer) {
+        return NULL;
     }
-    entry = pt_alloc_zeroed(1, sizeof(*entry));
-    entry->hash = hash;
+    hb_buffer_add_utf8(buffer, text + start, (int)(end - start), 0, (int)(end - start));
+    hb_buffer_guess_segment_properties(buffer);
+    if (!script_is_neutral(script)) {
+        hb_buffer_set_script(buffer, script);
+        hb_direction_t direction = hb_script_get_horizontal_direction(script);
+        if (direction != HB_DIRECTION_INVALID) {
+            hb_buffer_set_direction(buffer, direction);
+        }
+    }
+    hb_shape(font->hb_font, buffer, NULL, 0);
+    return buffer;
+}
+
+static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t len) {
+    pt_shape_entry *entry = pt_alloc_zeroed(1, sizeof(*entry));
+    entry->generation = fallback_generation;
     entry->text = pt_alloc(len + 1);
     memcpy(entry->text, text, len);
     entry->text[len] = '\0';
     entry->len = len;
-    entry->buffer = buffer;
+    run_builder builder = {0};
+    build_runs(font, text, len, &builder);
+    if (builder.count == 0) {
+        run_push(&builder, 0, len, font, HB_SCRIPT_INVALID, true);
+    }
+    entry->runs = builder.runs;
+    entry->run_count = builder.count;
+    entry->ascent = font->ascent;
+    entry->descent = font->descent;
+    for (unsigned int i = 0; i < entry->run_count; ++i) {
+        pt_shaped_run *run = &entry->runs[i];
+        run->buffer = shape_run(run->font, text, run->start, run->end, run->script);
+        if (run->font->ascent > entry->ascent) {
+            entry->ascent = run->font->ascent;
+        }
+        if (run->font->descent > entry->descent) {
+            entry->descent = run->font->descent;
+        }
+    }
+    entry->hash = shape_hash(text, len);
+    return entry;
+}
+
+/* Returns a cached entry, or a caller-owned one for text beyond the cache
+ * limit. `*cached` tells the caller which. */
+static pt_shape_entry *shape_entry_get(pt_font *font, const char *text, size_t len,
+                                       bool *cached) {
+    uint64_t hash = shape_hash(text, len);
+    pt_shape_entry *entry = shape_cache_lookup(font, text, len, hash);
+    if (entry) {
+        *cached = true;
+        return entry;
+    }
+    entry = shape_entry_build(font, text, len);
+    if (len > shape_cache_max_text) {
+        *cached = false;
+        return entry;
+    }
     shape_cache_insert(font, entry);
-    return buffer;
+    *cached = true;
+    return entry;
 }
 
 float pt_font_measure(const pt_font *font, const char *text, size_t len) {
     if (!font || !text || len == 0) {
         return 0.0f;
     }
-    hb_buffer_t *buffer = shape_text((pt_font *)font, text, len);
-    unsigned int glyph_count = 0;
-    hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, &cached);
     int64_t total = 0;
-    for (unsigned int i = 0; i < glyph_count; ++i) {
-        total += positions[i].x_advance;
+    for (unsigned int run_index = 0; run_index < entry->run_count; ++run_index) {
+        hb_buffer_t *buffer = entry->runs[run_index].buffer;
+        if (!buffer) {
+            continue;
+        }
+        unsigned int glyph_count = 0;
+        hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+        for (unsigned int i = 0; i < glyph_count; ++i) {
+            total += positions[i].x_advance;
+        }
     }
-    if (len > shape_cache_max_text) {
-        hb_buffer_destroy(buffer);
+    if (!cached) {
+        shape_entry_clear(entry);
     }
     return (float)total / 64.0f;
+}
+
+void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
+                              float *ascent, float *descent) {
+    float out_ascent = font ? font->ascent : 0.0f;
+    float out_descent = font ? font->descent : 0.0f;
+    if (font && text && len > 0) {
+        bool cached = false;
+        pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, &cached);
+        out_ascent = entry->ascent;
+        out_descent = entry->descent;
+        if (!cached) {
+            shape_entry_clear(entry);
+        }
+    }
+    if (ascent) {
+        *ascent = out_ascent;
+    }
+    if (descent) {
+        *descent = out_descent;
+    }
+}
+
+float pt_font_line_height_for(const pt_font *font, const char *text, size_t len) {
+    if (!font) {
+        return 0.0f;
+    }
+    float ascent = 0.0f;
+    float descent = 0.0f;
+    pt_font_metrics_for_text(font, text, len, &ascent, &descent);
+    return pt_max_float(ascent + descent, font->line_height);
+}
+
+int pt_font_runs(const pt_font *font, const char *text, size_t len, pt_font_run **out_runs) {
+    if (!out_runs) {
+        return 0;
+    }
+    *out_runs = NULL;
+    if (!font || !text || len == 0) {
+        return 0;
+    }
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, &cached);
+    pt_font_run *runs = pt_alloc_zeroed(entry->run_count, sizeof(*runs));
+    for (unsigned int i = 0; i < entry->run_count; ++i) {
+        runs[i].start = entry->runs[i].start;
+        runs[i].end = entry->runs[i].end;
+        runs[i].font = entry->runs[i].font;
+        runs[i].script = entry->runs[i].script;
+        runs[i].covered = entry->runs[i].covered;
+    }
+    int count = (int)entry->run_count;
+    if (!cached) {
+        shape_entry_clear(entry);
+    }
+    *out_runs = runs;
+    return count;
+}
+
+void pt_font_runs_free(pt_font_run *runs) {
+    free(runs);
+}
+
+size_t pt_font_shape_cache_count(const pt_font *font) {
+    return font ? font->shapes.count : 0;
+}
+
+size_t pt_font_fallback_cache_count(const pt_font *font) {
+    return font ? font->fallbacks.count : 0;
+}
+
+size_t pt_font_manager_face_count(void) {
+    return font_table_size;
+}
+
+/* ---------- installed fallback chains (public, since 1.2) ---------- */
+
+static pt_font_override *fallback_override_find(const char *family) {
+    if (!family) {
+        return NULL;
+    }
+    for (int i = 0; i < fallback_override_count; ++i) {
+        if (strcmp(fallback_overrides[i].family, family) == 0) {
+            return &fallback_overrides[i];
+        }
+    }
+    return NULL;
+}
+
+static void fallback_override_remove(const char *family) {
+    pt_font_override *override = fallback_override_find(family);
+    if (!override) {
+        return;
+    }
+    int index = (int)(override - fallback_overrides);
+    free(override->family);
+    chain_clear(&override->chain);
+    for (int i = index; i + 1 < fallback_override_count; ++i) {
+        fallback_overrides[i] = fallback_overrides[i + 1];
+    }
+    --fallback_override_count;
+    memset(&fallback_overrides[fallback_override_count], 0,
+           sizeof(fallback_overrides[fallback_override_count]));
+}
+
+static pt_font_override *fallback_override_ensure(const char *family) {
+    pt_font_override *override = fallback_override_find(family);
+    if (override) {
+        return override;
+    }
+    int slot = fallback_override_count;
+    if (slot >= PT_FONT_FALLBACK_MAX_OVERRIDES) {
+        slot = 0;
+        for (int i = 1; i < fallback_override_count; ++i) {
+            if (fallback_overrides[i].stamp < fallback_overrides[slot].stamp) {
+                slot = i;
+            }
+        }
+        free(fallback_overrides[slot].family);
+        chain_clear(&fallback_overrides[slot].chain);
+        memset(&fallback_overrides[slot], 0, sizeof(fallback_overrides[slot]));
+    } else {
+        ++fallback_override_count;
+    }
+    override = &fallback_overrides[slot];
+    override->family = family_dup(family);
+    override->stamp = ++fallback_stamp;
+    return override;
+}
+
+void pt_app_set_font_fallbacks(pt_app *app, const char *const *families, int count) {
+    if (!app) {
+        return;
+    }
+    chain_assign(&fallback_default, families, count);
+    fallback_generation_bump();
+    fallback_repaint(app);
+}
+
+int pt_app_get_font_fallback_count(const pt_app *app) {
+    return app ? fallback_default.count : 0;
+}
+
+const char *pt_app_get_font_fallback(const pt_app *app, int index) {
+    if (!app || index < 0 || index >= fallback_default.count) {
+        return NULL;
+    }
+    return fallback_default.families[index];
+}
+
+void pt_app_set_font_fallbacks_for_family(pt_app *app, const char *family,
+                                           const char *const *families, int count) {
+    if (!app) {
+        return;
+    }
+    pt_font_chain next = {0};
+    chain_assign(&next, families, count);
+    if (!family || !family[0]) {
+        chain_clear(&next);
+        return;
+    }
+    if (next.count == 0) {
+        fallback_override_remove(family);
+    } else {
+        pt_font_override *override = fallback_override_ensure(family);
+        if (!override || !override->family) {
+            chain_clear(&next);
+            return;
+        }
+        chain_clear(&override->chain);
+        override->chain = next;
+        override->stamp = ++fallback_stamp;
+    }
+    fallback_generation_bump();
+    fallback_repaint(app);
+}
+
+int pt_app_get_font_fallback_count_for_family(const pt_app *app, const char *family) {
+    if (!app) {
+        return 0;
+    }
+    const pt_font_override *override = fallback_override_find(family);
+    return override ? override->chain.count : 0;
+}
+
+const char *pt_app_get_font_fallback_for_family(const pt_app *app, const char *family,
+                                                int index) {
+    if (!app || index < 0) {
+        return NULL;
+    }
+    const pt_font_override *override = fallback_override_find(family);
+    if (!override || index >= override->chain.count) {
+        return NULL;
+    }
+    return override->chain.families[index];
+}
+
+int pt_app_font_uncovered_count(const pt_app *app, const char *family, const char *text,
+                                size_t length) {
+    if (!app || !text || length == 0) {
+        return 0;
+    }
+    const char *name = family && family[0] ? family : "sans-serif";
+    pt_font *font = pt_font_acquire_internal(name, pt_font_weight_regular,
+                                             pt_font_slant_upright, 14.0f, false);
+    if (!font) {
+        return 0;
+    }
+    int uncovered = 0;
+    size_t pos = 0;
+    while (pos < length) {
+        size_t next = 0;
+        uint32_t codepoint = pt_utf8_decode(text, length, pos, &next);
+        if (next <= pos) {
+            next = pos + 1;
+        }
+        bool covered = false;
+        resolve_face(font, codepoint, &covered);
+        if (!covered) {
+            ++uncovered;
+        }
+        pos = next;
+    }
+    return uncovered;
 }
 
 static pt_glyph *glyph_lookup(pt_font *font, uint32_t glyph_id) {
@@ -696,7 +1519,9 @@ float pt_font_wrapped_height(const pt_font *font, const char *text, float max_wi
     int count = pt_font_wrap_lines(font, text ? text : "", text ? strlen(text) : 0, max_width,
                                    &lines);
     free(lines);
-    return (float)count * font->line_height;
+    float line_height =
+        pt_font_line_height_for(font, text ? text : "", text ? strlen(text) : 0);
+    return (float)count * line_height;
 }
 
 static char *ellipsize_text(const pt_font *font, const char *text, size_t len, float max_width,
@@ -764,27 +1589,35 @@ void pt_canvas_draw_text_line(pt_canvas *canvas, const pt_font *font, const char
         }
     }
 
-    hb_buffer_t *buffer = shape_text((pt_font *)font, draw_text, draw_len);
-    unsigned int glyph_count = 0;
-    hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
-    hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get((pt_font *)font, draw_text, draw_len, &cached);
     float pen_x = x * canvas->scale;
     float pen_y = baseline * canvas->scale;
-    for (unsigned int i = 0; i < glyph_count; ++i) {
-        pt_glyph *glyph = glyph_get((pt_font *)font, infos[i].codepoint);
-        float glyph_x = pen_x + (float)positions[i].x_offset / 64.0f;
-        float glyph_y = pen_y - (float)positions[i].y_offset / 64.0f;
-        if (glyph && glyph->coverage) {
-            int draw_x = (int)lroundf(glyph_x) + glyph->bearing_x;
-            int draw_y = (int)lroundf(glyph_y) - glyph->bearing_y;
-            pt_canvas_blend_mask(canvas, draw_x, draw_y, glyph->coverage, glyph->width,
-                                 glyph->height, glyph->width, color, 1.0f);
+    for (unsigned int run_index = 0; run_index < entry->run_count; ++run_index) {
+        pt_shaped_run *run = &entry->runs[run_index];
+        hb_buffer_t *buffer = run->buffer;
+        if (!buffer) {
+            continue;
         }
-        pen_x += (float)positions[i].x_advance / 64.0f;
-        pen_y -= (float)positions[i].y_advance / 64.0f;
+        unsigned int glyph_count = 0;
+        hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+        hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+        for (unsigned int i = 0; i < glyph_count; ++i) {
+            pt_glyph *glyph = glyph_get(run->font, infos[i].codepoint);
+            float glyph_x = pen_x + (float)positions[i].x_offset / 64.0f;
+            float glyph_y = pen_y - (float)positions[i].y_offset / 64.0f;
+            if (glyph && glyph->coverage) {
+                int draw_x = (int)lroundf(glyph_x) + glyph->bearing_x;
+                int draw_y = (int)lroundf(glyph_y) - glyph->bearing_y;
+                pt_canvas_blend_mask(canvas, draw_x, draw_y, glyph->coverage, glyph->width,
+                                     glyph->height, glyph->width, color, 1.0f);
+            }
+            pen_x += (float)positions[i].x_advance / 64.0f;
+            pen_y -= (float)positions[i].y_advance / 64.0f;
+        }
     }
-    if (draw_len > shape_cache_max_text) {
-        hb_buffer_destroy(buffer);
+    if (!cached) {
+        shape_entry_clear(entry);
     }
     free(ellipsized);
 }
@@ -798,8 +1631,11 @@ void pt_canvas_draw_text_wrapped(pt_canvas *canvas, const pt_font *font, const c
     size_t len = strlen(text);
     pt_text_line *lines = NULL;
     int count = pt_font_wrap_lines(font, text, len, max_width * canvas->scale, &lines);
-    float ascent = font->ascent / canvas->scale;
-    float line_height = font->line_height / canvas->scale;
+    float ascent_px = 0.0f;
+    float descent_px = 0.0f;
+    pt_font_metrics_for_text(font, text, len, &ascent_px, &descent_px);
+    float ascent = ascent_px / canvas->scale;
+    float line_height = pt_max_float(ascent_px + descent_px, font->line_height) / canvas->scale;
     for (int i = 0; i < count; ++i) {
         float line_top = top + (float)i * line_height;
         if (max_height > 0.0f && line_top + line_height > top + max_height + 0.01f) {

@@ -99,7 +99,11 @@ bool pt_text_layout_build(const pt_widget *area, const pt_layout_ctx *ctx, float
     size_t len = strlen(text);
     out->font = font;
     out->scale = scale;
-    out->line_height = font->line_height / scale;
+    float text_ascent = 0.0f;
+    float text_descent = 0.0f;
+    pt_font_metrics_for_text(font, text, len, &text_ascent, &text_descent);
+    out->ascent = text_ascent / scale;
+    out->line_height = pt_max_float(text_ascent + text_descent, font->line_height) / scale;
     out->display = pt_alloc(len + 1);
     memcpy(out->display, text, len + 1);
     out->display_len = len;

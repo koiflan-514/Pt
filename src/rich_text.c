@@ -332,8 +332,11 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
         if (!font) {
             font = base;
         }
-        float ascent = font->ascent / scale;
-        float descent = font->descent / scale;
+        float run_ascent = 0.0f;
+        float run_descent = 0.0f;
+        pt_font_metrics_for_text(font, text + start, end - start, &run_ascent, &run_descent);
+        float ascent = run_ascent / scale;
+        float descent = run_descent / scale;
         if (ascent > out->ascent) {
             out->ascent = ascent;
         }

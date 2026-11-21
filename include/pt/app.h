@@ -22,7 +22,9 @@
  * a connection failure; timeout and a normal quit return 0.
  * pt_app_add_timeout returns 0 when the timer could not be queued.
  * pt_app_set_font_family copies the string. Theme setters clamp as documented
- * in theme.h; queries return the stored value.
+ * in theme.h; queries return the stored value. pt_app_set_font_fallbacks and
+ * its per-family variant copy the families and are described beside the
+ * declarations.
  * Callbacks. A timer callback is one-shot, runs on the UI thread and may not
  * block; user_data must stay valid until it fires or the timer is cancelled.
  */
@@ -98,6 +100,64 @@ pt_api pt_color pt_app_get_theme_color(const pt_app *app, pt_theme_token token);
 pt_api void pt_app_set_theme_metric(pt_app *app, pt_theme_metric metric, float value);
 pt_api float pt_app_get_theme_metric(const pt_app *app, pt_theme_metric metric);
 pt_api void pt_app_set_font_family(pt_app *app, const char *family);
+
+/* Per-run font fallback (since 1.2)
+ *
+ * Pt splits a UTF-8 run into HarfBuzz-script segments. A segment is shaped with
+ * the primary family when that face has a glyph for every character, otherwise
+ * with the first family in the fallback chain that covers it, and finally with
+ * Fontconfig's own sort order when no explicit chain is installed. Codepoints
+ * that no installed face covers keep the existing tofu (.notdef) behaviour and
+ * can be counted with pt_app_font_uncovered_count().
+ *
+ * The font cache is shared by every application in the process, so the chain is
+ * process-wide: installing one repaints the calling app's windows and applies to
+ * text laid out afterwards. UI thread only. Families are copied; an empty entry is
+ * skipped, count is clamped to PT_FONT_FALLBACK_MAX_FAMILIES, and a NULL or
+ * empty list restores the built-in default (Fontconfig's sort order). An
+ * explicit chain is authoritative: a character that none of its families covers
+ * renders as tofu even when another installed font would have it.
+ *
+ * A per-family override replaces the app default for that exact primary family
+ * string ("sans-serif", "monospace", or the app's configured font family). An
+ * empty or NULL list removes the override and falls back to the app default. At
+ * most PT_FONT_FALLBACK_MAX_OVERRIDES families may carry an override; setting a
+ * new one evicts the least recently set.
+ *
+ * Metrics. A text block's ascent is the maximum ascent and its descent the
+ * maximum descent over the faces used by its runs; line height is
+ * max(ascent + descent, primary line height). pt_font/measure and the widget
+ * layout use that composition, so a mixed line reserves room for the tallest
+ * fallback face. Caret, selection and hit-test offsets stay in logical UTF-8
+ * byte order and the accessibility text is the unchanged widget string.
+ *
+ * Errors. Setters are no-ops for a NULL app. Getters return 0/NULL for a NULL
+ * app or out-of-range index. The per-family getters report the override only;
+ * zero means no override is installed and the app default applies. Returned
+ * family pointers are borrowed from the installed chain and stay valid until the
+ * next setter call or app destroy. pt_app_font_uncovered_count returns 0 on a
+ * NULL app or empty text and counts codepoints, not bytes.
+ *
+ * Every function in this block is since 1.2.
+ */
+#define PT_FONT_FALLBACK_MAX_FAMILIES 8
+#define PT_FONT_FALLBACK_MAX_OVERRIDES 16
+
+pt_api void pt_app_set_font_fallbacks(pt_app *app, const char *const *families,
+                                      int count);
+pt_api int pt_app_get_font_fallback_count(const pt_app *app);
+pt_api const char *pt_app_get_font_fallback(const pt_app *app, int index);
+pt_api void pt_app_set_font_fallbacks_for_family(pt_app *app, const char *family,
+                                                 const char *const *families,
+                                                 int count);
+pt_api int pt_app_get_font_fallback_count_for_family(const pt_app *app,
+                                                      const char *family);
+pt_api const char *pt_app_get_font_fallback_for_family(const pt_app *app,
+                                                        const char *family,
+                                                        int index);
+pt_api int pt_app_font_uncovered_count(const pt_app *app, const char *family,
+                                       const char *text, size_t length);
+
 pt_api void pt_app_set_quit_on_last_window_close(pt_app *app, bool enabled);
 
 #ifdef __cplusplus
