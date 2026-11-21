@@ -1046,6 +1046,11 @@ Java 测试是 `bindings/java/test/pt/PtTest.java`；使用 `make check-bindings
 | 描述符监视 | `app::watch_fd` / `unwatch_fd` | `App.watch_fd` / `unwatch_fd` | `Pt.app_watch_fd` / `app_unwatch_fd` |
 | 原始输入 | `window::on_focus`, `on_key_event`, `on_pointer` | `Window.on_focus`, `on_key_event`, `on_pointer` | `Pt.window_set_focus_callback`, `Pt.window_set_key_event_callback`, `Pt.window_set_pointer_callback` |
 | 装饰 | `window::set_decorated`, `set_decoration_mode` | `Window.set_decorated`, `set_decoration_mode` | `Pt.window_set_decorated`, `Pt.window_set_decoration_mode` |
+| 装饰 getter | `window::decoration_mode`, `effective_decoration_mode` | `Window.decoration_mode`, `effective_decoration_mode` | `Pt.window_get_decoration_mode`, `Pt.window_get_effective_decoration_mode` |
+| 最大化 | `window::maximize` | `Window.maximize` | `Pt.window_maximize` |
+| 快照描述符 | `window::paint_pixels_ex` | `pt.paint_window_pixels_ex` | `Pt.window_paint_pixels_ex` |
+| 主选区 serial | `window::set_primary_serial` | `Window.set_primary_serial` | `Pt.window_primary_set_serial` |
+| 接管的 fd 监视 | `app::watch_fd_owned` | `App.watch_fd_owned` | `Pt.app_watch_fd_owned` |
 
 回调封装遵循与该表面其余部分相同的所有权规则：
 
@@ -1067,8 +1072,14 @@ Java 测试是 `bindings/java/test/pt/PtTest.java`；使用 `make check-bindings
   `paint_window_pixels(window, width, height)` 返回 `0xAARRGGBB` 值的
   `list[int]`；C++ 接受 `std::span<uint32_t>`，Java 接受大小为
   `width * height` 的 `MemorySegment`。
-- **描述符监视回调在 UI 线程上运行**，描述符始终归应用所有。在回调内部
-  取消监视是安全的，绑定会让 trampoline 一直存活到监视被移除。
+- **描述符快照遵循同一规则。** `_ex` 形式接受绑定对应的
+  `pt_paint_pixels_desc`（stride、scale 和 format），仍然只写入调用方内存；
+  width 和 height 是设备像素，无效描述符返回 false 而不是抛出异常。
+- **接管的 fd 监视会转移描述符。** `watch_fd_owned` 在取消监视或应用销毁
+  时关闭它，并保持与借用形式相同的重复拒绝和回调延迟规则；绑定不得再次
+  关闭该描述符。
+- **描述符监视回调在 UI 线程上运行**，描述符由应用借用或转移给 Pt。在回调
+  内部取消监视是安全的，绑定会让 trampoline 一直存活到监视被移除。
 
 <a id="binding-coverage"></a>
 

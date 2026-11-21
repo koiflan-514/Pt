@@ -1071,30 +1071,35 @@ pt_window_set_size(window, 900, 640);
 pt_window_set_min_size(window, 480, 320);
 pt_window_set_resizable(window, true);
 pt_window_set_decorated(window, true);
-pt_window_set_decoration_mode(window, pt_decoration_mode_client);
+pt_window_set_decoration_mode(window, pt_decoration_client);
 pt_window_request_redraw(window);
 ```
 
 Decoration is two independent decisions. `pt_window_set_decorated` controls
 whether Pt draws its own 44 px header; `pt_window_set_decoration_mode` controls
 who decorates the surface. The default is explicit client-side decoration
-(`pt_decoration_mode_client`), because the header, its edge resize zones and hit
+(`pt_decoration_client`), because the header, its edge resize zones and hit
 testing are built for it. `pt_window_set_decorated(window, false)` removes the
 header and those zones and never asks the compositor for a frame. Server-side
 decoration is an explicit choice:
 
 ```c
-pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_mode_auto` follows the framework default, which is client-side
+`pt_decoration_auto` follows the framework default, which is client-side
 decoration in 1.1. The request is a preference: Pt tracks the requested and
-effective modes separately and lays the window out for the mode `configure`
-returns. Sway forces server-side decoration on tiled windows, and Mutter and
+effective modes separately, `pt_window_get_decoration_mode` reports the request
+and `pt_window_get_effective_decoration_mode` reports what `configure` decided,
+and the window is laid out for the effective mode. Sway forces server-side
+decoration on tiled windows, and Mutter and
 Weston expose no decoration manager, so a client-side request can still end up
 with a compositor-drawn frame or with Pt's header. Fullscreen hides the header
-in every mode. [compositor-matrix.md](compositor-matrix.md) records the
-per-compositor behaviour.
+in every mode. `pt_window_maximize` requests maximize and returns false when
+the window is not resizable or the compositor did not advertise the maximize
+capability; the header's maximize button is disabled in the same case.
+[compositor-matrix.md](compositor-matrix.md) records the per-compositor
+behaviour.
 
 Close callbacks return `false` to veto a close:
 
@@ -1543,8 +1548,10 @@ error event and the callback fires at least once. Callbacks run on the UI thread
 and must not block; a callback may unwatch itself, and Pt defers the free until
 the dispatch returns. The descriptor is borrowed — Pt never closes it — and a
 descriptor is watched once per app; a duplicate watch is rejected and returns
-0. Watches count toward `pt_app_run_for`'s timeout like timers, so a run with no
-other events still wakes for them.
+0. Use `pt_app_watch_fd_owned` when the app should take ownership instead: it
+closes the descriptor on unwatch or app destroy and follows the same
+duplicate-rejection rule. Watches count toward `pt_app_run_for`'s timeout like
+timers, so a run with no other events still wakes for them.
 
 ## Sizing, scale and painting
 
@@ -1605,7 +1612,11 @@ idempotent: the same widget may be painted 0..N times per frame (once per damage
 tile) and must produce the same pixels regardless of tile order or count. It
 must not change the tree or trigger layout, must balance `pt_paint_push_clip`
 and `pt_paint_pop_clip`, and must not call `pt_window_paint_pixels` re-entrantly.
-Use `pt_widget_request_redraw` or `pt_widget_request_redraw_rect` to queue
+Those guards are always active, not behind a debug switch: a reentrant snapshot
+fails, sets the thread-local error and leaves the live frame untouched, and an
+unbalanced clip is corrected before the frame continues and recorded through
+`pt_get_last_error` with a warning. Use
+`pt_widget_request_redraw` or `pt_widget_request_redraw_rect` to queue
 another frame; the rect form damages only a widget-local sub-rectangle, which
 suits a caret or cursor. `pt_paint_scale` is the device-pixel ratio and
 `pt_paint_clip_rect` reports the current damage tile so a callback can skip work
@@ -1618,7 +1629,25 @@ buffer at scale 1.0 (premultiplied `0xAARRGGBB`, row-major, `width` pixels per
 row). It is a pure snapshot: it does not damage the window, clear
 `needs_draw`/`redraw_scheduled`, touch the last paint time or collect deferred
 overlays, so calling it on a mapped window does not swallow the next live frame.
-That is how custom paint and golden images are tested without a compositor.
+
+`pt_window_paint_pixels_ex` takes the same window and buffer plus a
+`pt_paint_pixels_desc`:
+
+```c
+pt_paint_pixels_desc desc = {
+    .stride = buffer_width,   /* pixels per row; 0 means width */
+    .scale = 1.5f,            /* device-pixel ratio; 0 means 1.0 */
+    .format = pt_pixel_format_argb8888_premultiplied,
+};
+pt_window_paint_pixels_ex(window, pixels, device_width, device_height, &desc);
+```
+
+`width` and `height` are device pixels, so a scale of 1.5 needs 1.5 times the
+logical size; a stride larger than `width` leaves the padding untouched. Only
+premultiplied `argb8888` is defined today, and `reserved` must be zero. The call
+returns false for an invalid stride, scale, format or buffer. Both snapshot
+entry points reject a call from inside a paint callback. That is how custom
+paint and fractional-scale golden images are tested without a compositor.
 
 ## Errors
 

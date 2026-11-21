@@ -171,10 +171,12 @@ Paint callbacks additionally:
   defer;
 - receive a `pt_paint_context` valid only during the call, in widget-local
   logical pixels; `pt_paint_scale()` is the device-pixel ratio;
-- balance `pt_paint_push_clip`/`pt_paint_pop_clip`; a debug build asserts the
-  clip stack depth is restored on return;
-- must not call `pt_window_paint_pixels` re-entrantly; a debug `in_paint` flag
-  rejects and records it.
+- balance `pt_paint_push_clip`/`pt_paint_pop_clip`; the paint pass checks the
+  depth on return, restores the saved depth and clip if a callback left them
+  unbalanced, and records a warning and the thread-local error;
+- must not call `pt_window_paint_pixels` re-entrantly; an always-present
+  `in_paint` flag rejects the call, records the error and leaves the live frame
+  untouched.
 
 `pt_window_paint_pixels` is a pure snapshot: it does not damage, clear
 `needs_draw`/`redraw_scheduled`, touch `last_paint_time`, or collect deferred
@@ -182,8 +184,11 @@ overlays. Calling it on a mapped window must not swallow the next live frame.
 Its pixel format is premultiplied `0xAARRGGBB`, row-major, stride in pixels; the
 extended entry point takes stride/scale/format explicitly.
 
-A debug build (`PT_DEBUG_CALLBACKS=1`) detects reentrancy, unbalanced clips and
-use of a context after its callback returned.
+The guards are always compiled in; there is no debug-only switch and no
+`PT_DEBUG_CALLBACKS` environment variable. Reentrancy and clip imbalance are
+detected in every build. Use of a context after its callback returns is a
+caller bug the header forbids rather than a state the library can detect,
+because the context owns no storage.
 
 ## 8. Platform negotiation matrix
 
@@ -336,6 +341,36 @@ fixes regressions only and adds no feature.
 
 ## Current deviations
 
-The 1.1.0 work-in-progress does not yet meet these standards. The verified gap
-list and the remediation backlog are tracked in [ROADMAP.md](ROADMAP.md) under
-M18, not here; this page states the rules, the roadmap states the work.
+The 1.1.0 tree closes most of the gaps this page was written around: the
+generated reference derives its module list from `include/pt/*.h`, the baseline
+and reference agree on the 448-function surface, the bilingual pairs are in
+sync, the version is 1.1.0, and the ABI pins cover the new enums and structs.
+The remaining deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md)
+under M18:
+
+- **Seven extension wrappers are in flight.** Owned fd watches, the decoration
+  mode getter/setter/get-effective group, maximize, primary serial and the
+  descriptor snapshot are declared and tested in C but not yet wrapped in
+  C++, Python and Java on this branch. `tools/release-check.sh` reports them
+  until the wrapper change lands; the release record keeps the final gate
+  pending for that reason.
+- **No fake-compositor replay facility.** Protocol sequences are covered by
+  headless state tests plus live niri/Mutter/KWin smoke runs. The in-process
+  fake compositor that standards section 6 asks for is not in the tree; M18
+  records it as open rather than silently claiming coverage.
+- **Two IME items are deferred.** `preedit_hint` visual presentation and
+  `show_input_panel`/`hide_input_panel` move to 1.2; the event surface,
+  full-state resend and empty-`done` acknowledgement are implemented and
+  tested.
+- **Binding raw-callback dispatch tests are partial.** Registration and
+  callback-free paths are tested in Python, C++ and Java; an actual raw key or
+  pointer event needs a live seat, so dispatch-level assertions remain a live
+  suite item rather than a headless one.
+- **`Makefile` VERSION is updated by the sibling release change.** The header
+  macros, README status and release record already say 1.1.0; SONAME stays
+  `libpt.so.1`. Until that one-line change lands, the version-agreement gate is
+  red by construction.
+
+The 1.1.0 work-in-progress also violated the section 2 landing rule (headers,
+bindings, reference and tests did not land atomically). That history is kept in
+M18 so the rule is not quietly forgotten; it is not a current exception.
