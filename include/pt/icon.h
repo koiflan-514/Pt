@@ -113,6 +113,7 @@ pt_api void pt_icon_image_destroy(pt_icon_image *image);
 
 /* Source dimensions in pixels; 0 for NULL. Since 1.2. */
 pt_api int pt_icon_image_width(const pt_icon_image *image);
+/* Since 1.2. */
 pt_api int pt_icon_image_height(const pt_icon_image *image);
 
 /* Button icon slot. The image is laid out before the text when the button has
@@ -122,6 +123,7 @@ pt_api int pt_icon_image_height(const pt_icon_image *image);
  * button takes a reference; NULL clears the image and falls back to
  * pt_widget_set_icon's vector glyph. Since 1.2. */
 pt_api void pt_button_set_icon_image(pt_widget *button, pt_icon_image *image);
+/* Since 1.2. */
 pt_api pt_icon_image *pt_button_get_icon_image(const pt_widget *button);
 
 /* Optional theme tint for the button image slot. `tint` is 0xRRGGBBAA; passing
@@ -134,6 +136,7 @@ pt_api void pt_button_set_icon_tint(pt_widget *button, pt_color tint);
 /* Window icon (best effort, see the header contract). Takes a reference; NULL
  * removes the icon. Since 1.2. */
 pt_api void pt_window_set_icon(pt_window *window, pt_icon_image *image);
+/* Since 1.2. */
 pt_api pt_icon_image *pt_window_get_icon(const pt_window *window);
 
 #ifdef __cplusplus

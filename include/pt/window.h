@@ -42,25 +42,37 @@ extern "C" {
 #endif
 
 /* Creates a window and its root widget. The window is hidden until
- * pt_window_show(). Width and height are logical pixels. */
+ * pt_window_show(). Width and height are logical pixels. Since 1.0. */
 pt_api pt_window *pt_window_create(pt_app *app, const char *title, int width, int height);
+/* Since 1.0. */
 pt_api void pt_window_show(pt_window *window);
+/* Since 1.0. */
 pt_api void pt_window_hide(pt_window *window);
 
 /* Requests close. The close callback may veto. Actual destruction is deferred
- * until the current event dispatch finishes. */
+ * until the current event dispatch finishes. Since 1.0. */
 pt_api void pt_window_close(pt_window *window);
+/* Since 1.0. */
 pt_api bool pt_window_is_open(const pt_window *window);
 
+/* Since 1.0. */
 pt_api pt_widget *pt_window_root(pt_window *window);
+/* Since 1.0. */
 pt_api pt_app *pt_window_app(pt_window *window);
+/* Since 1.0. */
 pt_api int pt_window_get_width(const pt_window *window);
+/* Since 1.0. */
 pt_api int pt_window_get_height(const pt_window *window);
+/* Since 1.0. */
 pt_api float pt_window_get_scale(const pt_window *window);
 
+/* Since 1.0. */
 pt_api void pt_window_set_title(pt_window *window, const char *title);
+/* Since 1.0. */
 pt_api void pt_window_set_size(pt_window *window, int width, int height);
+/* Since 1.0. */
 pt_api void pt_window_set_min_size(pt_window *window, int width, int height);
+/* Since 1.0. */
 pt_api void pt_window_set_resizable(pt_window *window, bool resizable);
 
 /* Decoration negotiation. set_mode is a preference and the compositor's
@@ -78,48 +90,60 @@ typedef enum pt_decoration_mode {
 /* A decorated window lets Pt draw its own header (default true). This never
  * requests server-side decoration: false means Pt draws nothing and no
  * server-side mode is asked for. Requesting compositor decoration is a
- * separate pt_window_set_decoration_mode(pt_decoration_server) choice. */
+ * separate pt_window_set_decoration_mode(pt_decoration_server) choice. Since 1.0. */
 pt_api void pt_window_set_decorated(pt_window *window, bool decorated);
 
 /* Requests a decoration preference. Sends a preference only when the request
  * changes; the effective mode always follows the compositor's configure. The
  * getters return the requested and effective modes. Since 1.1. */
 pt_api void pt_window_set_decoration_mode(pt_window *window, pt_decoration_mode mode);
+/* Since 1.1. */
 pt_api pt_decoration_mode pt_window_get_decoration_mode(const pt_window *window);
+/* Since 1.1. */
 pt_api pt_decoration_mode pt_window_get_effective_decoration_mode(const pt_window *window);
 
 /* Requests maximize. Returns false when the window is not resizable, the
  * compositor did not advertise the maximize capability, or the window is NULL.
  * The header's maximize button is disabled in the same case. Since 1.1. */
 pt_api bool pt_window_maximize(pt_window *window);
+/* Since 1.0. */
 pt_api void pt_window_request_redraw(pt_window *window);
+/* Since 1.0. */
 pt_api void pt_window_focus(pt_window *window, pt_widget *widget);
 
 /* Per-window theme overrides. A window inherits the application theme until a
  * role or metric is overridden here, so a settings preview or a second
  * surface can restyle itself without copying the whole palette. Passing an
  * invalid token or metric is ignored. pt_window_clear_theme_overrides()
- * returns every role and metric to the application value. */
+ * returns every role and metric to the application value. Since 1.0. */
 pt_api void pt_window_set_theme_color(pt_window *window, pt_theme_token token,
                                       pt_color color);
+/* Since 1.0. */
 pt_api pt_color pt_window_get_theme_color(const pt_window *window,
                                           pt_theme_token token);
+/* Since 1.0. */
 pt_api void pt_window_set_theme_metric(pt_window *window, pt_theme_metric metric,
                                        float value);
+/* Since 1.0. */
 pt_api float pt_window_get_theme_metric(const pt_window *window,
                                         pt_theme_metric metric);
+/* Since 1.0. */
 pt_api void pt_window_clear_theme_overrides(pt_window *window);
 
+/* Since 1.0. */
 pt_api void pt_window_set_close_callback(pt_window *window, pt_close_callback callback,
                                          void *user_data);
+/* Since 1.0. */
 pt_api void pt_window_set_resize_callback(pt_window *window, pt_resize_callback callback,
                                           void *user_data);
+/* Since 1.0. */
 pt_api void pt_window_set_key_callback(pt_window *window, pt_key_callback callback,
                                        void *user_data);
 
 /* Called when the compositor gives or takes keyboard focus. The callback runs
  * on the UI thread and may request a redraw. */
 typedef void (*pt_focus_callback)(pt_window *window, bool focused, void *user_data);
+/* Since 1.1. */
 pt_api void pt_window_set_focus_callback(pt_window *window, pt_focus_callback callback,
                                          void *user_data);
 
@@ -132,6 +156,7 @@ pt_api void pt_window_set_focus_callback(pt_window *window, pt_focus_callback ca
  * (may be NULL or empty for non-text keys) and is valid only during the call. */
 typedef bool (*pt_key_event_callback)(pt_window *window, uint32_t key, uint32_t modifiers,
                                       const char *utf8, void *user_data);
+/* Since 1.1. */
 pt_api void pt_window_set_key_event_callback(pt_window *window,
                                              pt_key_event_callback callback,
                                              void *user_data);
@@ -175,13 +200,15 @@ typedef struct pt_pointer_event {
  * and becomes invalid when the callback returns. */
 typedef bool (*pt_pointer_callback)(pt_window *window, const pt_pointer_event *event,
                                     void *user_data);
+/* Since 1.1. */
 pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callback callback,
                                            void *user_data);
 
 /* Text clipboard backed by the seat's wl_data_device. The getter returns
  * malloc'd UTF-8 memory owned by the caller; release it with pt_free().
- * Returns NULL when the clipboard is empty or unavailable. */
+ * Returns NULL when the clipboard is empty or unavailable. Since 1.0. */
 pt_api bool pt_window_clipboard_set(pt_window *window, const char *text);
+/* Since 1.0. */
 pt_api char *pt_window_clipboard_get(pt_window *window);
 
 /* Largest image dimension, in pixels, that the clipboard image API accepts on
@@ -211,6 +238,7 @@ pt_api char *pt_window_clipboard_get(pt_window *window);
  * a successful image set makes the text getter return NULL. Since 1.2. */
 pt_api bool pt_window_clipboard_set_image_png(pt_window *window, const pt_color *pixels,
                                               int width, int height);
+/* Since 1.2. */
 pt_api pt_color *pt_window_clipboard_get_image_png(pt_window *window, int *width,
                                                    int *height);
 
@@ -241,8 +269,10 @@ pt_api bool pt_window_clipboard_set_uri_list(pt_window *window,
  * pt_window_primary_set_serial instead. Call the setter once when a drag
  * selection completes, not on every motion event. Since 1.1. */
 pt_api bool pt_window_primary_set(pt_window *window, const char *text);
+/* Since 1.1. */
 pt_api bool pt_window_primary_set_serial(pt_window *window, const char *text,
                                          uint32_t serial);
+/* Since 1.1. */
 pt_api char *pt_window_primary_get(pt_window *window);
 
 #ifdef __cplusplus

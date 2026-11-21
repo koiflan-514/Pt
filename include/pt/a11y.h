@@ -119,34 +119,45 @@ typedef enum pt_a11y_status {
 typedef void (*pt_a11y_event_callback)(pt_window *window, pt_widget *widget,
                                        pt_a11y_event_type event, void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_app_set_a11y_callback(pt_app *app, pt_a11y_event_callback callback,
                                      void *user_data);
 
 /* Starts the platform accessibility bridge. On Wayland this connects to the
  * AT-SPI2 bus and exports the running windows through D-Bus. Returns true
  * when the bridge became active; a build without D-Bus or a session without
- * an accessibility bus reports false and keeps working normally. */
+ * an accessibility bus reports false and keeps working normally. Since 1.0. */
 pt_api bool pt_app_enable_a11y(pt_app *app);
+/* Since 1.0. */
 pt_api void pt_app_disable_a11y(pt_app *app);
+/* Since 1.0. */
 pt_api pt_a11y_status pt_app_get_a11y_status(const pt_app *app);
 
+/* Since 1.0. */
 pt_api pt_a11y_role pt_widget_get_a11y_role(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_widget_set_a11y_role(pt_widget *widget, pt_a11y_role role);
+/* Since 1.0. */
 pt_api const char *pt_widget_get_a11y_name(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_widget_set_a11y_name(pt_widget *widget, const char *name);
+/* Since 1.0. */
 pt_api const char *pt_widget_get_a11y_description(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_widget_set_a11y_description(pt_widget *widget, const char *description);
+/* Since 1.0. */
 pt_api uint32_t pt_widget_get_a11y_state(const pt_widget *widget);
 
 /* Entry text and caret/selection offsets are UTF-8 byte positions. Password
  * entries expose their caret but not their text. Labels and buttons expose
- * their text with zeroed offsets. Returns false when the widget has no text. */
+ * their text with zeroed offsets. Returns false when the widget has no text.
+ * Since 1.0. */
 pt_api bool pt_widget_get_a11y_text(const pt_widget *widget, const char **text,
                                     uint32_t *caret, uint32_t *selection_start,
                                     uint32_t *selection_end);
 
 /* Sliders and progress bars expose [0, 1] values; segmented controls expose
- * the selected index as a float. */
+ * the selected index as a float. Since 1.0. */
 pt_api bool pt_widget_get_a11y_value(const pt_widget *widget, float *value);
 
 #ifdef __cplusplus

@@ -40,7 +40,9 @@ typedef enum pt_easing {
     pt_easing_out_back
 } pt_easing;
 
+/* Since 1.0. */
 pt_api float pt_ease(pt_easing easing, float t);
+/* Since 1.0. */
 pt_api float pt_ease_value(pt_easing easing, float from, float to, float t);
 
 /* A transition animates a value over a fixed duration. Calling
@@ -57,18 +59,24 @@ typedef struct pt_transition {
     bool active;
 } pt_transition;
 
+/* Since 1.0. */
 pt_api void pt_transition_init(pt_transition *transition, float value);
+/* Since 1.0. */
 pt_api void pt_transition_to(pt_transition *transition, float target, uint32_t duration_ms,
                              pt_easing easing);
+/* Since 1.0. */
 pt_api bool pt_transition_advance(pt_transition *transition, float dt);
+/* Since 1.0. */
 pt_api void pt_transition_set(pt_transition *transition, float value);
+/* Since 1.0. */
 pt_api bool pt_transition_active(const pt_transition *transition);
 
 /* Reduced motion is an app-level preference. When enabled, framework control
  * animations snap to their target state and custom widgets should finish
  * transitions instead of interpolating them. The default reads the
- * PT_REDUCED_MOTION environment variable ("1", "true" or "yes"). */
+ * PT_REDUCED_MOTION environment variable ("1", "true" or "yes"). Since 1.0. */
 pt_api void pt_app_set_reduced_motion(pt_app *app, bool reduced);
+/* Since 1.0. */
 pt_api bool pt_app_get_reduced_motion(const pt_app *app);
 
 #ifdef __cplusplus

@@ -112,23 +112,31 @@ pt_api pt_widget *pt_select_create(pt_widget *parent);
 
 /* Sets the placeholder shown while the entry is empty. Copied. Since 1.2. */
 pt_api void pt_select_set_placeholder(pt_widget *select, const char *text);
+/* Since 1.2. */
 pt_api const char *pt_select_get_placeholder(const pt_widget *select);
 
 /* Appends or inserts an item. index is clamped to the current count. The text
  * is copied; data is borrowed. Adding past PT_SELECT_MAX_ITEMS is rejected.
  * Inserting above the selection keeps it on the same item. Since 1.2. */
 pt_api void pt_select_add_item(pt_widget *select, const char *text);
+/* Since 1.2. */
 pt_api void pt_select_insert_item(pt_widget *select, uint32_t index, const char *text);
+/* Since 1.2. */
 pt_api void pt_select_add_item_with_data(pt_widget *select, const char *text, void *data);
 
 /* Removes one item or the whole model. Removing the selected item clears the
  * selection and the field. Since 1.2. */
 pt_api void pt_select_remove_item(pt_widget *select, uint32_t index);
+/* Since 1.2. */
 pt_api void pt_select_clear(pt_widget *select);
 
+/* Since 1.2. */
 pt_api uint32_t pt_select_get_item_count(const pt_widget *select);
+/* Since 1.2. */
 pt_api const char *pt_select_get_item_text(const pt_widget *select, uint32_t index);
+/* Since 1.2. */
 pt_api void *pt_select_get_item_data(const pt_widget *select, uint32_t index);
+/* Since 1.2. */
 pt_api void pt_select_set_item_data(pt_widget *select, uint32_t index, void *data);
 
 /* The committed item index, or pt_list_index_none. pt_select_set_selected is
@@ -136,13 +144,16 @@ pt_api void pt_select_set_item_data(pt_widget *select, uint32_t index, void *dat
  * selection, matching pt_combobox_set_selected. pt_select_clear_selection is
  * the explicit clear path. Since 1.2. */
 pt_api uint32_t pt_select_get_selected(const pt_widget *select);
+/* Since 1.2. */
 pt_api void pt_select_set_selected(pt_widget *select, uint32_t index);
+/* Since 1.2. */
 pt_api void pt_select_clear_selection(pt_widget *select);
 
 /* The current filter text. The field owns the live text; this getter returns
  * the same string. pt_select_set_query copies and filters without opening the
  * popup. Since 1.2. */
 pt_api const char *pt_select_get_query(const pt_widget *select);
+/* Since 1.2. */
 pt_api void pt_select_set_query(pt_widget *select, const char *text);
 
 /* Matching rows currently exposed by the popup, in model order. The count is
@@ -150,18 +161,22 @@ pt_api void pt_select_set_query(pt_widget *select, const char *text);
  * position back to an item index (pt_list_index_none when out of range).
  * Since 1.2. */
 pt_api uint32_t pt_select_get_match_count(const pt_widget *select);
+/* Since 1.2. */
 pt_api uint32_t pt_select_get_match_item(const pt_widget *select, uint32_t position);
 
 /* Popup row limit, 1..PT_PICKER_MAX_CANDIDATES; the default is 8. Values are
  * clamped and rows beyond the limit are not exposed as candidates. Since 1.2. */
 pt_api void pt_select_set_max_popup_rows(pt_widget *select, uint32_t rows);
+/* Since 1.2. */
 pt_api uint32_t pt_select_get_max_popup_rows(const pt_widget *select);
 
 /* Opens or closes the popup, or reports it. Closing is a cancel: the committed
  * label returns to the field and the filter is dropped. pt_select_open is a
  * no-op without a window or with an empty model. Since 1.2. */
 pt_api void pt_select_open(pt_widget *select);
+/* Since 1.2. */
 pt_api void pt_select_close(pt_widget *select);
+/* Since 1.2. */
 pt_api bool pt_select_is_open(const pt_widget *select);
 
 /* Fires when the user commits an item, with its model index. Programmatic
@@ -215,13 +230,16 @@ pt_api pt_widget *pt_date_picker_create(pt_widget *parent);
 
 /* Sets the committed date. A zero-initialized date clears the value and returns
  * true; a structural error (bad month, day or year) returns false and changes
- * nothing. Silent. */
+ * nothing. Silent. Since 1.2. */
 pt_api bool pt_date_picker_set_date(pt_widget *picker, pt_date date);
+/* Since 1.2. */
 pt_api pt_date pt_date_picker_get_date(const pt_widget *picker);
+/* Since 1.2. */
 pt_api void pt_date_picker_clear(pt_widget *picker);
 
 /* Picture used by the field. Changing it rewrites the current text. Since 1.2. */
 pt_api void pt_date_picker_set_format(pt_widget *picker, pt_date_format format);
+/* Since 1.2. */
 pt_api pt_date_format pt_date_picker_get_format(const pt_widget *picker);
 
 /* Parses and commits text. An empty string clears the date. Returns false and
@@ -232,13 +250,19 @@ pt_api bool pt_date_picker_set_text(pt_widget *picker, const char *text);
 /* Borrowed committed display text, "" when empty. Since 1.2. */
 pt_api const char *pt_date_picker_get_text(const pt_widget *picker);
 
+/* Since 1.2. */
 pt_api void pt_date_picker_set_placeholder(pt_widget *picker, const char *text);
+/* Since 1.2. */
 pt_api const char *pt_date_picker_get_placeholder(const pt_widget *picker);
 
+/* Since 1.2. */
 pt_api void pt_date_picker_open(pt_widget *picker);
+/* Since 1.2. */
 pt_api void pt_date_picker_close(pt_widget *picker);
+/* Since 1.2. */
 pt_api bool pt_date_picker_is_open(const pt_widget *picker);
 
+/* Since 1.2. */
 pt_api void pt_date_picker_set_on_change(pt_widget *picker, pt_date_callback callback,
                                          void *user_data);
 
@@ -263,19 +287,24 @@ pt_api pt_widget *pt_number_picker_create(pt_widget *parent);
  * pt_get_last_error and changes nothing. A current value outside the new range
  * is clamped. Silent. Since 1.2. */
 pt_api void pt_number_picker_set_range(pt_widget *picker, double minimum, double maximum);
+/* Since 1.2. */
 pt_api double pt_number_picker_get_min(const pt_widget *picker);
+/* Since 1.2. */
 pt_api double pt_number_picker_get_max(const pt_widget *picker);
 
 /* A positive, finite increment. Invalid values are rejected silently with the
  * error set. Since 1.2. */
 pt_api void pt_number_picker_set_step(pt_widget *picker, double step);
+/* Since 1.2. */
 pt_api double pt_number_picker_get_step(const pt_widget *picker);
 
-/* Sets a value, clamped into the range. A non-finite value is ignored. Silent. */
+/* Sets a value, clamped into the range. A non-finite value is ignored. Silent.
+ * Since 1.2. */
 pt_api void pt_number_picker_set_value(pt_widget *picker, double value);
 /* The value, or 0.0 while the picker is empty; use has_value to tell them
  * apart. Since 1.2. */
 pt_api double pt_number_picker_get_value(const pt_widget *picker);
+/* Since 1.2. */
 pt_api bool pt_number_picker_has_value(const pt_widget *picker);
 /* Empties the value and the field. Silent. Since 1.2. */
 pt_api void pt_number_picker_clear(pt_widget *picker);
@@ -285,15 +314,20 @@ pt_api void pt_number_picker_clear(pt_widget *picker);
 pt_api void pt_number_picker_step_by(pt_widget *picker, double steps);
 
 /* Parses and commits text. Empty text clears the value; a non-numeric text is
- * rejected, keeps the old value and restores the old text. Silent on success. */
+ * rejected, keeps the old value and restores the old text. Silent on success.
+ * Since 1.2. */
 pt_api bool pt_number_picker_set_text(pt_widget *picker, const char *text);
 /* Borrowed committed display text, "" while empty. Locale-independent: the
- * decimal separator is always '.', both '.' and ',' are accepted on input. */
+ * decimal separator is always '.', both '.' and ',' are accepted on input.
+ * Since 1.2. */
 pt_api const char *pt_number_picker_get_text(const pt_widget *picker);
 
+/* Since 1.2. */
 pt_api void pt_number_picker_set_placeholder(pt_widget *picker, const char *text);
+/* Since 1.2. */
 pt_api const char *pt_number_picker_get_placeholder(const pt_widget *picker);
 
+/* Since 1.2. */
 pt_api void pt_number_picker_set_on_change(pt_widget *picker, pt_number_callback callback,
                                            void *user_data);
 
@@ -316,6 +350,7 @@ pt_api pt_widget *pt_color_picker_create(pt_widget *parent);
 
 /* Sets the colour silently. Since 1.2. */
 pt_api void pt_color_picker_set_color(pt_widget *picker, pt_color color);
+/* Since 1.2. */
 pt_api pt_color pt_color_picker_get_color(const pt_widget *picker);
 
 /* Parses and commits #RRGGBB / #RRGGBBAA. Returns false and records
@@ -330,14 +365,21 @@ pt_api const char *pt_color_picker_get_hex(const pt_widget *picker);
  * PT_COLOR_MAX_PRESETS with pt_get_last_error); clear removes every preset.
  * Since 1.2. */
 pt_api void pt_color_picker_add_preset(pt_widget *picker, pt_color color);
+/* Since 1.2. */
 pt_api void pt_color_picker_clear_presets(pt_widget *picker);
+/* Since 1.2. */
 pt_api uint32_t pt_color_picker_get_preset_count(const pt_widget *picker);
+/* Since 1.2. */
 pt_api pt_color pt_color_picker_get_preset(const pt_widget *picker, uint32_t index);
 
+/* Since 1.2. */
 pt_api void pt_color_picker_open(pt_widget *picker);
+/* Since 1.2. */
 pt_api void pt_color_picker_close(pt_widget *picker);
+/* Since 1.2. */
 pt_api bool pt_color_picker_is_open(const pt_widget *picker);
 
+/* Since 1.2. */
 pt_api void pt_color_picker_set_on_change(pt_widget *picker, pt_color_callback callback,
                                           void *user_data);
 

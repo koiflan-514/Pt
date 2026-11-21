@@ -106,201 +106,306 @@ typedef enum pt_input_purpose {
 } pt_input_purpose;
 
 /* Constructors append the new widget to parent. A NULL parent creates a
- * detached tree, useful for tests. Container constructors accept children. */
+ * detached tree, useful for tests. Container constructors accept children.
+ * Since 1.0. */
 pt_api pt_widget *pt_box_create(pt_widget *parent, pt_direction direction);
+/* Since 1.0. */
 pt_api pt_widget *pt_row_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_column_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_label_create(pt_widget *parent, const char *text);
+/* Since 1.0. */
 pt_api pt_widget *pt_button_create(pt_widget *parent, const char *text);
+/* Since 1.0. */
 pt_api pt_widget *pt_entry_create(pt_widget *parent, const char *placeholder);
+/* Since 1.0. */
 pt_api pt_widget *pt_toggle_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_slider_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_scroll_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_divider_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_card_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_spacer_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_checkbox_create(pt_widget *parent, const char *text);
+/* Since 1.0. */
 pt_api pt_widget *pt_radio_create(pt_widget *parent, const char *text);
+/* Since 1.0. */
 pt_api pt_widget *pt_progress_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_spinner_create(pt_widget *parent);
 /* Chips are compact pill controls with an optional leading icon and trailing
  * remove action. A removable chip sends on_remove when the trailing region is
  * clicked and on_click for the rest of the chip. Chips can be selected to
- * show an accent-soft filter state. */
+ * show an accent-soft filter state. Since 1.0. */
 pt_api pt_widget *pt_chip_create(pt_widget *parent, const char *text);
 
 /* A skeleton placeholder draws a token-colored block with a moving highlight.
- * Size it with the normal layout helpers; the default is 120x12. */
+ * Size it with the normal layout helpers; the default is 120x12. Since 1.0. */
 pt_api pt_widget *pt_skeleton_create(pt_widget *parent);
 
 /* Segmented controls copy labels and own them. The callback receives the
- * selected index. Radio siblings that share a parent are mutually exclusive. */
+ * selected index. Radio siblings that share a parent are mutually exclusive.
+ * Since 1.0. */
 pt_api pt_widget *pt_segmented_create(pt_widget *parent, const char *const *labels,
                                       uint32_t count);
+/* Since 1.0. */
 pt_api void pt_segmented_set_on_change(pt_widget *segmented, pt_index_callback callback,
                                        void *user_data);
+/* Since 1.0. */
 pt_api uint32_t pt_segmented_get_selected(const pt_widget *segmented);
+/* Since 1.0. */
 pt_api void pt_segmented_set_selected(pt_widget *segmented, uint32_t index);
 
-/* Destroys the widget and its subtree and detaches it from its parent. */
+/* Destroys the widget and its subtree and detaches it from its parent. Since 1.0. */
 pt_api void pt_widget_destroy(pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_widget_clear_children(pt_widget *widget);
+/* Since 1.0. */
 pt_api pt_widget *pt_widget_parent(const pt_widget *widget);
+/* Since 1.0. */
 pt_api pt_widget_kind pt_widget_get_kind(const pt_widget *widget);
 
-/* Layout */
+/* Layout. Since 1.0. */
 pt_api void pt_widget_set_width(pt_widget *widget, float width);
+/* Since 1.0. */
 pt_api void pt_widget_set_height(pt_widget *widget, float height);
+/* Since 1.0. */
 pt_api void pt_widget_set_size(pt_widget *widget, float width, float height);
+/* Since 1.0. */
 pt_api void pt_widget_set_min_width(pt_widget *widget, float width);
+/* Since 1.0. */
 pt_api void pt_widget_set_min_height(pt_widget *widget, float height);
+/* Since 1.0. */
 pt_api void pt_widget_set_max_width(pt_widget *widget, float width);
+/* Since 1.0. */
 pt_api void pt_widget_set_max_height(pt_widget *widget, float height);
+/* Since 1.0. */
 pt_api void pt_widget_set_margin(pt_widget *widget, float top, float right, float bottom,
                                  float left);
+/* Since 1.0. */
 pt_api void pt_widget_set_padding(pt_widget *widget, float top, float right, float bottom,
                                   float left);
+/* Since 1.0. */
 pt_api void pt_widget_set_gap(pt_widget *widget, float gap);
+/* Since 1.0. */
 pt_api void pt_widget_set_grow(pt_widget *widget, float grow);
+/* Since 1.0. */
 pt_api void pt_widget_set_align_self(pt_widget *widget, pt_align align);
+/* Since 1.0. */
 pt_api void pt_box_set_direction(pt_widget *box, pt_direction direction);
+/* Since 1.0. */
 pt_api void pt_box_set_gap(pt_widget *box, float gap);
+/* Since 1.0. */
 pt_api void pt_box_set_align(pt_widget *box, pt_align align);
+/* Since 1.0. */
 pt_api void pt_box_set_justify(pt_widget *box, pt_justify justify);
 
-/* Appearance. Colors are 0xRRGGBBAA. Explicit colors override the theme. */
+/* Appearance. Colors are 0xRRGGBBAA. Explicit colors override the theme. Since 1.0. */
 pt_api void pt_widget_set_background(pt_widget *widget, pt_color color);
+/* Since 1.0. */
 pt_api void pt_widget_set_foreground(pt_widget *widget, pt_color color);
+/* Since 1.0. */
 pt_api void pt_widget_set_border_color(pt_widget *widget, pt_color color);
+/* Since 1.0. */
 pt_api void pt_widget_set_border_width(pt_widget *widget, float width);
+/* Since 1.0. */
 pt_api void pt_widget_set_radius(pt_widget *widget, float radius);
+/* Since 1.0. */
 pt_api void pt_widget_set_font_size(pt_widget *widget, float size);
+/* Since 1.0. */
 pt_api void pt_widget_set_font_weight(pt_widget *widget, pt_font_weight weight);
+/* Since 1.0. */
 pt_api void pt_widget_set_text_align(pt_widget *widget, pt_text_align align);
+/* Since 1.0. */
 pt_api void pt_widget_set_visible(pt_widget *widget, bool visible);
+/* Since 1.0. */
 pt_api void pt_widget_set_enabled(pt_widget *widget, bool enabled);
+/* Since 1.0. */
 pt_api void pt_widget_set_label_wrap(pt_widget *widget, bool wrap);
 
+/* Since 1.0. */
 pt_api void pt_widget_set_text(pt_widget *widget, const char *text);
+/* Since 1.0. */
 pt_api const char *pt_widget_get_text(const pt_widget *widget);
 
 /* Styled ranges on labels and text areas. The setter copies and clamps the
  * spans; querying returns the stored ranges. Passing NULL or zero count is
- * equivalent to pt_widget_clear_text_spans. */
+ * equivalent to pt_widget_clear_text_spans. Since 1.0. */
 pt_api bool pt_widget_set_text_spans(pt_widget *widget, const pt_text_span *spans,
                                      uint32_t count);
+/* Since 1.0. */
 pt_api void pt_widget_clear_text_spans(pt_widget *widget);
+/* Since 1.0. */
 pt_api uint32_t pt_widget_get_text_span_count(const pt_widget *widget);
+/* Since 1.0. */
 pt_api bool pt_widget_get_text_span(const pt_widget *widget, uint32_t index,
                                     pt_text_span *span);
 
 /* Tooltips appear after the delay while the pointer rests over the widget.
- * The default delay is 600 ms. Passing NULL or an empty string removes it. */
+ * The default delay is 600 ms. Passing NULL or an empty string removes it.
+ * Since 1.0. */
 pt_api void pt_widget_set_tooltip(pt_widget *widget, const char *text);
+/* Since 1.0. */
 pt_api void pt_widget_set_tooltip_delay(pt_widget *widget, uint32_t milliseconds);
 
-/* Buttons */
+/* Buttons. Since 1.0. */
 pt_api void pt_button_set_variant(pt_widget *button, pt_button_variant variant);
+/* Since 1.0. */
 pt_api void pt_button_set_on_click(pt_widget *button, pt_click_callback callback,
                                    void *user_data);
 
-/* Chips */
+/* Chips. Since 1.0. */
 pt_api void pt_chip_set_removable(pt_widget *chip, bool removable);
+/* Since 1.0. */
 pt_api bool pt_chip_get_removable(const pt_widget *chip);
+/* Since 1.0. */
 pt_api void pt_chip_set_selected(pt_widget *chip, bool selected);
+/* Since 1.0. */
 pt_api bool pt_chip_get_selected(const pt_widget *chip);
+/* Since 1.0. */
 pt_api void pt_chip_set_on_click(pt_widget *chip, pt_click_callback callback,
                                  void *user_data);
+/* Since 1.0. */
 pt_api void pt_chip_set_on_remove(pt_widget *chip, pt_click_callback callback,
                                   void *user_data);
 
-/* Entries */
+/* Entries. Since 1.0. */
 pt_api void pt_entry_set_placeholder(pt_widget *entry, const char *placeholder);
+/* Since 1.0. */
 pt_api void pt_entry_set_password(pt_widget *entry, bool password);
+/* Since 1.0. */
 pt_api void pt_widget_set_input_purpose(pt_widget *widget, pt_input_purpose purpose);
+/* Since 1.0. */
 pt_api pt_input_purpose pt_widget_get_input_purpose(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_entry_set_on_change(pt_widget *entry, pt_text_callback callback,
                                    void *user_data);
+/* Since 1.0. */
 pt_api void pt_entry_set_on_submit(pt_widget *entry, pt_click_callback callback,
                                    void *user_data);
 
 /* Selection offsets are UTF-8 byte positions, clamped to the text length.
- * Endpoints may be given in either order. */
+ * Endpoints may be given in either order. Since 1.0. */
 pt_api void pt_entry_select_all(pt_widget *entry);
+/* Since 1.0. */
 pt_api void pt_entry_set_selection(pt_widget *entry, uint32_t start, uint32_t end);
+/* Since 1.0. */
 pt_api bool pt_entry_get_selection(const pt_widget *entry, uint32_t *start, uint32_t *end);
+/* Since 1.0. */
 pt_api bool pt_entry_undo(pt_widget *entry);
+/* Since 1.0. */
 pt_api bool pt_entry_redo(pt_widget *entry);
+/* Since 1.0. */
 pt_api bool pt_widget_focus(pt_widget *widget);
+/* Since 1.0. */
 pt_api bool pt_widget_has_focus(const pt_widget *widget);
 
 /* Busy and invalid states apply to every control. A busy widget blocks
  * activation and paints a token-driven progress hint; an invalid widget is
- * normally an entry, text area or form control and paints a danger outline. */
+ * normally an entry, text area or form control and paints a danger outline.
+ * Since 1.0. */
 pt_api void pt_widget_set_busy(pt_widget *widget, bool busy);
+/* Since 1.0. */
 pt_api bool pt_widget_get_busy(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_widget_set_invalid(pt_widget *widget, bool invalid);
+/* Since 1.0. */
 pt_api bool pt_widget_get_invalid(const pt_widget *widget);
 
-/* Checked controls: toggle, checkbox and radio. */
+/* Checked controls: toggle, checkbox and radio. Since 1.0. */
 pt_api bool pt_widget_get_checked(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_widget_set_checked(pt_widget *widget, bool checked);
+/* Since 1.0. */
 pt_api void pt_widget_set_on_checked(pt_widget *widget, pt_value_callback callback,
                                      void *user_data);
 
-/* Toggles */
+/* Toggles. Since 1.0. */
 pt_api bool pt_toggle_get_checked(const pt_widget *toggle);
+/* Since 1.0. */
 pt_api void pt_toggle_set_checked(pt_widget *toggle, bool checked);
+/* Since 1.0. */
 pt_api void pt_toggle_set_on_change(pt_widget *toggle, pt_value_callback callback,
                                     void *user_data);
 
-/* Sliders use values in [0, 1]. */
+/* Sliders use values in [0, 1]. Since 1.0. */
 pt_api float pt_slider_get_value(const pt_widget *slider);
+/* Since 1.0. */
 pt_api void pt_slider_set_value(pt_widget *slider, float value);
+/* Since 1.0. */
 pt_api void pt_slider_set_on_change(pt_widget *slider, pt_value_callback callback,
                                     void *user_data);
 
-/* Progress bars use values in [0, 1]; indeterminate bars animate on their own. */
+/* Progress bars use values in [0, 1]; indeterminate bars animate on their own.
+ * Since 1.0. */
 pt_api float pt_progress_get_value(const pt_widget *progress);
+/* Since 1.0. */
 pt_api void pt_progress_set_value(pt_widget *progress, float value);
+/* Since 1.0. */
 pt_api bool pt_progress_get_indeterminate(const pt_widget *progress);
+/* Since 1.0. */
 pt_api void pt_progress_set_indeterminate(pt_widget *progress, bool indeterminate);
 
-/* Scroll view helpers. Offsets are logical pixels and clamp to content. */
+/* Scroll view helpers. Offsets are logical pixels and clamp to content. Since 1.0. */
 pt_api void pt_scroll_set_offset(pt_widget *scroll, float offset);
+/* Since 1.0. */
 pt_api float pt_scroll_get_offset(const pt_widget *scroll);
+/* Since 1.0. */
 pt_api float pt_scroll_get_max_offset(const pt_widget *scroll);
 
-/* Bounds are in window logical coordinates. */
+/* Bounds are in window logical coordinates. Since 1.0. */
 pt_api void pt_widget_get_bounds(const pt_widget *widget, float *x, float *y, float *width,
                                  float *height);
 
 /* Multi-line text editor. It shares the entry editing model: selection offsets
  * are UTF-8 byte positions, Enter inserts a newline, and lines wrap to the
- * widget width. Grow-to-content sizes the widget to its wrapped text. */
+ * widget width. Grow-to-content sizes the widget to its wrapped text. Since 1.0. */
 pt_api pt_widget *pt_text_area_create(pt_widget *parent, const char *placeholder);
+/* Since 1.0. */
 pt_api void pt_text_area_set_placeholder(pt_widget *area, const char *placeholder);
+/* Since 1.0. */
 pt_api void pt_text_area_set_on_change(pt_widget *area, pt_text_callback callback,
                                        void *user_data);
+/* Since 1.0. */
 pt_api void pt_text_area_set_grow_to_content(pt_widget *area, bool enabled);
+/* Since 1.0. */
 pt_api bool pt_text_area_get_grow_to_content(const pt_widget *area);
+/* Since 1.0. */
 pt_api void pt_text_area_scroll_to_caret(pt_widget *area);
+/* Since 1.0. */
 pt_api void pt_text_area_select_all(pt_widget *area);
+/* Since 1.0. */
 pt_api void pt_text_area_set_selection(pt_widget *area, uint32_t start, uint32_t end);
+/* Since 1.0. */
 pt_api bool pt_text_area_get_selection(const pt_widget *area, uint32_t *start, uint32_t *end);
+/* Since 1.0. */
 pt_api bool pt_text_area_undo(pt_widget *area);
+/* Since 1.0. */
 pt_api bool pt_text_area_redo(pt_widget *area);
 
 /* Responsive containers. Wrap lays children into rows that fit the available
  * width; grid places them in equal-width columns. Defaults to stretch
- * children; use pt_widget_set_align_self for a different cross-axis rule. */
+ * children; use pt_widget_set_align_self for a different cross-axis rule. Since 1.0. */
 pt_api pt_widget *pt_wrap_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api void pt_wrap_set_gap(pt_widget *wrap, float row_gap, float column_gap);
+/* Since 1.0. */
 pt_api pt_widget *pt_grid_create(pt_widget *parent, uint32_t columns);
+/* Since 1.0. */
 pt_api void pt_grid_set_columns(pt_widget *grid, uint32_t columns);
+/* Since 1.0. */
 pt_api uint32_t pt_grid_get_columns(const pt_widget *grid);
+/* Since 1.0. */
 pt_api void pt_grid_set_gap(pt_widget *grid, float row_gap, float column_gap);
+/* Since 1.0. */
 pt_api void pt_widget_set_grid_span(pt_widget *widget, uint32_t span);
+/* Since 1.0. */
 pt_api uint32_t pt_widget_get_grid_span(const pt_widget *widget);
 
 /* Virtualized list. Pt materializes and recycles only the row widgets needed
@@ -325,29 +430,45 @@ typedef const char *(*pt_row_text_callback)(pt_widget *view, uint32_t row,
 typedef void (*pt_list_bind_callback)(pt_widget *list, pt_widget *row, uint32_t index,
                                       void *user_data);
 
+/* Since 1.0. */
 pt_api pt_widget *pt_list_view_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api void pt_list_view_set_row_count(pt_widget *list, uint32_t count);
+/* Since 1.0. */
 pt_api uint32_t pt_list_view_get_row_count(const pt_widget *list);
+/* Since 1.0. */
 pt_api void pt_list_view_set_row_height(pt_widget *list, float height);
+/* Since 1.0. */
 pt_api float pt_list_view_get_row_height(const pt_widget *list);
+/* Since 1.0. */
 pt_api void pt_list_view_set_on_bind_row(pt_widget *list, pt_list_bind_callback callback,
                                          void *user_data);
+/* Since 1.0. */
 pt_api void pt_list_view_set_on_select(pt_widget *list, pt_index_callback callback,
                                        void *user_data);
+/* Since 1.0. */
 pt_api void pt_list_view_set_on_activate(pt_widget *list, pt_index_callback callback,
                                          void *user_data);
+/* Since 1.0. */
 pt_api uint32_t pt_list_view_get_selected(const pt_widget *list);
+/* Since 1.0. */
 pt_api void pt_list_view_set_selected(pt_widget *list, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_list_view_refresh(pt_widget *list);
 /* Rebinds only the rows in [first, first + count) on the next layout. Rows
- * outside the range keep their existing bindings; no pool is rebuilt. */
+ * outside the range keep their existing bindings; no pool is rebuilt. Since 1.0. */
 pt_api void pt_list_view_refresh_rows(pt_widget *list, uint32_t first, uint32_t count);
+/* Since 1.0. */
 pt_api void pt_list_view_scroll_to_row(pt_widget *list, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_list_view_set_row_key_callback(pt_widget *list,
                                               pt_row_key_callback callback,
                                               void *user_data);
+/* Since 1.0. */
 pt_api uint64_t pt_list_view_get_selected_key(const pt_widget *list);
+/* Since 1.0. */
 pt_api bool pt_list_view_set_selected_key(pt_widget *list, uint64_t key);
+/* Since 1.0. */
 pt_api void pt_list_view_set_row_text_callback(pt_widget *list,
                                                pt_row_text_callback callback,
                                                void *user_data);
@@ -355,13 +476,18 @@ pt_api void pt_list_view_set_row_text_callback(pt_widget *list,
 /* Multi-row selection, mirroring the table API. The primary row stays
  * available through pt_list_view_get_selected; the set helpers add or remove
  * rows without disturbing the rest of the selection. Range selection is by
- * model index, and a Ctrl-click or pt_list_view_select_toggle adds a row. */
+ * model index, and a Ctrl-click or pt_list_view_select_toggle adds a row. Since 1.0. */
 pt_api uint32_t pt_list_view_get_selection_count(const pt_widget *list);
+/* Since 1.0. */
 pt_api bool pt_list_view_is_row_selected(const pt_widget *list, uint32_t row);
+/* Since 1.0. */
 pt_api uint32_t pt_list_view_get_selection(const pt_widget *list, uint32_t *rows,
                                            uint32_t capacity);
+/* Since 1.0. */
 pt_api void pt_list_view_select_range(pt_widget *list, uint32_t first, uint32_t last);
+/* Since 1.0. */
 pt_api void pt_list_view_select_toggle(pt_widget *list, uint32_t row);
+/* Since 1.0. */
 pt_api void pt_list_view_clear_selection(pt_widget *list);
 
 /* Built-in vector icons. Glyphs are drawn from a 24x24 outline and stay crisp
@@ -394,13 +520,20 @@ typedef enum pt_icon {
     pt_icon_warning
 } pt_icon;
 
+/* Since 1.0. */
 pt_api void pt_chip_set_icon(pt_widget *chip, pt_icon icon);
 
+/* Since 1.0. */
 pt_api pt_widget *pt_icon_create(pt_widget *parent, pt_icon icon);
+/* Since 1.0. */
 pt_api void pt_widget_set_icon(pt_widget *widget, pt_icon icon);
+/* Since 1.0. */
 pt_api pt_icon pt_widget_get_icon(const pt_widget *widget);
+/* Since 1.0. */
 pt_api void pt_icon_set_size(pt_widget *icon, float size);
+/* Since 1.0. */
 pt_api float pt_icon_get_size(const pt_widget *icon);
+/* Since 1.0. */
 pt_api pt_widget *pt_icon_button_create(pt_widget *parent, pt_icon icon,
                                         const char *accessible_name);
 
@@ -442,55 +575,87 @@ typedef void (*pt_table_sort_columns_callback)(pt_widget *table, uint32_t count,
                                                const pt_sort_direction *directions,
                                                void *user_data);
 
+/* Since 1.0. */
 pt_api pt_widget *pt_table_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api void pt_table_set_column_count(pt_widget *table, uint32_t count);
+/* Since 1.0. */
 pt_api uint32_t pt_table_get_column_count(const pt_widget *table);
+/* Since 1.0. */
 pt_api void pt_table_set_column_title(pt_widget *table, uint32_t column, const char *title);
+/* Since 1.0. */
 pt_api void pt_table_set_column_width(pt_widget *table, uint32_t column, float width);
+/* Since 1.0. */
 pt_api float pt_table_get_column_width(const pt_widget *table, uint32_t column);
+/* Since 1.0. */
 pt_api void pt_table_set_column_align(pt_widget *table, uint32_t column, pt_text_align align);
+/* Since 1.0. */
 pt_api void pt_table_set_column_resizable(pt_widget *table, uint32_t column, bool resizable);
 /* Hidden columns keep their width, title and cells; they are skipped by
- * layout, painting, hit-testing and accessibility. */
+ * layout, painting, hit-testing and accessibility. Since 1.0. */
 pt_api void pt_table_set_column_hidden(pt_widget *table, uint32_t column, bool hidden);
+/* Since 1.0. */
 pt_api bool pt_table_get_column_hidden(const pt_widget *table, uint32_t column);
+/* Since 1.0. */
 pt_api void pt_table_set_row_count(pt_widget *table, uint32_t count);
+/* Since 1.0. */
 pt_api uint32_t pt_table_get_row_count(const pt_widget *table);
+/* Since 1.0. */
 pt_api void pt_table_set_row_height(pt_widget *table, float height);
+/* Since 1.0. */
 pt_api float pt_table_get_row_height(const pt_widget *table);
+/* Since 1.0. */
 pt_api void pt_table_set_header_height(pt_widget *table, float height);
+/* Since 1.0. */
 pt_api void pt_table_set_on_bind_cell(pt_widget *table, pt_table_bind_cell_callback callback,
                                       void *user_data);
+/* Since 1.0. */
 pt_api void pt_table_set_on_select(pt_widget *table, pt_index_callback callback,
                                    void *user_data);
+/* Since 1.0. */
 pt_api void pt_table_set_on_activate(pt_widget *table, pt_index_callback callback,
                                      void *user_data);
+/* Since 1.0. */
 pt_api void pt_table_set_on_sort(pt_widget *table, pt_table_sort_callback callback,
                                  void *user_data);
+/* Since 1.0. */
 pt_api void pt_table_set_on_sort_columns(pt_widget *table,
                                          pt_table_sort_columns_callback callback,
                                          void *user_data);
+/* Since 1.0. */
 pt_api pt_sort_direction pt_table_get_sort(const pt_widget *table, uint32_t *column);
+/* Since 1.0. */
 pt_api void pt_table_set_sort(pt_widget *table, uint32_t column, pt_sort_direction direction);
+/* Since 1.0. */
 pt_api void pt_table_set_sort_columns(pt_widget *table, uint32_t count,
                                       const uint32_t *columns,
                                       const pt_sort_direction *directions);
+/* Since 1.0. */
 pt_api uint32_t pt_table_get_sort_columns(const pt_widget *table, uint32_t *columns,
                                           pt_sort_direction *directions);
+/* Since 1.0. */
 pt_api uint32_t pt_table_get_selected(const pt_widget *table);
+/* Since 1.0. */
 pt_api void pt_table_set_selected(pt_widget *table, uint32_t row);
+/* Since 1.0. */
 pt_api void pt_table_set_row_key_callback(pt_widget *table, pt_row_key_callback callback,
                                           void *user_data);
+/* Since 1.0. */
 pt_api uint64_t pt_table_get_selected_key(const pt_widget *table);
+/* Since 1.0. */
 pt_api bool pt_table_set_selected_key(pt_widget *table, uint64_t key);
+/* Since 1.0. */
 pt_api void pt_table_set_row_text_callback(pt_widget *table,
                                            pt_row_text_callback callback,
                                            void *user_data);
+/* Since 1.0. */
 pt_api void pt_table_refresh(pt_widget *table);
 /* Rebinds only the visible rows intersecting [first, first + count) without
- * rebuilding the row pool. Use for single-row or bulk model edits. */
+ * rebuilding the row pool. Use for single-row or bulk model edits. Since 1.0. */
 pt_api void pt_table_refresh_rows(pt_widget *table, uint32_t first, uint32_t count);
+/* Since 1.0. */
 pt_api void pt_table_scroll_to_row(pt_widget *table, uint32_t row);
+/* Since 1.0. */
 pt_api void pt_table_scroll_to_column(pt_widget *table, uint32_t column);
 
 /* In-place editing. Begin creates an entry over the visible cell, routed
@@ -500,25 +665,37 @@ typedef void (*pt_table_cell_edited_callback)(pt_widget *table, uint32_t row,
                                               uint32_t column, const char *text,
                                               void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_table_set_editable(pt_widget *table, bool editable);
+/* Since 1.0. */
 pt_api bool pt_table_get_editable(const pt_widget *table);
+/* Since 1.0. */
 pt_api bool pt_table_begin_edit(pt_widget *table, uint32_t row, uint32_t column);
+/* Since 1.0. */
 pt_api bool pt_table_commit_edit(pt_widget *table);
+/* Since 1.0. */
 pt_api void pt_table_cancel_edit(pt_widget *table);
+/* Since 1.0. */
 pt_api bool pt_table_is_editing(const pt_widget *table);
+/* Since 1.0. */
 pt_api void pt_table_set_on_cell_edited(pt_widget *table,
                                         pt_table_cell_edited_callback callback,
                                         void *user_data);
 
 /* Multi-row selection. The primary row stays available through
  * pt_table_get_selected; the range helpers extend the highlighted set while
- * shift-clicking and shift-dragging rows. */
+ * shift-clicking and shift-dragging rows. Since 1.0. */
 pt_api uint32_t pt_table_get_selection_count(const pt_widget *table);
+/* Since 1.0. */
 pt_api bool pt_table_is_row_selected(const pt_widget *table, uint32_t row);
+/* Since 1.0. */
 pt_api uint32_t pt_table_get_selection(const pt_widget *table, uint32_t *rows,
                                        uint32_t capacity);
+/* Since 1.0. */
 pt_api void pt_table_select_range(pt_widget *table, uint32_t first, uint32_t last);
+/* Since 1.0. */
 pt_api void pt_table_select_toggle(pt_widget *table, uint32_t row);
+/* Since 1.0. */
 pt_api void pt_table_clear_selection(pt_widget *table);
 
 /* Column reordering and row drag-out. Reordering permutes widths, titles,
@@ -531,11 +708,16 @@ typedef void (*pt_table_columns_reordered_callback)(pt_widget *table, uint32_t f
 typedef void (*pt_table_row_drag_callback)(pt_widget *table, uint32_t row,
                                            void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_table_set_columns_reorderable(pt_widget *table, bool reorderable);
+/* Since 1.0. */
 pt_api bool pt_table_get_columns_reorderable(const pt_widget *table);
+/* Since 1.0. */
 pt_api bool pt_table_move_column(pt_widget *table, uint32_t from, uint32_t to);
+/* Since 1.0. */
 pt_api void pt_table_set_on_columns_reordered(
     pt_widget *table, pt_table_columns_reordered_callback callback, void *user_data);
+/* Since 1.0. */
 pt_api void pt_table_set_on_row_drag(pt_widget *table, pt_table_row_drag_callback callback,
                                      void *user_data);
 
@@ -546,8 +728,9 @@ pt_api void pt_table_set_on_row_drag(pt_widget *table, pt_table_row_drag_callbac
  * must be unique among non-empty keys, so setting a key already used by
  * another column is rejected with a warning and leaves that column unchanged.
  * pt_table_get_column_key never returns NULL and the returned string is owned
- * by the table and invalidated by the next key change or column move. */
+ * by the table and invalidated by the next key change or column move. Since 1.2. */
 pt_api void pt_table_set_column_key(pt_widget *table, uint32_t column, const char *key);
+/* Since 1.2. */
 pt_api const char *pt_table_get_column_key(const pt_widget *table, uint32_t column);
 
 /* Versioned column-layout persistence. pt_table_columns_save serializes the
@@ -587,8 +770,9 @@ pt_api const char *pt_table_get_column_key(const pt_widget *table, uint32_t colu
  * saved key is matched by its display position. A missing or duplicate key,
  * or a mixed set that cannot form a permutation, rejects the blob. On failure
  * the current layout is untouched (atomic); on success the saved widths,
- * visibility, order and sort state are applied and the table rebinds. */
+ * visibility, order and sort state are applied and the table rebinds. Since 1.2. */
 pt_api char *pt_table_columns_save(const pt_widget *table);
+/* Since 1.2. */
 pt_api bool pt_table_columns_restore(pt_widget *table, const char *blob);
 
 /* Hierarchical tree view. Nodes are owned by the tree; handles stay valid
@@ -599,47 +783,78 @@ typedef struct pt_tree_node pt_tree_node;
 
 typedef void (*pt_tree_node_callback)(pt_widget *tree, pt_tree_node *node, void *user_data);
 
+/* Since 1.0. */
 pt_api pt_widget *pt_tree_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_tree_node *pt_tree_add_node(pt_widget *tree, pt_tree_node *parent_node,
                                       const char *text);
+/* Since 1.0. */
 pt_api void pt_tree_clear(pt_widget *tree);
+/* Since 1.0. */
 pt_api uint32_t pt_tree_get_root_count(const pt_widget *tree);
+/* Since 1.0. */
 pt_api pt_tree_node *pt_tree_get_root_node(const pt_widget *tree, uint32_t index);
+/* Since 1.0. */
 pt_api const char *pt_tree_node_get_text(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api void pt_tree_node_set_text(pt_tree_node *node, const char *text);
+/* Since 1.0. */
 pt_api bool pt_tree_node_get_expanded(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api void pt_tree_node_set_expanded(pt_tree_node *node, bool expanded);
+/* Since 1.0. */
 pt_api bool pt_tree_node_has_children(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api uint32_t pt_tree_node_get_depth(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api pt_tree_node *pt_tree_node_parent(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api uint32_t pt_tree_node_get_child_count(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api pt_tree_node *pt_tree_node_get_child(const pt_tree_node *node, uint32_t index);
+/* Since 1.0. */
 pt_api void *pt_tree_node_get_data(const pt_tree_node *node);
+/* Since 1.0. */
 pt_api void pt_tree_node_set_data(pt_tree_node *node, void *data);
+/* Since 1.0. */
 pt_api uint32_t pt_tree_get_visible_count(const pt_widget *tree);
+/* Since 1.0. */
 pt_api pt_tree_node *pt_tree_get_visible_node(const pt_widget *tree, uint32_t row);
+/* Since 1.0. */
 pt_api pt_tree_node *pt_tree_get_selected(const pt_widget *tree);
+/* Since 1.0. */
 pt_api void pt_tree_set_selected(pt_widget *tree, pt_tree_node *node);
+/* Since 1.0. */
 pt_api void pt_tree_set_row_height(pt_widget *tree, float height);
+/* Since 1.0. */
 pt_api void pt_tree_set_indent(pt_widget *tree, float indent);
+/* Since 1.0. */
 pt_api void pt_tree_set_on_select(pt_widget *tree, pt_tree_node_callback callback,
                                   void *user_data);
+/* Since 1.0. */
 pt_api void pt_tree_set_on_activate(pt_widget *tree, pt_tree_node_callback callback,
                                     void *user_data);
+/* Since 1.0. */
 pt_api void pt_tree_refresh(pt_widget *tree);
+/* Since 1.0. */
 pt_api void pt_tree_scroll_to_node(pt_widget *tree, pt_tree_node *node);
 
 /* Multi-node selection, mirroring the list and table APIs. Selection lives on
  * the nodes, so it survives expand, collapse and refresh; a node that is
  * removed or cleared simply stops being selected. The primary node stays
  * available through pt_tree_get_selected, and range selection works on
- * visible row indices because collapsed branches have no rows. */
+ * visible row indices because collapsed branches have no rows. Since 1.0. */
 pt_api uint32_t pt_tree_get_selection_count(const pt_widget *tree);
+/* Since 1.0. */
 pt_api bool pt_tree_is_selected(const pt_widget *tree, const pt_tree_node *node);
+/* Since 1.0. */
 pt_api uint32_t pt_tree_get_selection(const pt_widget *tree, pt_tree_node **nodes,
                                       uint32_t capacity);
+/* Since 1.0. */
 pt_api void pt_tree_select_range(pt_widget *tree, uint32_t first_row, uint32_t last_row);
+/* Since 1.0. */
 pt_api void pt_tree_select_toggle(pt_widget *tree, pt_tree_node *node);
+/* Since 1.0. */
 pt_api void pt_tree_clear_selection(pt_widget *tree);
 
 /* Inline renaming. begin_rename opens an editor over the node's label and
@@ -648,44 +863,71 @@ pt_api void pt_tree_clear_selection(pt_widget *tree);
 typedef void (*pt_tree_rename_callback)(pt_widget *tree, pt_tree_node *node,
                                         const char *text, void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_tree_set_renamable(pt_widget *tree, bool renamable);
+/* Since 1.0. */
 pt_api bool pt_tree_get_renamable(const pt_widget *tree);
+/* Since 1.0. */
 pt_api bool pt_tree_begin_rename(pt_widget *tree, pt_tree_node *node);
+/* Since 1.0. */
 pt_api bool pt_tree_commit_rename(pt_widget *tree);
+/* Since 1.0. */
 pt_api void pt_tree_cancel_rename(pt_widget *tree);
+/* Since 1.0. */
 pt_api bool pt_tree_is_renaming(const pt_widget *tree);
+/* Since 1.0. */
 pt_api void pt_tree_set_on_rename(pt_widget *tree, pt_tree_rename_callback callback,
                                   void *user_data);
 
 /* Tabbed navigation. Pages are real child widgets owned by the tabs widget.
  * The strip scrolls horizontally with overflow arrows, and the active
- * indicator glides between tabs unless reduced motion is enabled. */
+ * indicator glides between tabs unless reduced motion is enabled. Since 1.0. */
 pt_api pt_widget *pt_tabs_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_tabs_add_page(pt_widget *tabs, const char *title);
+/* Since 1.0. */
 pt_api void pt_tabs_remove_page(pt_widget *tabs, uint32_t index);
+/* Since 1.0. */
 pt_api uint32_t pt_tabs_get_page_count(const pt_widget *tabs);
+/* Since 1.0. */
 pt_api pt_widget *pt_tabs_get_page(const pt_widget *tabs, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_tabs_set_page_title(pt_widget *tabs, uint32_t index, const char *title);
+/* Since 1.0. */
 pt_api const char *pt_tabs_get_page_title(const pt_widget *tabs, uint32_t index);
+/* Since 1.0. */
 pt_api uint32_t pt_tabs_get_active(const pt_widget *tabs);
+/* Since 1.0. */
 pt_api void pt_tabs_set_active(pt_widget *tabs, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_tabs_set_on_change(pt_widget *tabs, pt_index_callback callback,
                                   void *user_data);
+/* Since 1.0. */
 pt_api void pt_tabs_set_strip_height(pt_widget *tabs, float height);
 
 /* Navigation sidebar. Items are real child widgets with an icon and label;
  * compact mode hides labels and centers icons while keeping accessible names.
- * The active item gets a rounded selection pill and an accent rail. */
+ * The active item gets a rounded selection pill and an accent rail. Since 1.0. */
 pt_api pt_widget *pt_sidebar_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api pt_widget *pt_sidebar_add_item(pt_widget *sidebar, pt_icon icon, const char *label);
+/* Since 1.0. */
 pt_api uint32_t pt_sidebar_get_item_count(const pt_widget *sidebar);
+/* Since 1.0. */
 pt_api pt_widget *pt_sidebar_get_item(const pt_widget *sidebar, uint32_t index);
+/* Since 1.0. */
 pt_api uint32_t pt_sidebar_get_active(const pt_widget *sidebar);
+/* Since 1.0. */
 pt_api void pt_sidebar_set_active(pt_widget *sidebar, uint32_t index);
+/* Since 1.0. */
 pt_api bool pt_sidebar_get_compact(const pt_widget *sidebar);
+/* Since 1.0. */
 pt_api void pt_sidebar_set_compact(pt_widget *sidebar, bool compact);
+/* Since 1.0. */
 pt_api void pt_sidebar_set_header(pt_widget *sidebar, const char *text);
+/* Since 1.0. */
 pt_api const char *pt_sidebar_get_header(const pt_widget *sidebar);
+/* Since 1.0. */
 pt_api void pt_sidebar_set_on_select(pt_widget *sidebar, pt_index_callback callback,
                                      void *user_data);
 
@@ -709,36 +951,63 @@ typedef enum pt_combobox_mode {
 typedef void (*pt_combobox_text_callback)(pt_widget *combobox, const char *text,
                                           void *user_data);
 
+/* Since 1.0. */
 pt_api pt_widget *pt_combobox_create(pt_widget *parent);
+/* Since 1.0. */
 pt_api void pt_combobox_add_item(pt_widget *combobox, const char *text);
+/* Since 1.0. */
 pt_api void pt_combobox_insert_item(pt_widget *combobox, uint32_t index, const char *text);
+/* Since 1.0. */
 pt_api void pt_combobox_remove_item(pt_widget *combobox, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_combobox_clear(pt_widget *combobox);
+/* Since 1.0. */
 pt_api uint32_t pt_combobox_get_item_count(const pt_widget *combobox);
+/* Since 1.0. */
 pt_api const char *pt_combobox_get_item_text(const pt_widget *combobox, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_combobox_set_item_text(pt_widget *combobox, uint32_t index, const char *text);
+/* Since 1.0. */
 pt_api void pt_combobox_set_item_data(pt_widget *combobox, uint32_t index, void *data);
+/* Since 1.0. */
 pt_api void *pt_combobox_get_item_data(const pt_widget *combobox, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_combobox_set_item_disabled(pt_widget *combobox, uint32_t index, bool disabled);
+/* Since 1.0. */
 pt_api bool pt_combobox_get_item_disabled(const pt_widget *combobox, uint32_t index);
+/* Since 1.0. */
 pt_api void pt_combobox_set_mode(pt_widget *combobox, pt_combobox_mode mode);
+/* Since 1.0. */
 pt_api pt_combobox_mode pt_combobox_get_mode(const pt_widget *combobox);
+/* Since 1.0. */
 pt_api uint32_t pt_combobox_get_selected(const pt_widget *combobox);
 /* Selecting an index also puts its label in the field; passing
  * pt_list_index_none clears both. Setting a selection does not fire
- * pt_combobox_set_on_change, matching every other set_selected in the API. */
+ * pt_combobox_set_on_change, matching every other set_selected in the API.
+ * Since 1.0. */
 pt_api void pt_combobox_set_selected(pt_widget *combobox, uint32_t index);
+/* Since 1.0. */
 pt_api const char *pt_combobox_get_text(const pt_widget *combobox);
+/* Since 1.0. */
 pt_api void pt_combobox_set_text(pt_widget *combobox, const char *text);
+/* Since 1.0. */
 pt_api const char *pt_combobox_get_placeholder(const pt_widget *combobox);
+/* Since 1.0. */
 pt_api void pt_combobox_set_placeholder(pt_widget *combobox, const char *text);
+/* Since 1.0. */
 pt_api void pt_combobox_open(pt_widget *combobox);
+/* Since 1.0. */
 pt_api void pt_combobox_close(pt_widget *combobox);
+/* Since 1.0. */
 pt_api bool pt_combobox_is_open(const pt_widget *combobox);
+/* Since 1.0. */
 pt_api void pt_combobox_set_popup_max_height(pt_widget *combobox, float height);
+/* Since 1.0. */
 pt_api float pt_combobox_get_popup_max_height(const pt_widget *combobox);
+/* Since 1.0. */
 pt_api void pt_combobox_set_on_change(pt_widget *combobox, pt_index_callback callback,
                                       void *user_data);
+/* Since 1.0. */
 pt_api void pt_combobox_set_on_text_change(pt_widget *combobox,
                                            pt_combobox_text_callback callback,
                                            void *user_data);

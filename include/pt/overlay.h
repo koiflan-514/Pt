@@ -45,8 +45,9 @@ typedef enum pt_popup_policy {
 
 /* Selects native popups when the backend supports them (auto), always uses
  * them (native) or never uses them (window). Dialogs and toasts always stay
- * in the parent surface. Defaults to auto. */
+ * in the parent surface. Defaults to auto. Since 1.0. */
 pt_api void pt_window_set_popup_policy(pt_window *window, pt_popup_policy policy);
+/* Since 1.0. */
 pt_api pt_popup_policy pt_window_get_popup_policy(const pt_window *window);
 
 typedef struct pt_menu pt_menu;
@@ -63,37 +64,55 @@ typedef enum pt_toast_kind {
 typedef void (*pt_dialog_callback)(pt_dialog *dialog, void *user_data);
 
 /* Menus copy item labels and shortcuts. The callback runs after the menu has
- * closed, so it may open another overlay. */
+ * closed, so it may open another overlay. Since 1.0. */
 pt_api pt_menu *pt_menu_create(pt_window *window);
+/* Since 1.0. */
 pt_api void pt_menu_destroy(pt_menu *menu);
+/* Since 1.0. */
 pt_api void pt_menu_add_item(pt_menu *menu, const char *label, const char *shortcut,
                              pt_click_callback callback, void *user_data);
+/* Since 1.0. */
 pt_api void pt_menu_add_separator(pt_menu *menu);
+/* Since 1.0. */
 pt_api void pt_menu_show_at(pt_menu *menu, float x, float y);
+/* Since 1.0. */
 pt_api void pt_menu_show_below(pt_menu *menu, pt_widget *anchor);
+/* Since 1.0. */
 pt_api void pt_menu_dismiss(pt_menu *menu);
+/* Since 1.0. */
 pt_api bool pt_menu_is_open(const pt_menu *menu);
 
 /* Modal dialogs dim the window behind them, trap Tab focus and close on
- * Escape. Actions close the dialog before their callback runs. */
+ * Escape. Actions close the dialog before their callback runs. Since 1.0. */
 pt_api pt_dialog *pt_dialog_create(pt_window *window, const char *title,
                                    const char *message);
+/* Since 1.0. */
 pt_api void pt_dialog_destroy(pt_dialog *dialog);
+/* Since 1.0. */
 pt_api void pt_dialog_set_title(pt_dialog *dialog, const char *title);
+/* Since 1.0. */
 pt_api void pt_dialog_set_message(pt_dialog *dialog, const char *message);
+/* Since 1.0. */
 pt_api void pt_dialog_add_action(pt_dialog *dialog, const char *label, bool primary,
                                  pt_click_callback callback, void *user_data);
+/* Since 1.0. */
 pt_api void pt_dialog_show(pt_dialog *dialog);
+/* Since 1.0. */
 pt_api void pt_dialog_close(pt_dialog *dialog);
+/* Since 1.0. */
 pt_api bool pt_dialog_is_open(const pt_dialog *dialog);
+/* Since 1.0. */
 pt_api void pt_dialog_set_on_close(pt_dialog *dialog, pt_dialog_callback callback,
                                    void *user_data);
 
 /* Toasts stack at the bottom-right corner and expire automatically. A duration
- * of 0 keeps the toast until dismissed. The handle is owned by the window. */
+ * of 0 keeps the toast until dismissed. The handle is owned by the window.
+ * Since 1.0. */
 pt_api pt_toast *pt_window_show_toast(pt_window *window, const char *text,
                                       pt_toast_kind kind, uint32_t duration_ms);
+/* Since 1.0. */
 pt_api void pt_toast_dismiss(pt_toast *toast);
+/* Since 1.0. */
 pt_api bool pt_toast_is_visible(const pt_toast *toast);
 
 #ifdef __cplusplus
