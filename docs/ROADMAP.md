@@ -1517,17 +1517,18 @@ isolated worktrees, then an integration phase that regenerates the baseline and
 reference, adds the three-language wrappers, examples and bilingual docs, bumps
 the version and runs the full gate before the tag.
 
-Status (2026-11-22): the shared C surface, baseline, reference, version bump and
-public guides are complete on the docs branch based on integration head
-`a5179a1`. The tree exports **554 functions / 907 baseline entries**
-(554 `func`, 281 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`, 6 `define`,
-1 `type`); `VERSION` and the four macros, README, reference and this milestone
-say 1.2.0. All 554 declarations now carry a since marker (412 × 1.0, 36 × 1.1,
-106 × 1.2), and the generated reference exposes it per entry. The six new C
-suites pass with 3,434 checks, the 34 headless C suites total 6,913 checks and
-the bilingual check is green. The three-language wrappers, their tests, the 1.2
-examples and the final gate are the parallel integration work in flight; the
-annotated tag stays uncreated until they land.
+Status (2026-11-22): delivered on the final gate tree `859233f`; only the
+annotated tag is left to the repository owner. The tree exports **554
+functions / 907 baseline entries** (554 `func`, 281 `enum`, 43 `callback`, 10
+`struct`, 12 `opaque`, 6 `define`, 1 `type`); `VERSION` and the four macros,
+README, reference and this milestone say 1.2.0. All 554 declarations carry a
+since marker (412 × 1.0, 36 × 1.1, 106 × 1.2) and the generated reference
+exposes it per entry. The 35 headless C suites total 6,913 checks (the six new
+suites contribute 3,434); the three-language wrappers reach 554/554 in C++,
+Python and Java with an empty allowlist (C++ 763 checks, Python 64 tests, Java
+620 checks); the bilingual check is green. `tools/ci.sh` passed end to end
+(exit 0) and `tools/release-check.sh --full` reports only its two human items;
+the measured figures are in [release.md](release.md).
 
 ### Wave 1 (parallel C workstreams, delivered)
 
@@ -1580,6 +1581,25 @@ the audit in `a5179a1`.
   `tools/gen-binding-stubs.py` generates the C++/Python/Java skeleton from
   `api/pt.api`, and `tools/test_gen_binding_stubs.py` passes its 16 cases.
 
+### Final integration (delivered)
+
+- **C++ wrapper — delivered (`d2a1609`, `fa361be`, `360ad25`).** 554/554 with
+  an empty allowlist; `bindings/cpp/test_pt.cpp` passes 763 checks covering the
+  popup, font-fallback, clipboard, column, icon and picker paths plus the 1.2
+  ABI pins.
+- **Python wrapper — delivered (`b987f32`, `8dafc1b`, `3f48c04`).** 554/554;
+  the unittest suite runs 64 tests over popup paths, fallback chains, clipboard
+  media, column blobs, raster icons, picker values and callback dispatch.
+- **Java wrapper — delivered (`c67ae29`, `8db2ec8`, `3948e77`).** 554/554; the
+  Java test binary reports 620 checks with 0 failures.
+- **1.2 examples — delivered (`0c6b1f7`, `f013ac3`).** 13 new examples, every
+  one with a `run-*` target: six C (popup, pickers, icon button, clipboard
+  image, font fallback, column persistence), two C++ (pickers, popup), two
+  Python (pickers, popup) and three Java (pickers, popup, icon button).
+- **Docs final — delivered (`fda270a` and the version/reference/guide commits
+  above).** The binding tables in README and the guides name the 554 wrappers
+  in each language, and the 1.2.0 release record carries the gate figures.
+
 ### Documentation and release surface (delivered)
 
 - Header audit `6cc4e68` marks every declaration with 1.0/1.1/1.2 and pins the
@@ -1588,10 +1608,10 @@ the audit in `a5179a1`.
   regenerates `docs/api-reference.md` at 554 functions with since markers.
 - README `e0e0f34` and the public guides `bf01726` describe the six groups in
   English and Simplified Chinese; the bilingual check reports 9 clean pairs.
-- The 1.2.0 release record is in [release.md](release.md) with the final gate
-  figures left as `pending final gate run`.
+- The 1.2.0 release record in [release.md](release.md) carries the final gate
+  figures measured on `859233f`; nothing is left as `pending final gate run`.
 
-### Open items carried into the final integration
+### Open items (carried past M19)
 
 - **Fake-compositor replay is still absent.** Popup, font-fallback and clipboard
   paths have headless state tests plus the live suite; the in-process protocol
@@ -1608,33 +1628,45 @@ the audit in `a5179a1`.
   records KWin/Labwc/Muffin/Jay/Pila as exposing `xdg-toplevel-icon-v1`, but no
   live recording was made in this pass; the submission path is covered headless
   and niri/Sway/Weston take the tested no-op path.
-- **1.2 examples are not in the tree.** No example exercises popups, pickers,
-  icon images, clipboard media, font fallback or column persistence yet; the
-  Java demos are the explicit gap for the final integration.
-- **The three-language wrappers and their dispatch tests are in flight.** The
-  parity target is 554/554 with an empty allowlist; `make check` is the
-  authority and the tag waits for it.
+- **Binding raw-callback dispatch still needs a live seat.** Registration and
+  callback-free paths are headless-tested for all three bindings; asserting that
+  an actual raw key or pointer event reaches a wrapped callback remains a live
+  suite item.
 - **M18's two IME visual items remain deferred.** `preedit_hint` presentation and
   `show_input_panel`/`hide_input_panel` were moved to 1.2 but are not part of
   this wave; the event surface and full-state resend remain implemented.
 
 ### Completion criteria
 
-Same gate set as M18 section 4. Current status:
+Same gate set as M18 section 4. Final status on `859233f`:
 
-- `make check` / `make check-bindings` / `make perf-check` / live suites /
-  `tools/ci.sh` / `tools/release-check.sh --full`: **pending final gate run**
-  (the wrappers, examples and final gate are the parallel integration work;
-  release-check passes version, baseline, reference, examples and bilingual
-  gates and reports the in-flight 106-function-per-language parity gap, plus
-  its two human items).
+- `make check` / `make check-bindings`: pass — 35 C suites with 6,913 checks;
+  C++ 763 checks, Python 64 tests, Java 620 checks, 0 failures; binding parity
+  554/554 in all three languages with an empty allowlist; exported-symbol,
+  baseline and generated-reference audits clean.
+- `make perf-check`: pass — every guard ceiling holds; dense full paint
+  6.078 ms, 4K full paint 8.571 ms, first frame 13.494 ms, idle 300 ms CPU
+  0.451 ms.
+- Live suites: `make check-wayland` 48 checks under niri (focused-entry idle
+  26.6 ms over 5000 ms after one external-input retry); `make check-typing`
+  PASS (ptdirect, text-input-v3).
+- `tools/ci.sh`: pass end to end, exit 0 (`CI verification passed for Pt
+  1.2.0`) — werror build, check, perf, staged install with the four consumers,
+  ASan+UBSan including the bindings, a reproducible tarball
+  `54ce8abd…c521ac` and an extracted rebuild that passes `make check`.
+- `tools/release-check.sh --full`: every automated gate passes for 1.2.0; the
+  two open items are the human ones it always reports (freeze commit/tag and
+  live-suite sign-off — the live suites above were run on this tree).
 - Bilingual sync, version agreement, 554-function baseline and reference
   coverage: **delivered and passing**; the reference names all 554 functions.
-- ABI pins and an append-only diff against 1.1.0: **delivered for the C surface**
-  (554/907, 0 removed; SONAME unchanged). The symbol-level comparison against
-  1.1.0 is part of the final gate record.
-- A 1.2.0 release record: **drafted in [release.md](release.md)** with the final
-  numbers marked `pending final gate run`.
+- ABI against 1.1.0: append-only at the symbol level — 448 → 554 exported
+  `pt_*` symbols, 0 removed, 106 added, no type changes among the 448 common
+  symbols, SONAME `libpt.so.1` on both builds. `abidiff` is not installed on
+  the reference machine (no libabigail, no elevated privileges to add it), so
+  the comparison is symbol-level; a type-level run is still recommended where
+  libabigail is available.
+- A 1.2.0 release record: **delivered** in [release.md](release.md) with the
+  figures above and no `pending final gate run` markers left.
 
 ## Post-1.0 horizons
 

@@ -11,7 +11,7 @@ clipboard images and URI lists, column persistence, icon images and the four
 pickers. From 1.1 the extension surface is consistent across C, C++, Python and
 Java: the wrappers cover every declared name, and the parity audit treats a
 missing name as a `make check` failure rather than reporting a percentage. The
-1.2 target is 554/554. The 0.10 combobox and multi-row selection surface, and
+1.2 surface ships 554/554. The 0.10 combobox and multi-row selection surface, and
 the 0.9 theme, chip/skeleton, data-view editing and per-run typography surface,
 remain wrapped in full.
 

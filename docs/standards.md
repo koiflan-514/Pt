@@ -346,10 +346,10 @@ surface: the generated reference derives its module list from `include/pt/*.h`,
 the baseline and reference agree on the 554-function / 907-entry surface, every
 declaration carries a since marker, the bilingual pairs are in sync, the version
 is 1.2.0 everywhere, and the ABI pins cover the new enums, structs and limits.
-The three-language wrappers and their dispatch tests are the parallel
-integration change in flight; the reviewed allowlist stays empty and the parity
-gate is `make check`, not a report. The remaining deviations are explicit and
-tracked in [ROADMAP.md](ROADMAP.md) under M19:
+The three-language wrappers and their dispatch tests are delivered on the final
+tree: C++, Python and Java each cover 554/554 with the reviewed allowlist
+empty, and the parity gate is `make check`, not a report. The remaining
+deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under M19:
 
 - **No fake-compositor replay facility.** Protocol sequences are covered by
   headless state tests plus the live niri run. The in-process fake compositor
