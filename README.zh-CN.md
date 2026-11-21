@@ -12,8 +12,8 @@
 
 ## 为什么选择 Pt
 
-- Wayland 优先：`xdg-shell`、客户端装饰、`fractional-scale-v1`
-  和 `text-input-v3`，不背负 X11 或 GL 运行时包袱。
+- Wayland 优先：`xdg-shell`、默认采用客户端装饰的装饰协商、
+  `fractional-scale-v1` 和 `text-input-v3`，不背负 X11 或 GL 运行时包袱。
 - 保留模式控件树，以及一套扁平、不透明、便于绑定的 C ABI。
 - 清晰的 FreeType + HarfBuzz 文本，包括 CJK 字形整形和分数缩放。
 - 现代令牌化设计语言：38 个语义颜色角色和 10 个几何度量，
@@ -43,6 +43,33 @@
 - 基于 `wl_shm` 的软件渲染：冷启动快，窗口未获焦时空闲占用不到单核的 0.3%，
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
+
+## 1.1 的新特性（开发中）
+
+1.1 保留全部 1.0 签名，并为需要自行绘制内容、接管输入或直接与合成器交互的
+应用新增一层扩展表面。发布尚未切出；以下各节描述工作分支中的扩展 API。
+
+- **装饰协商。** 默认是显式的客户端装饰。`pt_window_set_decorated(false)`
+  现在只表示“Pt 不绘制标题栏”，绝不再请求服务端装饰。
+  `pt_window_set_decoration_mode` 可选择 `auto`、`client` 或 `server`，
+  合成器返回的 `configure` 模式仍然是权威结果。参见
+  [装饰政策](#装饰政策)。
+- **主选区。** `pt_window_primary_set` 和 `pt_window_primary_get` 通过
+  `wp_primary_selection_unstable_v1` 为鼠标中键粘贴提供支持，并使用触发事件
+  的 serial；在 Wayland 之外则回退到进程内缓冲区。
+- **自定义绘制。** `pt_widget_set_paint_callback` 向控件提供一个借用的
+  `pt_paint_context`，其中包含裁剪、矩形、线条、圆角矩形和文本辅助函数
+  （`pt_paint_*`），以及控件范围的请求重绘入口。
+- **离屏快照。** `pt_window_paint_pixels` 将完整一帧渲染到调用方拥有的
+  `0xAARRGGBB` 缓冲区，不会产生损坏、重绘簿记或覆盖层收集，因此自定义绘制
+  可以在无头环境中测试。
+- **自定义输入法。** `pt_window_set_ime_callbacks`、
+  `pt_window_set_ime_enabled` 和 `pt_window_set_ime_cursor_rect` 让终端或画布
+  无需伪装成输入框即可接收组合后的文本。
+- **描述符监视。** `pt_app_watch_fd` 以借用描述符语义把管道、eventfd 和
+  timerfd 纳入应用的 poll 循环。
+- **原始输入回调。** 焦点回调、携带 xkb UTF-8 文本的按键回调，以及归一化
+  指针事件回调都在控件分发之前运行，并具有明确的消费范围。
 
 ## 1.0 的新特性
 
@@ -533,6 +560,29 @@ pkg-config --modversion pt
 - Fontconfig 启动成本主导首帧内存：在参考机器上为 24.7-27.8 MiB RSS，
   但 PSS 为 10.2-12.8 MiB，因为字体数据与系统共享。
   稳态下的控件/UI 内存本身很小。
+
+## 装饰政策
+
+Pt 会绘制自己的 44 px 标题栏，并把“谁装饰表面”和“Pt 是否绘制标题栏”当作
+两个独立决定。默认是显式的客户端装饰（`pt_decoration_mode_client`）：
+Pt 在首次提交时向 `xdg-decoration` 请求客户端模式，因为它的标题栏、边缘
+调整大小区域和命中测试都是为此构建的。
+
+`pt_window_set_decorated(window, false)` 只是一个绘制开关。窗口不再有 Pt
+标题栏和 Pt 边缘区域，也绝不向合成器请求装饰。服务端装饰需要显式选择：
+
+```c
+pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+```
+
+`pt_decoration_mode_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求
+从来不是保证：`configure` 返回的模式才是权威结果。Sway 即使收到客户端
+请求，也会对平铺窗口强制服务端装饰；niri 尊重客户端请求，但在服务端模式下
+只绘制焦点环或边框，而不是标题栏；Mutter 和 Weston 根本不提供装饰管理器，
+因此会使用 Pt 的标题栏。全屏会在任何模式下隐藏标题栏，平铺窗口会放弃圆角
+和阴影。无边框客户端窗口保留 6 px 边缘热区，因此仍可用鼠标调整大小。
+各合成器的证据和已知怪癖编号见
+[compositor-matrix.md](docs/compositor-matrix.md)。
 
 ## 许可证
 

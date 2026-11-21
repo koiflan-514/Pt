@@ -21,8 +21,9 @@ function reference and a compatibility policy; see
 
 ## Why Pt
 
-- Wayland first: `xdg-shell`, client-side decorations, `fractional-scale-v1`
-  and `text-input-v3`, with no X11 or GL runtime baggage.
+- Wayland first: `xdg-shell`, decoration negotiation that is client-side by
+  default, `fractional-scale-v1` and `text-input-v3`, with no X11 or GL runtime
+  baggage.
 - A retained-mode widget tree and a flat, opaque C ABI that is pleasant to bind.
 - Crisp FreeType + HarfBuzz text, including CJK shaping and fractional scaling.
 - A modern, tokenized design language: 38 semantic color roles and 10 geometric
@@ -59,6 +60,37 @@ function reference and a compatibility policy; see
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 1.1 (in progress)
+
+1.1 keeps every 1.0 signature and adds an extension surface for applications
+that draw their own content, own input or talk to the compositor directly. The
+release is not cut yet; the sections below describe the extension API in the
+work-in-progress tree.
+
+- **Decoration negotiation.** The default is explicit client-side decoration.
+  `pt_window_set_decorated(false)` now means only "Pt draws no header"; it never
+  requests server-side decoration. `pt_window_set_decoration_mode` chooses
+  `auto`, `client` or `server`, and the compositor's `configure` answer remains
+  authoritative. See [Decoration policy](#decoration-policy).
+- **Primary selection.** `pt_window_primary_set` and `pt_window_primary_get`
+  back middle-click paste through `wp_primary_selection_unstable_v1` with the
+  serial of the triggering event, and fall back to an in-process buffer off
+  Wayland.
+- **Custom paint.** `pt_widget_set_paint_callback` hands a widget a borrowed
+  `pt_paint_context` with clip, rectangle, line, rounded-rectangle and text
+  helpers (`pt_paint_*`), plus widget-scoped redraw requests.
+- **Offscreen snapshots.** `pt_window_paint_pixels` renders a full frame into a
+  caller-owned `0xAARRGGBB` buffer without damage, redraw bookkeeping or overlay
+  collection, so custom paint is testable headless.
+- **Custom IME.** `pt_window_set_ime_callbacks`, `pt_window_set_ime_enabled` and
+  `pt_window_set_ime_cursor_rect` let a terminal or canvas receive composed text
+  without pretending to be an entry.
+- **Descriptor watches.** `pt_app_watch_fd` folds pipes, eventfds and timerfds
+  into the app's poll loop with borrowed-descriptor semantics.
+- **Raw input callbacks.** A focus callback, a key callback that carries the xkb
+  UTF-8 text and a normalized pointer-event callback run before widget
+  dispatch, with a defined consume scope.
 
 ## What is new in 1.0
 
@@ -624,15 +656,34 @@ English-only.
   10.2-12.8 MiB PSS on the reference machine, because font data is shared with the
   system. Steady-state widget/UI memory itself is small.
 
+## Decoration policy
+
+Pt draws its own 44 px title bar, and it treats "who decorates the surface" and
+"does Pt draw a header" as separate decisions. The default is explicit
+client-side decoration (`pt_decoration_mode_client`): Pt asks `xdg-decoration`
+for client-side mode at the first commit, because its header, edge resize zones
+and hit testing are built for it.
+
+`pt_window_set_decorated(window, false)` is a drawing switch. The window gets no
+Pt header and no Pt edge zones, and it never asks the compositor for a
+decoration. Server-side decoration is an explicit opt-in:
+
+```c
+pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+```
+
+`pt_decoration_mode_auto` follows the framework default, which is client-side
+decoration in 1.1. The request is never a guarantee: the mode returned by
+`configure` is authoritative. Sway forces server-side decoration on tiled
+windows even after a client-side request, niri honours client-side but draws a
+focus ring or border rather than a title bar for server-side, and Mutter and
+Weston expose no decoration manager at all, so they get Pt's header. Fullscreen
+hides the header in every mode, and tiled windows drop their corner radius and
+shadow. Borderless client-side windows keep their 6 px edge hot-zone so they
+stay mouse-resizable. Per-compositor evidence and quirk ids are in
+[compositor-matrix.md](docs/compositor-matrix.md).
+
 ## License
 
 Apache License 2.0. Vendored Wayland protocol XML retains its MIT headers; see
 [NOTICE](NOTICE) and [THIRD_PARTY.md](THIRD_PARTY.md).
-
-## Decoration policy
-
-Pt windows ask the compositor for server-side decorations (xdg-decoration
-`set_mode(SERVER_SIDE)`) before falling back to the built-in client-side
-title bar. Desktops that answer with CSD, or that have no decoration manager,
-get Pt's own decorations; borderless CSD windows (`prefer-no-csd`) keep their
-6 px edge hot-zone so they stay mouse-resizable.
