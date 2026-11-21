@@ -1274,11 +1274,220 @@ Delivered:
   the 48-check live Wayland suite, the live typing guard and the final
   performance figures.
 
-## Post-1.0 candidates
+## M18 - 1.1.0: contract hardening (planned)
 
-- Vulkan/EGL accelerated renderer behind the same canvas contract.
-- Rich-text editing with bidi paragraph layout and spell-check integration.
-- Formal C ABI description with generated binding stubs.
-- A visual theme editor on top of the 0.9 token table.
-- X11 or other platform backends only if they can be maintained without
-  compromising the Wayland-first core.
+Goal: make the paths 1.0 already promised explainable, testable and fallback-able
+on real compositors, and finish the extension surface that has landed in the
+1.1.0 work-in-progress. 1.1 adds no new widgets; it hardens contracts and closes
+the gaps that currently make `tools/release-check.sh` red. The engineering rules
+this milestone must satisfy are consolidated in [standards.md](standards.md);
+the protocol evidence is in [compositor-matrix.md](compositor-matrix.md).
+
+### 1. Scope decision
+
+The work-in-progress (commits `2b2796b`, `0a54af5` and the uncommitted tree)
+already added 29 public functions / 49 baseline entries beyond the 412-function
+1.0 surface: server-side decoration negotiation, primary selection, the
+`pt_paint_*` custom-draw context and helpers, offscreen `pt_window_paint_pixels`,
+custom IME callbacks, fd watches, and raw focus/key/pointer callbacks. The form
+is append-only and ABI-compliant.
+
+Decision: **1.1.0 keeps this extension surface but treats it as "harden and
+complete", not "ship as-is".** No release until the contracts, Java parity,
+generated reference, documentation, examples and tests below are closed. If
+completion slips, the fallback is to narrow 1.1.0 to decoration + primary
+selection + lifecycle fixes and move the custom-draw/IME/fd/raw-input API to
+1.2.0; that split is a scope change, not a silent partial tag.
+
+In scope for 1.1.0:
+
+- Decoration negotiation rework and window-state consumption.
+- Side-effect-free offscreen painting.
+- Paint-callback, IME, fd-watch and raw-input contracts.
+- Primary-selection serial sourcing.
+- Binding parity restoration (Java), generated-reference automation, version
+  bump, ABI-test coverage, documentation and bilingual sync, examples.
+- Live and fake-compositor tests for every protocol path above.
+
+Out of scope (moved to the horizons below): application-owned popups/subsurfaces,
+pickers, searchable select, icon slots, clipboard images, `text/uri-list`
+writes, per-run font fallback, column persistence, inline images, RTL/bidi, GPU
+renderer, theme editor.
+
+### 2. Current state (verified 2026-11-22)
+
+- `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`
+  (48 checks) and `make check-typing` all pass on the work-in-progress tree.
+- `tools/release-check.sh` fails with five findings:
+  1. README quotes 412 functions and `docs/api-reference.md` quotes 419, while
+     the baseline is 441.
+  2. Java parity is 412/441 with 29 functions allowlisted in
+     `tools/api-audit.py`; C++ and Python are 441/441.
+  3. The generated reference is missing the 22 `custom.h` functions because
+     `tools/gen-api-reference.py` enumerates a hand-written `MODULES` tuple that
+     omits `custom.h`; its `--check` therefore passes falsely.
+  4. The bilingual check fails: `README.md` gained `## Decoration policy`
+     (commit `2b2796b`) without a `README.zh-CN.md` counterpart.
+- `Makefile` VERSION and the four version macros are still 1.0.0.
+- The new enums (`pt_fd_event_*`, `pt_pointer_phase_*`) and `pt_pointer_event`
+  are not pinned in `tests/test_abi.c`.
+- SSD and primary selection have headless tests only; no live or
+  fake-compositor protocol coverage.
+
+### 3. Backlog
+
+P0 — a 1.1.0 tag is impossible without these:
+
+1. **Version and release surface.** Bump `Makefile` VERSION and the
+   `include/pt/base.h` macros to 1.1.0; sync the README status line, reference
+   header, architecture/bindings counts; add the 1.1.0 release record and this
+   milestone's completion evidence. SONAME stays `libpt.so.1`.
+2. **Generator and reference.** Make `tools/gen-api-reference.py` enumerate the
+   public headers (or a derived manifest) so a missing module fails `--check`;
+   regenerate `docs/api-reference.md` and `api/pt.api` with `make api-update`;
+   verify 441/441 and consistent counts. Do not hand-edit the reference.
+3. **Java parity.** Wrap the 29 missing functions in
+   `bindings/java/src/pt/Pt.java` with `PtTest` checks; empty the allowlist. If
+   any function is genuinely C-only, document the reason and a target-version
+   deadline in `api-policy.md` per standards section 3 — a silent allowlist is
+   not acceptable.
+4. **Decoration semantics.** Default to explicit `CLIENT_SIDE`; add
+   `pt_decoration_mode {auto, client, server}` and
+   `pt_window_set_decoration_mode()`. Split `pt_window_set_decorated(bool)` (Pt
+   draws its own header) from the decoration mode so `false` never requests
+   server-side. Track requested vs effective mode; obey `configure`; consume
+   `fullscreen`/`tiled_*`/`configure_bounds`/`wm_capabilities`. Fix the
+   `src/wayland/window.c` comment that claims niri draws a title bar. Cover the
+   six fake-compositor sequences and live-smoke Mutter/KWin/niri; record Weston
+   as a known double-border limitation (Q-DEC-003).
+5. **Offscreen snapshot.** Make `pt_window_paint_pixels` side-effect-free (no
+   damage, no clearing `needs_draw`/`redraw_scheduled`, no overlay collection);
+   add `pt_window_paint_pixels_ex` with stride/scale/format; document
+   premultiplied `0xAARRGGBB`. Test that a snapshot on a mapped window does not
+   swallow the next frame and that deferred overlays survive.
+6. **Primary-selection serial.** Split enter/pointer-button/key-press serials;
+   `set_selection` uses the triggering event's serial; programmatic selection
+   without a trigger returns false and does not send; add an explicit
+   `..._set_serial` entry point. Test keyboard select, drag-select (one send per
+   completed drag) and programmatic select; two-client live middle-click paste.
+7. **Input semantics.** Restore button filtering so right/middle do not disturb
+   left press/double-click; track `click_count` per button; make the motion
+   callback return value match the header's "advisory" contract (or document and
+   test the consume behaviour explicitly).
+8. **ABI pins.** Add `_Static_assert`/`offsetof` for `pt_fd_event_*`,
+   `pt_pointer_phase_*` and `pt_pointer_event` to `tests/test_abi.c`.
+
+P1 — required before the tag, may land alongside P0:
+
+9. **Paint-callback contract.** Write the purity/idempotence, no-tree-mutation,
+   context-lifetime, clip-balance and no-reentrancy rules into
+   `include/pt/custom.h` and the guide; add the tile-consistency golden test
+   (1/3/unordered tiles produce identical pixels), the destroy-self-during-paint
+   deferral test, and 1x/1.5x/2x goldens.
+10. **IME contract.** Define the custom-IME event surface and the full-state
+    resend rule; treat empty `done` as ack; keep a local composition buffer;
+    handle v2 `action`/`preedit_hint` without faking an Enter key; document the
+    `delete_surrounding_text` byte/codepoint boundary. Fake text-input replay
+    plus live niri+fcitx5 (v1), KWin+fcitx5 (v2), Mutter+IBus (v2).
+11. **fd watch and raw input contracts.** Borrowed/owned fd semantics,
+    self-unwatch deferral, error-event guarantee, `run_for` timeout inclusion;
+    raw-input dispatch order, consume scope and IME interaction. pipe/eventfd/
+    timerfd tests and create/destroy fd-count stability.
+12. **Documentation and bilingual sync.** Add custom-draw/IME/fd/raw-input/
+    primary sections to quickstart, bindings, architecture and README; correct
+    the stale "client-side" decoration wording and the 412/412 parity claims;
+    sync every changed public guide into `README.zh-CN.md` and `docs/zh-CN/*`
+    (including the Decoration policy section) and pass
+    `tools/check-bilingual-docs.py`.
+13. **Examples.** At least a C custom-paint/terminal-like example and a primary
+    selection example; C++ and Python equivalents; Java after its wrappers land.
+14. **Binding tests.** C++ and Java tests for the new API (Python already has
+    five extension tests but only registration coverage for the input
+    callbacks); add dispatch assertions, not just registration.
+15. **Commit hygiene and full gate.** Split future work by theme; land baseline,
+    reference and docs with their code; rerun `tools/ci.sh` (sanitizers,
+    install-check, tarball) and `tools/release-check.sh --full` to zero failures;
+    record the new performance baseline after the canvas optimisation.
+
+### 4. Completion criteria
+
+- `tools/release-check.sh --full` reports zero failures on the 1.1.0 tree:
+  version agreement, 441/441 (or the documented in-deadline allowlist) parity,
+  generated reference covering every baseline function, and the bilingual check
+  green.
+- `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`,
+  `make check-typing` and `tools/ci.sh` pass, including sanitizers, installed
+  consumers and the reproducible tarball rebuild.
+- Every protocol path added or changed in 1.1 has a fake-compositor sequence
+  test and a live-compositor smoke result recorded against
+  [compositor-matrix.md](compositor-matrix.md); known limitations are written
+  there, not left implicit.
+- The new enums/struct are pinned in `tests/test_abi.c`; `abidiff` against
+  `1.0.0` shows only additions.
+- The decoration, offscreen, primary-selection, paint-callback, IME, fd-watch
+  and raw-input contracts are stated in the headers and exercised by tests that
+  include failure paths.
+- The 1.1.0 release record in [release.md](release.md) captures the audit,
+  parity, live suites, performance figures and the ABI/behaviour diff summary;
+  the "tag pending" wording from the 1.0 record is resolved.
+
+### 5. Risks and open questions
+
+- Decoration appearance is a product decision, not a protocol one: no unified
+  title bar can be promised across Mutter/KWin/niri/Sway/Weston. The acceptance
+  target is "content area always correct, header ownership explainable".
+- `xdg-decoration` v3 / `server_side_border` is not in the public XML at the
+  retrieval date; 1.1 must not depend on it (compositor-matrix "To verify").
+- KWin/fcitx5 `commit_string` loss is mitigated by full-state resend, not by a
+  root-cause fix; the exact trigger is unconfirmed.
+- The canvas render optimisation in the work-in-progress must be validated by
+  golden images and guards before it is trusted; it is currently bundled with
+  feature work.
+
+## Post-1.0 horizons
+
+Candidates are grouped by the horizon the external research (2026-11-22)
+recommends, with the reason each is deferred. Sources and evidence grades are in
+[compositor-matrix.md](compositor-matrix.md); the engineering rules are in
+[standards.md](standards.md).
+
+### 1.2 — common but missing
+
+- Application-owned popups via the existing `xdg_popup` backend (content widget,
+  anchor, dismiss, reposition). This is the prerequisite for searchable select
+  and pickers. Subsurfaces are a different need (embedding another surface) and
+  stay at 2.0.
+- Clipboard images (`image/png` read/write, bounded decode) and clipboard
+  `text/uri-list` writes (CRLF, percent-encoded `file://`). The drag-source
+  URI-list already exists; this is the clipboard path.
+- Date/number/colour pickers and a searchable select beyond the filterable
+  combobox, built on entry + popup + grid, with full keyboard paths and
+  accessibility assertions.
+- Icon slots (`pt_icon`: PNG, optional SVG, hicolor lookup, per-size/scale
+  cache) and best-effort `xdg-toplevel-icon-v1` where the compositor exposes it.
+- Per-run font fallback chains (HarfBuzz script segmentation + Fontconfig
+  charset matching), the prerequisite for readable CJK/Arabic/Devanagari mixing
+  and for RTL.
+- Column-layout persistence helpers (versioned serialize/deserialize blob, the
+  application stores it) and generated binding stubs from an API manifest.
+
+### 2.0 — structural
+
+- RTL/bidi paragraph layout per [rtl.md](rtl.md): a UBA implementation
+  (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link constraint),
+  bidi-run shaping, logical offsets through the public API and AT-SPI, mirrored
+  layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing, so
+  it cannot land in a minor.
+- Inline image runs (U+FFFC object replacement, baseline alignment, atomic
+  selection, alt-text copy, embedded-object accessibility).
+- Optional Vulkan/EGL renderer behind the same canvas contract, software by
+  default, pixel-parity tested, automatic fallback; only if 4K/complex-animation
+  measurements justify it. The CPU `pt_paint_*` API and the GPU backend share
+  geometry/colour/text so applications do not rewrite to switch.
+- A standalone visual theme editor on the token table, exporting C/JSON with
+  built-in WCAG contrast checks; it stays out of the core ABI.
+- Additional protocols (`xdg-activation`, `color-management` for HDR,
+  `xdg-foreign`) only with a real need and matrix rows plus fallback tests.
+- X11 or other platform backends only if maintainable without compromising the
+  Wayland-first core.
+

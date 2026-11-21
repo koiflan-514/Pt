@@ -483,6 +483,8 @@ pkg-config --modversion pt
 - [与其他工具包的比较](docs/zh-CN/comparison.md)
 - [路线图](docs/ROADMAP.md)
 - [发布流程](docs/release.md)
+- [工程规范](docs/standards.md)
+- [合成器与协议矩阵](docs/compositor-matrix.md)
 
 快速入门、架构、绑定、主题、无障碍、RTL 计划、迁移和比较指南提供简体中文版；
 生成的 API 参考、发布记录、路线图、性能说明和政策页面保留英文。

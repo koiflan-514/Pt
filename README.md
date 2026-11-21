@@ -561,6 +561,8 @@ continuously, which 0.10.0 fixed. Details, methodology and memory caveats are in
 - [Comparison with other toolkits](docs/comparison.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Release process](docs/release.md)
+- [Engineering standards](docs/standards.md)
+- [Compositor and protocol matrix](docs/compositor-matrix.md)
 
 The quickstart, architecture, bindings, theming, accessibility, RTL plan,
 migration and comparison guides also have
