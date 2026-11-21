@@ -588,7 +588,7 @@ pkg-config --modversion pt
 ## 装饰政策
 
 Pt 会绘制自己的 44 px 标题栏，并把“谁装饰表面”和“Pt 是否绘制标题栏”当作
-两个独立决定。默认是显式的客户端装饰（`pt_decoration_mode_client`）：
+两个独立决定。默认是显式的客户端装饰（`pt_decoration_client`）：
 Pt 在首次提交时向 `xdg-decoration` 请求客户端模式，因为它的标题栏、边缘
 调整大小区域和命中测试都是为此构建的。
 
@@ -596,10 +596,10 @@ Pt 在首次提交时向 `xdg-decoration` 请求客户端模式，因为它的�
 标题栏和 Pt 边缘区域，也绝不向合成器请求装饰。服务端装饰需要显式选择：
 
 ```c
-pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_mode_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求
+`pt_decoration_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求
 从来不是保证：`configure` 返回的模式才是权威结果，
 `pt_window_get_effective_decoration_mode` 会单独报告它，而
 `pt_window_get_decoration_mode` 返回请求模式。Sway 即使收到客户端

@@ -683,7 +683,7 @@ English-only.
 
 Pt draws its own 44 px title bar, and it treats "who decorates the surface" and
 "does Pt draw a header" as separate decisions. The default is explicit
-client-side decoration (`pt_decoration_mode_client`): Pt asks `xdg-decoration`
+client-side decoration (`pt_decoration_client`): Pt asks `xdg-decoration`
 for client-side mode at the first commit, because its header, edge resize zones
 and hit testing are built for it.
 
@@ -692,10 +692,10 @@ Pt header and no Pt edge zones, and it never asks the compositor for a
 decoration. Server-side decoration is an explicit opt-in:
 
 ```c
-pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_mode_auto` follows the framework default, which is client-side
+`pt_decoration_auto` follows the framework default, which is client-side
 decoration in 1.1. The request is never a guarantee: the mode returned by
 `configure` is authoritative, and `pt_window_get_effective_decoration_mode`
 reports it separately from the requested mode returned by

@@ -1007,21 +1007,21 @@ pt_window_set_size(window, 900, 640);
 pt_window_set_min_size(window, 480, 320);
 pt_window_set_resizable(window, true);
 pt_window_set_decorated(window, true);
-pt_window_set_decoration_mode(window, pt_decoration_mode_client);
+pt_window_set_decoration_mode(window, pt_decoration_client);
 pt_window_request_redraw(window);
 ```
 
 装饰是两个独立的决定。`pt_window_set_decorated` 控制 Pt 是否绘制自己的
 44 px 标题栏；`pt_window_set_decoration_mode` 控制谁装饰表面。默认是显式的
-客户端装饰（`pt_decoration_mode_client`），因为标题栏、其边缘调整大小区域
+客户端装饰（`pt_decoration_client`），因为标题栏、其边缘调整大小区域
 和命中测试都是为此构建的。`pt_window_set_decorated(window, false)` 会移除
 标题栏及其边缘区域，并且绝不向合成器请求边框。服务端装饰是显式选择：
 
 ```c
-pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_mode_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求只是
+`pt_decoration_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求只是
 偏好：Pt 分别跟踪请求模式和生效模式，`pt_window_get_decoration_mode` 报告
 请求，`pt_window_get_effective_decoration_mode` 报告 `configure` 最终决定的
 模式，窗口按生效模式布局。Sway 会对平铺窗口强制服务端装饰，而 Mutter 和

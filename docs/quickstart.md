@@ -1071,23 +1071,23 @@ pt_window_set_size(window, 900, 640);
 pt_window_set_min_size(window, 480, 320);
 pt_window_set_resizable(window, true);
 pt_window_set_decorated(window, true);
-pt_window_set_decoration_mode(window, pt_decoration_mode_client);
+pt_window_set_decoration_mode(window, pt_decoration_client);
 pt_window_request_redraw(window);
 ```
 
 Decoration is two independent decisions. `pt_window_set_decorated` controls
 whether Pt draws its own 44 px header; `pt_window_set_decoration_mode` controls
 who decorates the surface. The default is explicit client-side decoration
-(`pt_decoration_mode_client`), because the header, its edge resize zones and hit
+(`pt_decoration_client`), because the header, its edge resize zones and hit
 testing are built for it. `pt_window_set_decorated(window, false)` removes the
 header and those zones and never asks the compositor for a frame. Server-side
 decoration is an explicit choice:
 
 ```c
-pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_mode_auto` follows the framework default, which is client-side
+`pt_decoration_auto` follows the framework default, which is client-side
 decoration in 1.1. The request is a preference: Pt tracks the requested and
 effective modes separately, `pt_window_get_decoration_mode` reports the request
 and `pt_window_get_effective_decoration_mode` reports what `configure` decided,
