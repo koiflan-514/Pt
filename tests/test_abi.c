@@ -122,6 +122,12 @@ _Static_assert(pt_list_index_none == (uint32_t)-1, "list none sentinel");
 _Static_assert(pt_table_column_none == (uint32_t)-1, "column none sentinel");
 _Static_assert(pt_row_key_none == (uint64_t)-1, "row key none sentinel");
 _Static_assert(PT_TABLE_MAX_SORT_COLUMNS == 4, "four sort columns");
+
+/* M19: column-persist */
+_Static_assert(PT_TABLE_MAX_COLUMNS == 1024u, "1024 column limit");
+_Static_assert(PT_TABLE_COLUMN_KEY_MAX == 64u, "64 byte column key limit");
+_Static_assert(PT_TABLE_COLUMN_LAYOUT_MAX == 262144u, "256 KiB layout blob cap");
+
 _Static_assert(PT_STYLUS_BUTTON_BARREL == 0x1u, "barrel button bit");
 _Static_assert(PT_STYLUS_BUTTON_SECONDARY == 0x2u, "secondary button bit");
 _Static_assert(PT_STYLUS_BUTTON_TERTIARY == 0x4u, "tertiary button bit");

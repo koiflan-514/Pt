@@ -386,6 +386,9 @@ typedef struct pt_table_state {
     uint32_t column_count;
     float *column_widths;
     char **column_titles;
+    /* Stable application keys for layout persistence; never NULL when a
+     * column exists and empty for columns matched by position. */
+    char **column_keys;
     pt_text_align *column_aligns;
     bool *column_resizable;
     bool *column_hidden;
