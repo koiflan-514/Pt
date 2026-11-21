@@ -56,10 +56,20 @@ pt_api uint64_t pt_app_add_timeout(pt_app *app, uint32_t milliseconds,
 pt_api void pt_app_cancel_timeout(pt_app *app, uint64_t timer_id);
 
 /* File-descriptor watches integrate application descriptors into Pt's poll
- * loop. The callback runs on the UI thread when the descriptor is ready; it
- * must not block. events is a mask of pt_fd_event values. The id returned by
- * pt_app_watch_fd can be passed to pt_app_unwatch_fd; watching the same fd
- * twice is allowed and each watch fires independently. */
+ * loop (standards section 11). The callback runs on the UI thread when the
+ * descriptor is ready and must not block. `events` is a mask of pt_fd_event
+ * values; the callback receives the readiness actually observed.
+ *
+ * Ownership: pt_app_watch_fd borrows the descriptor and never closes it; the
+ * caller closes it after pt_app_unwatch_fd. pt_app_watch_fd_owned transfers it,
+ * and Pt closes it on unwatch and when the app is destroyed (including a
+ * self-unwatch from inside the callback, whose free is deferred until dispatch
+ * returns). Watching the same fd twice is rejected with id 0; callbacks may
+ * unwatch themselves. POLLERR, POLLHUP and POLLNVAL all report
+ * pt_fd_event_error, so the callback runs at least once for a dead descriptor
+ * (POLLHUP additionally sets pt_fd_event_hangup). Watches participate in the
+ * poll timeout: pt_app_run_for wakes to dispatch a ready descriptor but still
+ * returns at its requested deadline. */
 typedef enum pt_fd_event {
     pt_fd_event_read = 1u << 0,
     pt_fd_event_write = 1u << 1,
@@ -71,6 +81,10 @@ typedef void (*pt_fd_callback)(pt_app *app, uint32_t events, void *user_data);
 
 pt_api uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events,
                                 pt_fd_callback callback, void *user_data);
+/* Takes ownership of `fd`; Pt closes it on unwatch or app destroy. Same
+ * duplicate-fd and error rules as pt_app_watch_fd. Since 1.1. */
+pt_api uint64_t pt_app_watch_fd_owned(pt_app *app, int fd, uint32_t events,
+                                      pt_fd_callback callback, void *user_data);
 pt_api void pt_app_unwatch_fd(pt_app *app, uint64_t watch_id);
 
 pt_api void pt_app_set_color_scheme(pt_app *app, pt_color_scheme scheme);

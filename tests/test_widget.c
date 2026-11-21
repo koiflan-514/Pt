@@ -7,10 +7,185 @@
 #include "../src/internal.h"
 #include "harness.h"
 
+#include <dirent.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
+
+typedef struct fd_probe {
+    pt_app *app;
+    uint64_t watch;
+    int calls;
+    int self_unwatch;
+    int reads;
+    int read_fd;
+    int fd_open_in_callback;
+    int fd_open_after;
+    uint32_t last_events;
+} fd_probe;
+
+static void record_fd_event(pt_app *app, uint32_t events, void *data) {
+    (void)app;
+    fd_probe *probe = data;
+    probe->calls++;
+    probe->last_events = events;
+    if (probe->read_fd >= 0) {
+        uint64_t value = 0;
+        if (read(probe->read_fd, &value, sizeof(value)) > 0) {
+            probe->reads++;
+        }
+    }
+    if (probe->self_unwatch) {
+        probe->fd_open_in_callback = fcntl(probe->read_fd, F_GETFD) >= 0;
+        pt_app_unwatch_fd(probe->app, probe->watch);
+    }
+}
+
+static int count_open_fds(void) {
+    DIR *dir = opendir("/proc/self/fd");
+    if (!dir) {
+        return -1;
+    }
+    int count = 0;
+    while (readdir(dir)) {
+        ++count;
+    }
+    closedir(dir);
+    return count;
+}
+
+/* fd watches: borrowed/owned ownership, duplicate rejection, self-unwatch
+ * deferral, error mapping and run_for timeout participation. */
+static void test_fd_watches(pt_app *app) {
+    int fds[2] = {-1, -1};
+    pt_check(pipe(fds) == 0);
+    fd_probe probe = {.app = app, .read_fd = fds[0]};
+    probe.watch = pt_app_watch_fd(app, fds[0], pt_fd_event_read, record_fd_event, &probe);
+    pt_check(probe.watch != 0);
+    /* The same fd cannot be watched twice, borrowed or owned. */
+    pt_check(pt_app_watch_fd(app, fds[0], pt_fd_event_read, record_fd_event, &probe) == 0);
+    pt_check(pt_app_watch_fd_owned(app, fds[0], pt_fd_event_read, record_fd_event, &probe) ==
+             0);
+    pt_check(pt_app_watch_fd(app, -1, pt_fd_event_read, record_fd_event, &probe) == 0);
+    pt_check(pt_app_watch_fd(app, fds[0], 0, record_fd_event, &probe) == 0);
+    pt_check(pt_app_watch_fd(app, fds[0], pt_fd_event_read, NULL, &probe) == 0);
+
+    char byte = 'x';
+    pt_check(write(fds[1], &byte, 1) == 1);
+    pt_check(pt_app_run_for(app, 30) == 0);
+    pt_check(probe.calls == 1);
+    pt_check(probe.last_events & pt_fd_event_read);
+    /* Borrowed: closing is the caller's job and the fd is still open. */
+    pt_check(fcntl(fds[0], F_GETFD) >= 0);
+    pt_app_unwatch_fd(app, probe.watch);
+    pt_check(fcntl(fds[0], F_GETFD) >= 0);
+    close(fds[0]);
+    close(fds[1]);
+
+    /* An owned watch closes on unwatch, and a self-unwatch is deferred until
+     * the callback returns (the fd is still readable inside the callback). */
+    int owned[2] = {-1, -1};
+    pt_check(pipe(owned) == 0);
+    fd_probe self = {.app = app, .read_fd = owned[0], .self_unwatch = 1};
+    self.watch = pt_app_watch_fd_owned(app, owned[0], pt_fd_event_read, record_fd_event, &self);
+    pt_check(self.watch != 0);
+    pt_check(write(owned[1], &byte, 1) == 1);
+    pt_check(pt_app_run_for(app, 20) == 0);
+    pt_check(self.calls == 1);
+    pt_check(self.fd_open_in_callback);
+    pt_check(fcntl(owned[0], F_GETFD) < 0);
+    pt_check(app->fd_garbage == NULL);
+    pt_check(pt_app_fd_watch_count(app) == 0);
+    close(owned[1]);
+
+    /* A closed peer maps POLLHUP to the error event, with hangup alongside. */
+    int hung[2] = {-1, -1};
+    pt_check(pipe(hung) == 0);
+    fd_probe hung_probe = {.app = app, .read_fd = -1};
+    uint64_t hung_id =
+        pt_app_watch_fd(app, hung[0], pt_fd_event_read, record_fd_event, &hung_probe);
+    pt_check(hung_id != 0);
+    close(hung[1]);
+    pt_check(pt_app_run_for(app, 20) == 0);
+    pt_check(hung_probe.calls >= 1);
+    pt_check(hung_probe.last_events & pt_fd_event_error);
+    pt_check(hung_probe.last_events & pt_fd_event_hangup);
+    pt_app_unwatch_fd(app, hung_id);
+    close(hung[0]);
+
+    /* POLLNVAL also takes the error path and fires at least once. */
+    int invalid[2] = {-1, -1};
+    pt_check(pipe(invalid) == 0);
+    fd_probe invalid_probe = {.app = app, .read_fd = -1};
+    uint64_t invalid_id =
+        pt_app_watch_fd(app, invalid[0], pt_fd_event_read, record_fd_event, &invalid_probe);
+    pt_check(invalid_id != 0);
+    close(invalid[0]);
+    pt_check(pt_app_run_for(app, 20) == 0);
+    pt_check(invalid_probe.calls >= 1);
+    pt_check(invalid_probe.last_events & pt_fd_event_error);
+    pt_app_unwatch_fd(app, invalid_id);
+    close(invalid[1]);
+
+    /* A ready eventfd is dispatched inside run_for and the deadline still
+     * bounds the call. */
+    int efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    pt_check(efd >= 0);
+    fd_probe timer_probe = {.app = app, .read_fd = efd};
+    timer_probe.watch =
+        pt_app_watch_fd_owned(app, efd, pt_fd_event_read, record_fd_event, &timer_probe);
+    pt_check(timer_probe.watch != 0);
+    uint64_t one = 1;
+    pt_check(write(efd, &one, sizeof(one)) == (ssize_t)sizeof(one));
+    int64_t start = pt_now_ms();
+    pt_check(pt_app_run_for(app, 20) == 0);
+    int64_t elapsed = pt_now_ms() - start;
+    pt_check(timer_probe.calls == 1);
+    pt_check(elapsed >= 15);
+    pt_check(elapsed < 500);
+    pt_app_unwatch_fd(app, timer_probe.watch);
+    pt_check(fcntl(efd, F_GETFD) < 0);
+
+    /* Create/destroy cycles do not leak descriptors: owned watch plus unwatch,
+     * and an app teardown with a live owned watch. */
+    int before = count_open_fds();
+    pt_check(before > 0);
+    for (int i = 0; i < 32; ++i) {
+        int loop[2] = {-1, -1};
+        pt_check(pipe(loop) == 0);
+        fd_probe loop_probe = {.app = app, .read_fd = loop[0]};
+        loop_probe.watch =
+            pt_app_watch_fd_owned(app, loop[0], pt_fd_event_read, record_fd_event, &loop_probe);
+        pt_check(loop_probe.watch != 0);
+        pt_check(write(loop[1], &byte, 1) == 1);
+        pt_check(pt_app_run_for(app, 5) == 0);
+        pt_check(loop_probe.calls == 1);
+        pt_app_unwatch_fd(app, loop_probe.watch);
+        close(loop[1]);
+    }
+    int after = count_open_fds();
+    pt_check(after == before);
+
+    int before_app = count_open_fds();
+    pt_app *temp = pt_app_create("pt.tests.fd");
+    pt_check(temp != NULL);
+    for (int i = 0; i < 8; ++i) {
+        int owned_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        pt_check(owned_efd >= 0);
+        pt_check(pt_app_watch_fd_owned(temp, owned_efd, pt_fd_event_read, record_fd_event,
+                                       NULL) != 0);
+    }
+    pt_app_destroy(temp);
+    int after_app = count_open_fds();
+    pt_check(after_app <= before_app);
+}
+
+/* File-descriptor watch callbacks may unwatch themselves without freeing the
+ * record under the dispatcher. */
 
 typedef struct click_state {
     int clicks;
@@ -333,6 +508,7 @@ int main(void) {
     }
     test_controls(app);
     test_theme_and_decorations(app);
+    test_fd_watches(app);
     test_timers_and_close(app);
     test_callback_destroys_widget(app);
     pt_app_destroy(app);

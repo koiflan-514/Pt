@@ -998,6 +998,7 @@ typedef struct pt_fd_watch {
     uint32_t events;
     pt_fd_callback callback;
     void *user_data;
+    bool owned;
     struct pt_fd_watch *next;
 } pt_fd_watch;
 
@@ -1007,6 +1008,10 @@ struct pt_app {
     pt_window *first_window;
     pt_timer *timers;
     pt_fd_watch *fd_watches;
+    /* Watches removed during dispatch. Freeing (and closing an owned fd) waits
+     * until the callback returns (standards section 11). */
+    pt_fd_watch *fd_garbage;
+    int fd_dispatch_depth;
     uint64_t next_timer_id;
     uint64_t next_fd_watch_id;
     bool running;
