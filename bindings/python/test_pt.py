@@ -2286,6 +2286,308 @@ class M19BindingTests(unittest.TestCase):
             pt._pt_icon_image_destroy = original
         self.assertIn(pointer, destroyed)
 
+    # ------------------------------------------------------------------
+    # Pickers: select
+    # ------------------------------------------------------------------
+
+    def test_12_select_model_and_popup(self) -> None:
+        select = pt.select(self.column)
+        self.assertEqual(select.kind, 34)  # pt_widget_combobox
+        self.assertEqual(select.select_item_count, 0)
+        self.assertEqual(select.select_selected, pt.list_index_none)
+        self.assertEqual(select.select_placeholder, "")
+        select.select_placeholder = "Pick"
+        self.assertEqual(select.select_placeholder, "Pick")
+
+        payload = {"row": 1}
+        select.select_add_item("alpha")
+        select.select_add_item_with_data("beta", payload)
+        select.select_insert_item(1, "alpine")
+        self.assertEqual([select.select_item_text(index) for index in range(3)],
+                         ["alpha", "alpine", "beta"])
+        self.assertIs(select.select_item_data(2), payload)
+        select.select_insert_item(0, "first")
+        self.assertIs(select.select_item_data(3), payload)
+        select.select_remove_item(0)
+        self.assertIs(select.select_item_data(2), payload)
+        select.select_set_item_data(0, payload)
+        self.assertIs(select.select_item_data(0), payload)
+
+        # Programmatic selection is silent and out-of-range clears.
+        select.select_selected = 2
+        self.assertEqual(select.select_selected, 2)
+        select.select_selected = 99
+        self.assertEqual(select.select_selected, pt.list_index_none)
+        select.select_selected = 0
+        select.select_clear_selection()
+        self.assertEqual(select.select_selected, pt.list_index_none)
+
+        select.select_query = "al"
+        self.assertEqual(select.select_query, "al")
+        self.assertEqual(select.select_match_count, 2)
+        self.assertEqual(select.select_match_item(0), 0)
+        self.assertEqual(select.select_match_item(1), 1)
+        self.assertEqual(select.select_match_item(99), pt.list_index_none)
+        select.set_select_query("")
+        self.assertEqual(select.select_query, "")
+
+        self.assertEqual(select.select_max_popup_rows, 8)
+        select.select_max_popup_rows = 0
+        self.assertEqual(select.select_max_popup_rows, 1)
+        select.select_max_popup_rows = 999
+        self.assertEqual(select.select_max_popup_rows, pt.picker_max_candidates)
+
+        self.window.show()
+        self.assertFalse(select.select_popup_open)
+        select.select_open()
+        self.assertTrue(select.select_popup_open)
+        select.select_close()
+        self.assertFalse(select.select_popup_open)
+
+        select.select_clear()
+        self.assertEqual(select.select_item_count, 0)
+        self.assertEqual(select.select_selected, pt.list_index_none)
+
+    # ------------------------------------------------------------------
+    # Pickers: date
+    # ------------------------------------------------------------------
+
+    def test_12_date_picker(self) -> None:
+        picker = pt.date_picker(self.column)
+        self.assertEqual(picker.date_picker_format, pt.date_format_iso)
+        self.assertEqual(picker.date_picker_text, "")
+        self.assertEqual(picker.date_picker_placeholder, "Date")
+        self.assertEqual(picker.date_picker_date, pt.Date(0, 0, 0))
+        picker.date_picker_placeholder = "Birthday"
+        self.assertEqual(picker.date_picker_placeholder, "Birthday")
+
+        self.assertTrue(picker.set_date_picker_date(pt.Date(2024, 2, 29)))
+        self.assertEqual(picker.date_picker_date, pt.Date(2024, 2, 29))
+        self.assertEqual(picker.date_picker_text, "2024-02-29")
+
+        picker.date_picker_format = pt.date_format_dmy
+        self.assertEqual(picker.date_picker_text, "29/02/2024")
+        picker.date_picker_format = pt.date_format_mdy
+        self.assertEqual(picker.date_picker_text, "02/29/2024")
+        picker.date_picker_format = 99
+        self.assertEqual(picker.date_picker_format, pt.date_format_iso)
+
+        # ISO is always accepted as a paste fallback and rewritten in the
+        # selected picture.
+        picker.date_picker_format = pt.date_format_dmy
+        self.assertTrue(picker.set_date_picker_text("2025-12-31"))
+        self.assertEqual(picker.date_picker_date, pt.Date(2025, 12, 31))
+        self.assertEqual(picker.date_picker_text, "31/12/2025")
+
+        before = (picker.date_picker_date, picker.date_picker_text)
+        self.assertFalse(picker.set_date_picker_text("31/02/2025"))
+        self.assertEqual((picker.date_picker_date, picker.date_picker_text), before)
+        with self.assertRaises(ValueError):
+            picker.date_picker_text = "not a date"
+        self.assertEqual((picker.date_picker_date, picker.date_picker_text), before)
+
+        # Structural errors are rejected and leave the value untouched.
+        self.assertFalse(picker.set_date_picker_date(pt.Date(2023, 2, 29)))
+        self.assertEqual(picker.date_picker_date, pt.Date(2025, 12, 31))
+        with self.assertRaises(ValueError):
+            picker.date_picker_date = pt.Date(2023, 2, 29)
+        self.assertEqual(picker.date_picker_date, pt.Date(2025, 12, 31))
+
+        self.assertTrue(picker.set_date_picker_date(pt.Date(0, 0, 0)))
+        self.assertEqual(picker.date_picker_date, pt.Date(0, 0, 0))
+        self.assertEqual(picker.date_picker_text, "")
+        picker.set_date_picker_date(pt.Date(2026, 1, 2))
+        picker.date_picker_clear()
+        self.assertEqual(picker.date_picker_date, pt.Date(0, 0, 0))
+
+        self.window.show()
+        picker.set_date_picker_date(pt.Date(2026, 1, 2))
+        self.assertFalse(picker.date_picker_popup_open)
+        picker.date_picker_open()
+        self.assertTrue(picker.date_picker_popup_open)
+        picker.date_picker_close()
+        self.assertFalse(picker.date_picker_popup_open)
+
+    # ------------------------------------------------------------------
+    # Pickers: number
+    # ------------------------------------------------------------------
+
+    def test_12_number_picker(self) -> None:
+        picker = pt.number_picker(self.column)
+        self.assertEqual(picker.number_picker_range, (0.0, 100.0))
+        self.assertEqual(picker.number_picker_step, 1.0)
+        self.assertFalse(picker.number_picker_has_value)
+        self.assertEqual(picker.number_picker_value, 0.0)
+        self.assertEqual(picker.number_picker_text, "")
+        self.assertEqual(picker.number_picker_placeholder, "Number")
+        picker.number_picker_placeholder = "Count"
+        self.assertEqual(picker.number_picker_placeholder, "Count")
+
+        # A finite value is clamped into the inclusive range.
+        picker.number_picker_value = 250.0
+        self.assertTrue(picker.number_picker_has_value)
+        self.assertEqual(picker.number_picker_value, 100.0)
+        self.assertEqual(picker.number_picker_text, "100")
+
+        picker.number_picker_step = 0.25
+        picker.number_picker_range = (-5.0, 5.0)
+        self.assertEqual(picker.number_picker_value, 5.0)
+        picker.number_picker_value = 1.2
+        picker.number_picker_step_by(2.0)
+        self.assertAlmostEqual(picker.number_picker_value, 1.7, places=6)
+
+        # Raising the lower bound clamps the current value.
+        picker.number_picker_range = (10.0, 20.0)
+        self.assertEqual(picker.number_picker_value, 10.0)
+
+        self.assertFalse(picker.set_number_picker_text("abc"))
+        self.assertEqual(picker.number_picker_value, 10.0)
+        self.assertEqual(picker.number_picker_text, "10")
+        with self.assertRaises(ValueError):
+            picker.number_picker_text = "1e"
+        self.assertTrue(picker.set_number_picker_text("3,5"))
+        self.assertEqual(picker.number_picker_value, 10.0)
+        self.assertTrue(picker.set_number_picker_text("15.5"))
+        self.assertAlmostEqual(picker.number_picker_value, 15.5, places=6)
+        self.assertTrue(picker.set_number_picker_text(""))
+        self.assertFalse(picker.number_picker_has_value)
+        self.assertEqual(picker.number_picker_text, "")
+
+        with self.assertRaises(ValueError):
+            picker.number_picker_step = 0.0
+        with self.assertRaises(ValueError):
+            picker.number_picker_step = float("inf")
+        with self.assertRaises(ValueError):
+            picker.number_picker_range = (5.0, -5.0)
+        with self.assertRaises(ValueError):
+            picker.number_picker_range = (float("nan"), 1.0)
+        with self.assertRaises(ValueError):
+            picker.number_picker_value = float("nan")
+        with self.assertRaises(ValueError):
+            picker.number_picker_step_by(float("inf"))
+
+        picker.number_picker_value = 15.0
+        picker.number_picker_clear()
+        self.assertFalse(picker.number_picker_has_value)
+
+    # ------------------------------------------------------------------
+    # Pickers: colour
+    # ------------------------------------------------------------------
+
+    def test_12_color_picker(self) -> None:
+        picker = pt.color_picker(self.column)
+        self.assertEqual(picker.color_picker_color, 0x000000FF)
+        self.assertEqual(picker.color_picker_hex, "#000000")
+        self.assertEqual(picker.color_picker_preset_count, 24)
+
+        self.assertTrue(picker.set_color_picker_hex("#ff0000"))
+        self.assertEqual(picker.color_picker_color, 0xFF0000FF)
+        self.assertEqual(picker.color_picker_hex, "#FF0000")
+        self.assertTrue(picker.set_color_picker_hex("#11223344"))
+        self.assertEqual(picker.color_picker_color, 0x11223344)
+        self.assertEqual(picker.color_picker_hex, "#11223344")
+        self.assertFalse(picker.set_color_picker_hex("zz"))
+        self.assertEqual(picker.color_picker_color, 0x11223344)
+        with self.assertRaises(ValueError):
+            picker.color_picker_hex = "#12"
+
+        picker.color_picker_color = 0x010203FF
+        self.assertEqual(picker.color_picker_hex, "#010203")
+        self.assertEqual(picker.color_picker_color, 0x010203FF)
+
+        picker.color_picker_add_preset(0xABCDEFFF)
+        self.assertEqual(picker.color_picker_preset_count, 25)
+        self.assertEqual(picker.color_picker_preset(24), 0xABCDEFFF)
+        self.assertEqual(picker.color_picker_preset(999), 0)
+        remaining = pt.color_max_presets - picker.color_picker_preset_count
+        for index in range(remaining):
+            picker.color_picker_add_preset(0x102030FF + index)
+        self.assertEqual(picker.color_picker_preset_count, pt.color_max_presets)
+        picker.color_picker_add_preset(0xFFFFFFFF)
+        self.assertEqual(picker.color_picker_preset_count, pt.color_max_presets)
+        picker.clear_color_picker_presets()
+        self.assertEqual(picker.color_picker_preset_count, 0)
+
+        self.window.show()
+        self.assertFalse(picker.color_picker_popup_open)
+        picker.color_picker_open()
+        self.assertTrue(picker.color_picker_popup_open)
+        picker.color_picker_close()
+        self.assertFalse(picker.color_picker_popup_open)
+
+    # ------------------------------------------------------------------
+    # Callback dispatch and trampoline lifetime
+    # ------------------------------------------------------------------
+
+    def test_12_picker_callbacks_dispatch_and_keepalive(self) -> None:
+        """Synthetic upcalls check decoding and keep-alive for each picker.
+
+        The Python surface cannot inject pointer/key input: the C tests call
+        the internal pt_window_input_* helpers. Programmatic setters are silent
+        by contract, so there is no public path that fires these callbacks.
+        This drives the captured trampolines directly and marks the gap.
+        """
+        select = pt.select(self.column)
+        select.select_add_item("one")
+        select.select_add_item("two")
+        changes: list[tuple[pt.Widget, int]] = []
+        trampoline = self._capture(
+            "_pt_select_set_on_change",
+            lambda: select.on_select_change(
+                lambda widget, index: changes.append((widget, index))),
+        )
+        trampoline(select.raw, 1, None)
+        self.assertEqual(changes, [(select, 1)])
+        select.select_selected = 0
+        self.assertEqual(changes, [(select, 1)])  # programmatic set is silent
+
+        dates: list[tuple[pt.Widget, pt.Date]] = []
+        picker = pt.date_picker(self.column)
+        trampoline = self._capture(
+            "_pt_date_picker_set_on_change",
+            lambda: picker.on_date_change(
+                lambda widget, date: dates.append((widget, date))),
+        )
+        trampoline(picker.raw, pt.Date(2024, 1, 2), None)
+        self.assertEqual(dates, [(picker, pt.Date(2024, 1, 2))])
+        self.assertEqual(dates[0][1].year, 2024)
+
+        numbers: list[tuple[pt.Widget, float]] = []
+        number = pt.number_picker(self.column)
+        trampoline = self._capture(
+            "_pt_number_picker_set_on_change",
+            lambda: number.on_number_change(
+                lambda widget, value: numbers.append((widget, value))),
+        )
+        trampoline(number.raw, 2.5, None)
+        self.assertEqual(numbers, [(number, 2.5)])
+
+        colors: list[tuple[pt.Widget, int]] = []
+        color = pt.color_picker(self.column)
+        trampoline = self._capture(
+            "_pt_color_picker_set_on_change",
+            lambda: color.on_color_change(
+                lambda widget, value: colors.append((widget, value))),
+        )
+        trampoline(color.raw, 0xFF00FFFF, None)
+        self.assertEqual(colors, [(color, 0xFF00FFFF)])
+
+        # Clearing a callback substitutes a real NULL function pointer.
+        select.on_select_change(None)
+        picker.on_date_change(None)
+        number.on_number_change(None)
+        color.on_color_change(None)
+
+    def test_12_popup_dismiss_callback_native_dispatch(self) -> None:
+        self.window.show()
+        content = pt.box(None)
+        popup = pt.Popup.create(self.window, content)
+        seen: list[tuple[pt.Popup, bool]] = []
+        popup.on_dismiss(lambda target: seen.append((target, target.is_open)))
+        self.assertTrue(popup.show((1.0, 1.0, 1.0, 1.0)))
+        popup.dismiss()
+        self.assertEqual(seen, [(popup, False)])
+        popup.destroy()
 
 
 if __name__ == "__main__":
