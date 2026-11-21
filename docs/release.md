@@ -951,7 +951,8 @@ the section an upgrading application must read:
 | Version agreement | `include/pt/base.h` and README say 1.1.0; `Makefile` `VERSION` **pending final gate run** |
 | API baseline | `api/pt.api` 448 functions / 785 entries; generated reference covers every baseline function |
 | Binding parity | target 448/448 in C++/Python/Java with an empty allowlist; 441/448 on this branch, last seven wrappers **pending** |
-| `make check` / `make check-bindings` | pass on the integration tree |
+| C suites, C++/Python/Java test binaries | pass on the integration tree |
+| `make check` / `make check-bindings` | C and binding suites pass; the combined `make check` is red on the seven wrappers and the stale generated reference until the sibling changes land (**pending final gate run**) |
 | `make perf-check` | all guard ceilings hold; the work-in-progress measurement is dense full paint 4.275 ms and 4K full paint 8.429 ms. Final medians **pending final gate run** |
 | Live Wayland (`make check-wayland`) | 48 checks under a fullscreen nested niri |
 | Live typing (`make check-typing`) | pass under niri with text-input-v3 |

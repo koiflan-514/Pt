@@ -1337,9 +1337,12 @@ renderer, theme editor.
   watch, decoration setter and two getters, maximize, primary serial, snapshot
   `_ex`) are declared and tested in C but not yet wrapped. The allowlist is
   empty; the Java work started at `b220410` and the final group is in flight.
-- `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`
-  (48 checks) and `make check-typing` pass on the merged tree. The bilingual
-  documentation check reports 9 public guides with no structural drift.
+- The C suites, the C++/Python/Java test binaries, `make perf-check` (all
+  ceilings), `make check-wayland` (48 checks) and `make check-typing` pass on
+  the merged tree. The combined `make check` is red only on the seven missing
+  wrappers and the generated reference's stale version line; both are sibling
+  changes. The bilingual documentation check reports 9 public guides with no
+  structural drift.
 - No fake-compositor wire-replay facility exists. Decoration, text-input,
   primary-selection and popup orders are covered by headless state tests plus
   live niri runs; the wire-level replay remains open.
@@ -1469,8 +1472,10 @@ P1 — required before the tag, may land alongside P0:
   `Makefile` line and parity waits for the last seven wrappers.
 - `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`,
   `make check-typing` and `tools/ci.sh` pass, including sanitizers, installed
-  consumers and the reproducible tarball rebuild. Status: the first five pass on
-  the merged tree; the full `ci.sh` run is the pending final gate.
+  consumers and the reproducible tarball rebuild. Status: the C/binding suites,
+  performance, Wayland and typing pass on the merged tree; the combined
+  `make check` waits for the seven wrappers and the reference regeneration, and
+  the full `ci.sh` run is the pending final gate.
 - Every protocol path added or changed in 1.1 has a fake-compositor sequence
   test and a live-compositor smoke result recorded against
   [compositor-matrix.md](compositor-matrix.md); known limitations are written
