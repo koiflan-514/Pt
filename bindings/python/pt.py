@@ -31,6 +31,10 @@ __all__ = [
     "DragData",
     "TreeNode",
     "Transition",
+    "Popup",
+    "PopupAnchor",
+    "IconImage",
+    "Date",
     "PaintContext",
     "PointerEvent",
     "PaintPixelsDesc",
@@ -85,6 +89,27 @@ __all__ = [
     "popup_policy_auto",
     "popup_policy_native",
     "popup_policy_window",
+    "popup_placement_below",
+    "popup_placement_above",
+    "popup_placement_right",
+    "popup_placement_left",
+    "popup_max_open",
+    "date_format_iso",
+    "date_format_dmy",
+    "date_format_mdy",
+    "select_max_items",
+    "picker_max_candidates",
+    "color_max_presets",
+    "clipboard_image_max_dimension",
+    "icon_max_dimension",
+    "icon_cache_max_entries",
+    "icon_cache_max_pixels",
+    "icon_image_cache_max_entries",
+    "font_fallback_max_families",
+    "font_fallback_max_overrides",
+    "table_max_columns",
+    "table_column_key_max",
+    "table_column_layout_max",
     "combobox_select_only",
     "combobox_filterable",
     "icon_none",
@@ -286,6 +311,8 @@ __all__ = [
     "uri_list",
     "uri_list_count",
     "uri_list_get",
+    "date_today",
+    "date_is_valid",
     "box",
     "row",
     "column",
@@ -307,6 +334,10 @@ __all__ = [
     "table",
     "tree",
     "combobox",
+    "select",
+    "date_picker",
+    "number_picker",
+    "color_picker",
     "tabs",
     "sidebar",
     "icon",
@@ -361,6 +392,35 @@ sort_descending = 2
 popup_policy_auto = 0
 popup_policy_native = 1
 popup_policy_window = 2
+
+popup_placement_below = 0
+popup_placement_above = 1
+popup_placement_right = 2
+popup_placement_left = 3
+
+popup_max_open = 16
+
+date_format_iso = 0
+date_format_dmy = 1
+date_format_mdy = 2
+
+select_max_items = 1024
+picker_max_candidates = 256
+color_max_presets = 64
+
+clipboard_image_max_dimension = 8192
+
+icon_max_dimension = 4096
+icon_cache_max_entries = 32
+icon_cache_max_pixels = 4194304
+icon_image_cache_max_entries = 8
+
+font_fallback_max_families = 8
+font_fallback_max_overrides = 16
+
+table_max_columns = 1024
+table_column_key_max = 64
+table_column_layout_max = 262144
 
 combobox_select_only = 0
 combobox_filterable = 1
@@ -684,6 +744,7 @@ _CLICK = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_void_p)
 _TEXT = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_char_p, _ctypes.c_void_p)
 _VALUE = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_float, _ctypes.c_void_p)
 _INDEX = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_uint32, _ctypes.c_void_p)
+_NULL_INDEX = _INDEX(0)
 _BIND = _ctypes.CFUNCTYPE(
     None, _ctypes.c_void_p, _ctypes.c_void_p, _ctypes.c_uint32, _ctypes.c_void_p
 )
@@ -940,6 +1001,83 @@ class DragData(_ctypes.Structure):
     ]
 
 
+class Date(_ctypes.Structure):
+    """A civil date for the date picker.
+
+    ``year`` is 1..9999, ``month`` 1..12 and ``day`` 1..days_in_month. The
+    zero-initialized value (year 0) is the empty date. There is no time of day
+    and no time zone. Pass instances by value; the C ABI layout is four bytes
+    for ``year`` followed by two one-byte fields (eight bytes with padding).
+    """
+
+    _fields_ = [
+        ("year", _ctypes.c_int32),
+        ("month", _ctypes.c_uint8),
+        ("day", _ctypes.c_uint8),
+    ]
+
+    def __init__(self, year: int = 0, month: int = 0, day: int = 0) -> None:
+        super().__init__(int(year), int(month), int(day))
+
+    def is_valid(self) -> bool:
+        return bool(_pt_date_is_valid(self))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Date):
+            return NotImplemented
+        return (int(self.year), int(self.month), int(self.day)) == (
+            int(other.year), int(other.month), int(other.day))
+
+    def __ne__(self, other: object) -> bool:
+        equal = self.__eq__(other)
+        return NotImplemented if equal is NotImplemented else not equal
+
+    def __repr__(self) -> str:
+        return f"pt.Date({int(self.year)}, {int(self.month)}, {int(self.day)})"
+
+
+class PopupAnchor(_ctypes.Structure):
+    """The anchor rectangle of an application popup.
+
+    Coordinates are parent-window logical pixels. A zero width or height is
+    treated as a one-pixel anchor by the C layer.
+    """
+
+    _fields_ = [
+        ("x", _ctypes.c_float),
+        ("y", _ctypes.c_float),
+        ("width", _ctypes.c_float),
+        ("height", _ctypes.c_float),
+    ]
+
+    def __init__(self, x: float = 0.0, y: float = 0.0,
+                 width: float = 0.0, height: float = 0.0) -> None:
+        super().__init__(float(x), float(y), float(width), float(height))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PopupAnchor):
+            return NotImplemented
+        return (float(self.x), float(self.y), float(self.width),
+                float(self.height)) == (float(other.x), float(other.y),
+                                        float(other.width), float(other.height))
+
+    def __ne__(self, other: object) -> bool:
+        equal = self.__eq__(other)
+        return NotImplemented if equal is NotImplemented else not equal
+
+    def __repr__(self) -> str:
+        return (f"pt.PopupAnchor({float(self.x)}, {float(self.y)}, "
+                f"{float(self.width)}, {float(self.height)})")
+
+
+def _anchor(value: Any) -> "PopupAnchor":
+    if isinstance(value, PopupAnchor):
+        return value
+    if isinstance(value, (tuple, list)) and len(value) == 4:
+        return PopupAnchor(*value)
+    raise TypeError("anchor must be a pt.PopupAnchor or an (x, y, width, height) tuple")
+
+
 _STYLUS = _ctypes.CFUNCTYPE(
     None, _ctypes.c_void_p, _ctypes.POINTER(StylusEvent), _ctypes.c_void_p
 )
@@ -1035,6 +1173,22 @@ _DROP_STREAM = _ctypes.CFUNCTYPE(
 _DRAG_FINISHED = _ctypes.CFUNCTYPE(
     None, _ctypes.c_void_p, _ctypes.c_bool, _ctypes.c_int, _ctypes.c_void_p
 )
+_POPUP_DISMISS = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_void_p)
+_DATE_CALLBACK = _ctypes.CFUNCTYPE(
+    None, _ctypes.c_void_p, Date, _ctypes.c_void_p
+)
+_NUMBER_CALLBACK = _ctypes.CFUNCTYPE(
+    None, _ctypes.c_void_p, _ctypes.c_double, _ctypes.c_void_p
+)
+_COLOR_CALLBACK = _ctypes.CFUNCTYPE(
+    None, _ctypes.c_void_p, _ctypes.c_uint32, _ctypes.c_void_p
+)
+# Unregistered callbacks must be passed as real NULL function pointers, which
+# is what the C side checks for; ctypes rejects None for these slots.
+_NULL_POPUP_DISMISS = _POPUP_DISMISS(0)
+_NULL_DATE_CALLBACK = _DATE_CALLBACK(0)
+_NULL_NUMBER_CALLBACK = _NUMBER_CALLBACK(0)
+_NULL_COLOR_CALLBACK = _COLOR_CALLBACK(0)
 # Unregistered callbacks must be passed as real NULL function pointers, which
 # is what the C side checks for; ctypes rejects None for these slots.
 _NULL_DROP_MOTION = _DROP_MOTION(0)
@@ -1136,6 +1290,67 @@ def _bytes_at(pointer: Optional[int], size: int) -> bytes:
     if not pointer or size <= 0:
         return b""
     return _ctypes.string_at(int(pointer), int(size))
+
+
+def _raw_buffer(data: Any) -> bytes:
+    """Copies a bytes-like object through the buffer protocol.
+
+    Used for inputs the C layer copies during the call, so the Python buffer
+    does not need to outlive it.
+    """
+    if isinstance(data, str):
+        raise TypeError("expected a bytes-like object, not str")
+    view = memoryview(data)
+    if view.ndim != 1 or view.itemsize != 1:
+        view = view.cast("B")
+    return view.tobytes()
+
+
+def _pixel_array(pixels: Any, count: int) -> Any:
+    """Builds a c_uint32 array from a pixel list or a bytes-like object.
+
+    Byte buffers are interpreted as native-order 0xAARRGGBB words, matching the
+    ``clipboard_image`` getter and the paint APIs, so a returned buffer feeds
+    straight back into a setter.
+    """
+    count = int(count)
+    if count < 0:
+        raise ValueError("pixel count must be non-negative")
+    if isinstance(pixels, (bytes, bytearray, memoryview)):
+        view = memoryview(pixels)
+        if view.ndim != 1 or view.itemsize != 1:
+            view = view.cast("B")
+        raw = view.tobytes()
+        if len(raw) < count * 4:
+            raise ValueError("pixel buffer is shorter than width * height")
+        array = (_c_uint32 * count)()
+        if count:
+            _ctypes.memmove(array, raw, count * 4)
+        return array
+    values = [int(pixel) for pixel in pixels]
+    if len(values) < count:
+        raise ValueError("fewer pixels than width * height")
+    return (_c_uint32 * count)(*values[:count])
+
+
+def _family_array(families: Optional[list[str]]) -> Any:
+    """Builds the NULL-terminated-array argument for a copy-style setter.
+
+    The caller must keep the returned array alive for the duration of the C
+    call; it is built inline at every call site.
+    """
+    if not families:
+        return None, 0
+    encoded = [_string(family) for family in families]
+    return (_c_char_p * len(encoded))(*encoded), len(encoded)
+
+
+def _owned_icon(pointer: Optional[int]) -> Optional["IconImage"]:
+    """Wraps a borrowed icon pointer with a reference owned by Python."""
+    if not pointer:
+        return None
+    reference = _pt_icon_image_ref(pointer)
+    return IconImage(reference) if reference else None
 
 
 # Application
@@ -2178,6 +2393,280 @@ _pt_window_set_stylus_callback = _proto(
     "pt_window_set_stylus_callback", None, _c_void_p, _STYLUS, _c_void_p
 )
 
+# 1.2 application popups (pt/popup.h)
+_pt_popup_create = _proto("pt_popup_create", _c_void_p, _c_void_p, _c_void_p)
+_pt_popup_destroy = _proto("pt_popup_destroy", None, _c_void_p)
+_pt_popup_show = _proto("pt_popup_show", _c_bool, _c_void_p, PopupAnchor)
+_pt_popup_reposition = _proto("pt_popup_reposition", _c_bool, _c_void_p, PopupAnchor)
+_pt_popup_dismiss = _proto("pt_popup_dismiss", None, _c_void_p)
+_pt_popup_is_open = _proto("pt_popup_is_open", _c_bool, _c_void_p)
+_pt_popup_content = _proto("pt_popup_content", _c_void_p, _c_void_p)
+_pt_popup_set_on_dismiss = _proto(
+    "pt_popup_set_on_dismiss", None, _c_void_p, _POPUP_DISMISS, _c_void_p
+)
+_pt_popup_set_placement = _proto(
+    "pt_popup_set_placement", None, _c_void_p, _c_int
+)
+_pt_popup_get_placement = _proto("pt_popup_get_placement", _c_int, _c_void_p)
+
+# 1.2 font fallback chains (pt/app.h)
+_pt_app_set_font_fallbacks = _proto(
+    "pt_app_set_font_fallbacks", None, _c_void_p,
+    _ctypes.POINTER(_c_char_p), _c_int,
+)
+_pt_app_get_font_fallback_count = _proto(
+    "pt_app_get_font_fallback_count", _c_int, _c_void_p
+)
+_pt_app_get_font_fallback = _proto(
+    "pt_app_get_font_fallback", _c_char_p, _c_void_p, _c_int
+)
+_pt_app_set_font_fallbacks_for_family = _proto(
+    "pt_app_set_font_fallbacks_for_family", None, _c_void_p, _c_char_p,
+    _ctypes.POINTER(_c_char_p), _c_int,
+)
+_pt_app_get_font_fallback_count_for_family = _proto(
+    "pt_app_get_font_fallback_count_for_family", _c_int, _c_void_p, _c_char_p
+)
+_pt_app_get_font_fallback_for_family = _proto(
+    "pt_app_get_font_fallback_for_family", _c_char_p, _c_void_p, _c_char_p, _c_int
+)
+_pt_app_font_uncovered_count = _proto(
+    "pt_app_font_uncovered_count", _c_int, _c_void_p, _c_char_p, _c_char_p,
+    _c_size_t,
+)
+
+# 1.2 clipboard images and text/uri-list (pt/window.h)
+_pt_window_clipboard_set_image_png = _proto(
+    "pt_window_clipboard_set_image_png", _c_bool, _c_void_p,
+    _ctypes.POINTER(_c_uint32), _c_int, _c_int,
+)
+_pt_window_clipboard_get_image_png = _proto(
+    "pt_window_clipboard_get_image_png", _c_void_p, _c_void_p,
+    _ctypes.POINTER(_c_int), _ctypes.POINTER(_c_int),
+)
+_pt_window_clipboard_set_uri_list = _proto(
+    "pt_window_clipboard_set_uri_list", _c_bool, _c_void_p,
+    _ctypes.POINTER(_c_char_p), _c_uint32,
+)
+
+# 1.2 table column identity and layout persistence (pt/widget.h)
+_pt_table_set_column_key = _proto(
+    "pt_table_set_column_key", None, _c_void_p, _c_uint32, _c_char_p
+)
+_pt_table_get_column_key = _proto(
+    "pt_table_get_column_key", _c_char_p, _c_void_p, _c_uint32
+)
+_pt_table_columns_save = _proto("pt_table_columns_save", _c_void_p, _c_void_p)
+_pt_table_columns_restore = _proto(
+    "pt_table_columns_restore", _c_bool, _c_void_p, _c_char_p
+)
+
+# 1.2 raster icon images (pt/icon.h)
+_pt_icon_image_load_file = _proto(
+    "pt_icon_image_load_file", _c_void_p, _c_char_p
+)
+_pt_icon_image_load_memory = _proto(
+    "pt_icon_image_load_memory", _c_void_p, _c_void_p, _c_size_t
+)
+_pt_icon_image_from_name = _proto(
+    "pt_icon_image_from_name", _c_void_p, _c_char_p, _c_int
+)
+_pt_icon_image_ref = _proto("pt_icon_image_ref", _c_void_p, _c_void_p)
+_pt_icon_image_destroy = _proto("pt_icon_image_destroy", None, _c_void_p)
+_pt_icon_image_width = _proto("pt_icon_image_width", _c_int, _c_void_p)
+_pt_icon_image_height = _proto("pt_icon_image_height", _c_int, _c_void_p)
+_pt_button_set_icon_image = _proto(
+    "pt_button_set_icon_image", None, _c_void_p, _c_void_p
+)
+_pt_button_get_icon_image = _proto(
+    "pt_button_get_icon_image", _c_void_p, _c_void_p
+)
+_pt_button_set_icon_tint = _proto(
+    "pt_button_set_icon_tint", None, _c_void_p, _c_uint32
+)
+_pt_window_set_icon = _proto("pt_window_set_icon", None, _c_void_p, _c_void_p)
+_pt_window_get_icon = _proto("pt_window_get_icon", _c_void_p, _c_void_p)
+
+# 1.2 pickers (pt/picker.h). A picker is a combobox-kind widget, so these
+# entry points are exposed as Widget methods, matching the combobox surface.
+_pt_select_create = _proto("pt_select_create", _c_void_p, _c_void_p)
+_pt_select_set_placeholder = _proto(
+    "pt_select_set_placeholder", None, _c_void_p, _c_char_p
+)
+_pt_select_get_placeholder = _proto(
+    "pt_select_get_placeholder", _c_char_p, _c_void_p
+)
+_pt_select_add_item = _proto("pt_select_add_item", None, _c_void_p, _c_char_p)
+_pt_select_insert_item = _proto(
+    "pt_select_insert_item", None, _c_void_p, _c_uint32, _c_char_p
+)
+_pt_select_add_item_with_data = _proto(
+    "pt_select_add_item_with_data", None, _c_void_p, _c_char_p, _c_void_p
+)
+_pt_select_remove_item = _proto(
+    "pt_select_remove_item", None, _c_void_p, _c_uint32
+)
+_pt_select_clear = _proto("pt_select_clear", None, _c_void_p)
+_pt_select_get_item_count = _proto(
+    "pt_select_get_item_count", _c_uint32, _c_void_p
+)
+_pt_select_get_item_text = _proto(
+    "pt_select_get_item_text", _c_char_p, _c_void_p, _c_uint32
+)
+_pt_select_get_item_data = _proto(
+    "pt_select_get_item_data", _c_void_p, _c_void_p, _c_uint32
+)
+_pt_select_set_item_data = _proto(
+    "pt_select_set_item_data", None, _c_void_p, _c_uint32, _c_void_p
+)
+_pt_select_get_selected = _proto(
+    "pt_select_get_selected", _c_uint32, _c_void_p
+)
+_pt_select_set_selected = _proto(
+    "pt_select_set_selected", None, _c_void_p, _c_uint32
+)
+_pt_select_clear_selection = _proto(
+    "pt_select_clear_selection", None, _c_void_p
+)
+_pt_select_get_query = _proto("pt_select_get_query", _c_char_p, _c_void_p)
+_pt_select_set_query = _proto("pt_select_set_query", None, _c_void_p, _c_char_p)
+_pt_select_get_match_count = _proto(
+    "pt_select_get_match_count", _c_uint32, _c_void_p
+)
+_pt_select_get_match_item = _proto(
+    "pt_select_get_match_item", _c_uint32, _c_void_p, _c_uint32
+)
+_pt_select_set_max_popup_rows = _proto(
+    "pt_select_set_max_popup_rows", None, _c_void_p, _c_uint32
+)
+_pt_select_get_max_popup_rows = _proto(
+    "pt_select_get_max_popup_rows", _c_uint32, _c_void_p
+)
+_pt_select_open = _proto("pt_select_open", None, _c_void_p)
+_pt_select_close = _proto("pt_select_close", None, _c_void_p)
+_pt_select_is_open = _proto("pt_select_is_open", _c_bool, _c_void_p)
+_pt_select_set_on_change = _proto(
+    "pt_select_set_on_change", None, _c_void_p, _INDEX, _c_void_p
+)
+
+_pt_date_today = _proto("pt_date_today", Date)
+_pt_date_is_valid = _proto("pt_date_is_valid", _c_bool, Date)
+_pt_date_picker_create = _proto("pt_date_picker_create", _c_void_p, _c_void_p)
+_pt_date_picker_set_date = _proto(
+    "pt_date_picker_set_date", _c_bool, _c_void_p, Date
+)
+_pt_date_picker_get_date = _proto("pt_date_picker_get_date", Date, _c_void_p)
+_pt_date_picker_clear = _proto("pt_date_picker_clear", None, _c_void_p)
+_pt_date_picker_set_format = _proto(
+    "pt_date_picker_set_format", None, _c_void_p, _c_int
+)
+_pt_date_picker_get_format = _proto(
+    "pt_date_picker_get_format", _c_int, _c_void_p
+)
+_pt_date_picker_set_text = _proto(
+    "pt_date_picker_set_text", _c_bool, _c_void_p, _c_char_p
+)
+_pt_date_picker_get_text = _proto(
+    "pt_date_picker_get_text", _c_char_p, _c_void_p
+)
+_pt_date_picker_set_placeholder = _proto(
+    "pt_date_picker_set_placeholder", None, _c_void_p, _c_char_p
+)
+_pt_date_picker_get_placeholder = _proto(
+    "pt_date_picker_get_placeholder", _c_char_p, _c_void_p
+)
+_pt_date_picker_open = _proto("pt_date_picker_open", None, _c_void_p)
+_pt_date_picker_close = _proto("pt_date_picker_close", None, _c_void_p)
+_pt_date_picker_is_open = _proto(
+    "pt_date_picker_is_open", _c_bool, _c_void_p
+)
+_pt_date_picker_set_on_change = _proto(
+    "pt_date_picker_set_on_change", None, _c_void_p, _DATE_CALLBACK, _c_void_p
+)
+
+_pt_number_picker_create = _proto(
+    "pt_number_picker_create", _c_void_p, _c_void_p
+)
+_pt_number_picker_set_range = _proto(
+    "pt_number_picker_set_range", None, _c_void_p, _c_double, _c_double
+)
+_pt_number_picker_get_min = _proto(
+    "pt_number_picker_get_min", _c_double, _c_void_p
+)
+_pt_number_picker_get_max = _proto(
+    "pt_number_picker_get_max", _c_double, _c_void_p
+)
+_pt_number_picker_set_step = _proto(
+    "pt_number_picker_set_step", None, _c_void_p, _c_double
+)
+_pt_number_picker_get_step = _proto(
+    "pt_number_picker_get_step", _c_double, _c_void_p
+)
+_pt_number_picker_set_value = _proto(
+    "pt_number_picker_set_value", None, _c_void_p, _c_double
+)
+_pt_number_picker_get_value = _proto(
+    "pt_number_picker_get_value", _c_double, _c_void_p
+)
+_pt_number_picker_has_value = _proto(
+    "pt_number_picker_has_value", _c_bool, _c_void_p
+)
+_pt_number_picker_clear = _proto("pt_number_picker_clear", None, _c_void_p)
+_pt_number_picker_step_by = _proto(
+    "pt_number_picker_step_by", None, _c_void_p, _c_double
+)
+_pt_number_picker_set_text = _proto(
+    "pt_number_picker_set_text", _c_bool, _c_void_p, _c_char_p
+)
+_pt_number_picker_get_text = _proto(
+    "pt_number_picker_get_text", _c_char_p, _c_void_p
+)
+_pt_number_picker_set_placeholder = _proto(
+    "pt_number_picker_set_placeholder", None, _c_void_p, _c_char_p
+)
+_pt_number_picker_get_placeholder = _proto(
+    "pt_number_picker_get_placeholder", _c_char_p, _c_void_p
+)
+_pt_number_picker_set_on_change = _proto(
+    "pt_number_picker_set_on_change", None, _c_void_p, _NUMBER_CALLBACK, _c_void_p
+)
+
+_pt_color_picker_create = _proto(
+    "pt_color_picker_create", _c_void_p, _c_void_p
+)
+_pt_color_picker_set_color = _proto(
+    "pt_color_picker_set_color", None, _c_void_p, _c_uint32
+)
+_pt_color_picker_get_color = _proto(
+    "pt_color_picker_get_color", _c_uint32, _c_void_p
+)
+_pt_color_picker_set_hex = _proto(
+    "pt_color_picker_set_hex", _c_bool, _c_void_p, _c_char_p
+)
+_pt_color_picker_get_hex = _proto(
+    "pt_color_picker_get_hex", _c_char_p, _c_void_p
+)
+_pt_color_picker_add_preset = _proto(
+    "pt_color_picker_add_preset", None, _c_void_p, _c_uint32
+)
+_pt_color_picker_clear_presets = _proto(
+    "pt_color_picker_clear_presets", None, _c_void_p
+)
+_pt_color_picker_get_preset_count = _proto(
+    "pt_color_picker_get_preset_count", _c_uint32, _c_void_p
+)
+_pt_color_picker_get_preset = _proto(
+    "pt_color_picker_get_preset", _c_uint32, _c_void_p, _c_uint32
+)
+_pt_color_picker_open = _proto("pt_color_picker_open", None, _c_void_p)
+_pt_color_picker_close = _proto("pt_color_picker_close", None, _c_void_p)
+_pt_color_picker_is_open = _proto(
+    "pt_color_picker_is_open", _c_bool, _c_void_p
+)
+_pt_color_picker_set_on_change = _proto(
+    "pt_color_picker_set_on_change", None, _c_void_p, _COLOR_CALLBACK, _c_void_p
+)
+
 
 def ease(easing: int, t: float) -> float:
     return float(_pt_ease(int(easing), float(t)))
@@ -2206,6 +2695,18 @@ def uri_list(text: str) -> list[str]:
     """Parses a text/uri-list payload into a list of URI strings."""
     return [uri for index in range(uri_list_count(text))
             if (uri := uri_list_get(text, index)) is not None]
+
+
+def date_today() -> "Date":
+    """Today's local civil date, or the empty date outside year 1..9999."""
+    return _pt_date_today()
+
+
+def date_is_valid(date: Date) -> bool:
+    """True for a real civil date (year 1..9999, month 1..12, real day)."""
+    if not isinstance(date, Date):
+        raise TypeError("date must be a pt.Date")
+    return bool(_pt_date_is_valid(date))
 
 
 class Transition:
@@ -2247,6 +2748,7 @@ class Transition:
 
 _widgets: dict[int, "Widget"] = {}
 _windows: dict[int, "Window"] = {}
+_popups: dict[int, "Popup"] = {}
 _callback_roots: list[Any] = []
 # Live stream reads keep their trampoline alive until Pt delivers the final
 # done/cancelled/error callback, after which Pt releases the native stream.
@@ -2256,6 +2758,88 @@ _drop_streams: dict[int, "DropStream"] = {}
 def _error_message() -> str:
     message = _pt_get_last_error()
     return _text_out(message) or "unknown Pt error"
+
+
+class IconImage:
+    """A reference-counted raster icon image.
+
+    A load or theme lookup returns one owned reference. ``ref()`` returns a new
+    wrapper holding one more reference and ``destroy()``/``close()`` drops this
+    wrapper's reference; the last drop frees the decoded pixels. Setters on a
+    button or window take their own reference, so the caller may drop its own
+    immediately after setting. The finalizer drops a reference that was never
+    released explicitly.
+
+    Widget and window getters return a *new owned reference* (the C getter is
+    borrowed and the wrapper adds a reference), so the returned object stays
+    valid across later slot changes and can be released with :meth:`destroy`.
+    """
+
+    def __init__(self, pointer: Optional[int]) -> None:
+        if not pointer:
+            raise RuntimeError("Pt returned a null icon image")
+        self._ptr = int(pointer)
+
+    @classmethod
+    def load_file(cls, path: str) -> Optional["IconImage"]:
+        pointer = _pt_icon_image_load_file(_string(path))
+        return cls(pointer) if pointer else None
+
+    @classmethod
+    def load_memory(cls, data: Any) -> Optional["IconImage"]:
+        """Loads PNG bytes through the buffer protocol; the data is copied."""
+        raw = _raw_buffer(data)
+        pointer = _pt_icon_image_load_memory(raw, len(raw))
+        return cls(pointer) if pointer else None
+
+    @classmethod
+    def from_name(cls, name: str, size: int = 32) -> Optional["IconImage"]:
+        """Looks ``name`` up in the hicolor theme at the closest ``size``."""
+        pointer = _pt_icon_image_from_name(_string(name), int(size))
+        return cls(pointer) if pointer else None
+
+    @property
+    def raw(self) -> int:
+        return self._ptr
+
+    @property
+    def width(self) -> int:
+        return int(_pt_icon_image_width(self._ptr)) if self._ptr else 0
+
+    @property
+    def height(self) -> int:
+        return int(_pt_icon_image_height(self._ptr)) if self._ptr else 0
+
+    def ref(self) -> "IconImage":
+        """Returns a new wrapper holding one more reference."""
+        if not self._ptr:
+            raise RuntimeError("the icon image has been destroyed")
+        pointer = _pt_icon_image_ref(self._ptr)
+        if not pointer:
+            raise RuntimeError(_error_message())
+        return IconImage(pointer)
+
+    def destroy(self) -> None:
+        """Drops this wrapper's reference. Safe to call more than once."""
+        if not self._ptr:
+            return
+        pointer = self._ptr
+        self._ptr = 0
+        _pt_icon_image_destroy(pointer)
+
+    def close(self) -> None:
+        """Alias for :meth:`destroy`, matching the other handle classes."""
+        self.destroy()
+
+    def __del__(self) -> None:
+        try:
+            self.destroy()
+        except Exception:
+            # Interpreter shutdown may have cleared module globals already.
+            pass
+
+    def __repr__(self) -> str:
+        return f"<pt.IconImage {self.width}x{self.height} at 0x{self._ptr:x}>"
 
 
 class Widget:
@@ -2996,6 +3580,37 @@ class Widget:
         return self
 
     @property
+    def icon_image(self) -> Optional["IconImage"]:
+        """The button's raster icon slot as a new owned reference.
+
+        None when the slot is empty. Assign an :class:`IconImage` or None; the
+        button takes its own reference, so this wrapper may be destroyed right
+        after assignment.
+        """
+        return _owned_icon(_pt_button_get_icon_image(self._ptr))
+
+    @icon_image.setter
+    def icon_image(self, image: Optional["IconImage"]) -> None:
+        self.set_icon_image(image)
+
+    def set_icon_image(self, image: Optional["IconImage"]) -> "Widget":
+        """Sets the button raster slot; None restores the vector glyph."""
+        if image is not None and not isinstance(image, IconImage):
+            raise TypeError("image must be a pt.IconImage or None")
+        pointer = None
+        if image is not None:
+            if not image._ptr:
+                raise RuntimeError("the icon image has been destroyed")
+            pointer = image._ptr
+        _pt_button_set_icon_image(self._ptr, pointer)
+        return self
+
+    def set_icon_tint(self, color: int) -> "Widget":
+        """Tints the button image RGB by its alpha; 0 restores the colours."""
+        _pt_button_set_icon_tint(self._ptr, int(color))
+        return self
+
+    @property
     def column_count(self) -> int:
         return int(_pt_table_get_column_count(self._ptr))
 
@@ -3102,6 +3717,37 @@ class Widget:
 
     def column_hidden(self, column: int) -> bool:
         return bool(_pt_table_get_column_hidden(self._ptr, int(column)))
+
+    def set_column_key(self, column: int, key: str) -> "Widget":
+        """Sets an application-stable column key, truncated at 64 bytes."""
+        _pt_table_set_column_key(self._ptr, int(column), _string(key))
+        return self
+
+    def column_key(self, column: int) -> str:
+        """The column's stable key; "" for an empty or out-of-range column."""
+        return _text_out(_pt_table_get_column_key(self._ptr, int(column)))
+
+    def columns_save(self) -> str:
+        """Serializes display order, widths, visibility and multi-column sort.
+
+        The result is a caller-owned ASCII blob released with pt_free; "" when
+        the C side rejects the table (for example a non-representable width).
+        """
+        pointer = _pt_table_columns_save(self._ptr)
+        if not pointer:
+            return ""
+        try:
+            return _ctypes.string_at(pointer).decode("utf-8")
+        finally:
+            _pt_free(pointer)
+
+    def columns_restore(self, blob: str) -> bool:
+        """Validates and applies a blob from :meth:`columns_save`.
+
+        The whole blob is validated before the table is touched; a rejected
+        blob returns False and leaves the current layout unchanged.
+        """
+        return bool(_pt_table_columns_restore(self._ptr, _string(blob)))
 
     def set_header_height(self, height: float) -> "Widget":
         _pt_table_set_header_height(self._ptr, float(height))
@@ -3621,6 +4267,423 @@ class Widget:
         trampoline = _COMBO_TEXT(dispatch)
         self._keep(trampoline)
         _pt_combobox_set_on_text_change(self._ptr, trampoline, None)
+        return self
+
+    # ----- searchable select (pt_select_*, a combobox-kind picker) -----
+
+    @property
+    def select_placeholder(self) -> str:
+        return _text_out(_pt_select_get_placeholder(self._ptr))
+
+    @select_placeholder.setter
+    def select_placeholder(self, text: str) -> None:
+        _pt_select_set_placeholder(self._ptr, _string(text))
+
+    def set_select_placeholder(self, text: str) -> "Widget":
+        self.select_placeholder = text
+        return self
+
+    def select_add_item(self, text: str) -> "Widget":
+        _pt_select_add_item(self._ptr, _string(text))
+        return self
+
+    def select_insert_item(self, index: int, text: str) -> "Widget":
+        index = int(index)
+        self._combo_data = {
+            (key + 1 if key >= index else key): value
+            for key, value in self._combo_data.items()
+        }
+        _pt_select_insert_item(self._ptr, index, _string(text))
+        return self
+
+    def select_add_item_with_data(self, text: str, data: Any) -> "Widget":
+        """Appends an item and keeps ``data`` alive as its app-owned payload."""
+        index = int(_pt_select_get_item_count(self._ptr))
+        if data is None:
+            _pt_select_add_item(self._ptr, _string(text))
+        else:
+            _pt_select_add_item_with_data(self._ptr, _string(text), id(data))
+            if int(_pt_select_get_item_count(self._ptr)) == index + 1:
+                self._combo_data[index] = data
+        return self
+
+    def select_remove_item(self, index: int) -> "Widget":
+        index = int(index)
+        self._combo_data = {
+            (key - 1 if key > index else key): value
+            for key, value in self._combo_data.items()
+            if key != index
+        }
+        _pt_select_remove_item(self._ptr, index)
+        return self
+
+    def select_clear(self) -> "Widget":
+        self._combo_data.clear()
+        _pt_select_clear(self._ptr)
+        return self
+
+    @property
+    def select_item_count(self) -> int:
+        return int(_pt_select_get_item_count(self._ptr))
+
+    def select_item_text(self, index: int) -> str:
+        return _text_out(_pt_select_get_item_text(self._ptr, int(index)))
+
+    def select_item_data(self, index: int) -> Any:
+        index = int(index)
+        if index in self._combo_data:
+            return self._combo_data[index]
+        return _pt_select_get_item_data(self._ptr, index)
+
+    def select_set_item_data(self, index: int, data: Any) -> "Widget":
+        index = int(index)
+        if data is None:
+            self._combo_data.pop(index, None)
+            _pt_select_set_item_data(self._ptr, index, None)
+        else:
+            self._combo_data[index] = data
+            _pt_select_set_item_data(self._ptr, index, id(data))
+        return self
+
+    @property
+    def select_selected(self) -> int:
+        return int(_pt_select_get_selected(self._ptr))
+
+    @select_selected.setter
+    def select_selected(self, index: int) -> None:
+        # Silent, matching the C contract: programmatic selection never fires
+        # on_change, and an out-of-range index clears the committed item.
+        _pt_select_set_selected(self._ptr, int(index))
+
+    def set_select_selected(self, index: int) -> "Widget":
+        self.select_selected = index
+        return self
+
+    def select_clear_selection(self) -> "Widget":
+        _pt_select_clear_selection(self._ptr)
+        return self
+
+    @property
+    def select_query(self) -> str:
+        return _text_out(_pt_select_get_query(self._ptr))
+
+    @select_query.setter
+    def select_query(self, text: str) -> None:
+        _pt_select_set_query(self._ptr, _string(text))
+
+    def set_select_query(self, text: str) -> "Widget":
+        self.select_query = text
+        return self
+
+    @property
+    def select_match_count(self) -> int:
+        return int(_pt_select_get_match_count(self._ptr))
+
+    def select_match_item(self, position: int) -> int:
+        """Maps a visible match position back to a model item index."""
+        return int(_pt_select_get_match_item(self._ptr, int(position)))
+
+    @property
+    def select_max_popup_rows(self) -> int:
+        return int(_pt_select_get_max_popup_rows(self._ptr))
+
+    @select_max_popup_rows.setter
+    def select_max_popup_rows(self, rows: int) -> None:
+        # The C setter clamps to 1..picker_max_candidates.
+        _pt_select_set_max_popup_rows(self._ptr, int(rows))
+
+    def set_select_max_popup_rows(self, rows: int) -> "Widget":
+        self.select_max_popup_rows = rows
+        return self
+
+    def select_open(self) -> "Widget":
+        _pt_select_open(self._ptr)
+        return self
+
+    def select_close(self) -> "Widget":
+        _pt_select_close(self._ptr)
+        return self
+
+    @property
+    def select_popup_open(self) -> bool:
+        return bool(_pt_select_is_open(self._ptr))
+
+    def on_select_change(
+        self, callback: Optional[Callable[["Widget", int], Any]]
+    ) -> "Widget":
+        """Runs when the user commits an item; programmatic sets stay silent."""
+        if callback is None:
+            _pt_select_set_on_change(self._ptr, _NULL_INDEX, None)
+            return self
+
+        def dispatch(_select: int, index: int, _data: int) -> None:
+            callback(Widget._wrap(_select) or self, int(index))
+
+        trampoline = _INDEX(dispatch)
+        self._keep(trampoline)
+        _pt_select_set_on_change(self._ptr, trampoline, None)
+        return self
+
+    # ----- date picker -----
+
+    @property
+    def date_picker_date(self) -> Date:
+        return _pt_date_picker_get_date(self._ptr)
+
+    @date_picker_date.setter
+    def date_picker_date(self, date: Date) -> None:
+        if not isinstance(date, Date):
+            raise TypeError("date must be a pt.Date")
+        if not _pt_date_picker_set_date(self._ptr, date):
+            raise ValueError(_error_message())
+
+    def set_date_picker_date(self, date: Date) -> bool:
+        """Sets the committed date; False for a structurally invalid value.
+
+        A zero-initialized date clears the value and returns True.
+        """
+        if not isinstance(date, Date):
+            raise TypeError("date must be a pt.Date")
+        return bool(_pt_date_picker_set_date(self._ptr, date))
+
+    def date_picker_clear(self) -> "Widget":
+        _pt_date_picker_clear(self._ptr)
+        return self
+
+    @property
+    def date_picker_format(self) -> int:
+        return int(_pt_date_picker_get_format(self._ptr))
+
+    @date_picker_format.setter
+    def date_picker_format(self, format: int) -> None:
+        # An unknown value selects ISO, matching the C contract.
+        _pt_date_picker_set_format(self._ptr, int(format))
+
+    @property
+    def date_picker_text(self) -> str:
+        return _text_out(_pt_date_picker_get_text(self._ptr))
+
+    @date_picker_text.setter
+    def date_picker_text(self, text: str) -> None:
+        if not _pt_date_picker_set_text(self._ptr, _string(text)):
+            raise ValueError(_error_message())
+
+    def set_date_picker_text(self, text: str) -> bool:
+        """Parses and commits text; invalid input is rejected and preserved."""
+        return bool(_pt_date_picker_set_text(self._ptr, _string(text)))
+
+    @property
+    def date_picker_placeholder(self) -> str:
+        return _text_out(_pt_date_picker_get_placeholder(self._ptr))
+
+    @date_picker_placeholder.setter
+    def date_picker_placeholder(self, text: str) -> None:
+        _pt_date_picker_set_placeholder(self._ptr, _string(text))
+
+    def date_picker_open(self) -> "Widget":
+        _pt_date_picker_open(self._ptr)
+        return self
+
+    def date_picker_close(self) -> "Widget":
+        _pt_date_picker_close(self._ptr)
+        return self
+
+    @property
+    def date_picker_popup_open(self) -> bool:
+        return bool(_pt_date_picker_is_open(self._ptr))
+
+    def on_date_change(
+        self, callback: Optional[Callable[["Widget", Date], Any]]
+    ) -> "Widget":
+        """Runs on a user-committed date change; programmatic sets stay silent."""
+        if callback is None:
+            _pt_date_picker_set_on_change(self._ptr, _NULL_DATE_CALLBACK, None)
+            return self
+
+        def dispatch(_picker: int, date: Date, _data: int) -> None:
+            callback(Widget._wrap(_picker) or self, date)
+
+        trampoline = _DATE_CALLBACK(dispatch)
+        self._keep(trampoline)
+        _pt_date_picker_set_on_change(self._ptr, trampoline, None)
+        return self
+
+    # ----- number picker -----
+
+    @property
+    def number_picker_min(self) -> float:
+        return float(_pt_number_picker_get_min(self._ptr))
+
+    @property
+    def number_picker_max(self) -> float:
+        return float(_pt_number_picker_get_max(self._ptr))
+
+    @property
+    def number_picker_range(self) -> tuple[float, float]:
+        return (self.number_picker_min, self.number_picker_max)
+
+    @number_picker_range.setter
+    def number_picker_range(self, bounds: tuple[float, float]) -> None:
+        minimum = float(bounds[0])
+        maximum = float(bounds[1])
+        if not (_math.isfinite(minimum) and _math.isfinite(maximum)):
+            raise ValueError("the number picker range must be finite")
+        if minimum > maximum:
+            raise ValueError("the number picker minimum must not exceed its maximum")
+        _pt_number_picker_set_range(self._ptr, minimum, maximum)
+
+    def set_number_picker_range(self, minimum: float, maximum: float) -> "Widget":
+        self.number_picker_range = (minimum, maximum)
+        return self
+
+    @property
+    def number_picker_step(self) -> float:
+        return float(_pt_number_picker_get_step(self._ptr))
+
+    @number_picker_step.setter
+    def number_picker_step(self, step: float) -> None:
+        step = float(step)
+        if not _math.isfinite(step) or step <= 0.0:
+            raise ValueError("the number picker step must be finite and positive")
+        _pt_number_picker_set_step(self._ptr, step)
+
+    def set_number_picker_step(self, step: float) -> "Widget":
+        self.number_picker_step = step
+        return self
+
+    @property
+    def number_picker_value(self) -> float:
+        """The value, or 0.0 while empty; use has_value to tell them apart."""
+        return float(_pt_number_picker_get_value(self._ptr))
+
+    @number_picker_value.setter
+    def number_picker_value(self, value: float) -> None:
+        value = float(value)
+        if not _math.isfinite(value):
+            raise ValueError("the number picker value must be finite")
+        # A finite value is clamped into the inclusive range by the C layer.
+        _pt_number_picker_set_value(self._ptr, value)
+
+    def set_number_picker_value(self, value: float) -> "Widget":
+        self.number_picker_value = value
+        return self
+
+    @property
+    def number_picker_has_value(self) -> bool:
+        return bool(_pt_number_picker_has_value(self._ptr))
+
+    def number_picker_clear(self) -> "Widget":
+        _pt_number_picker_clear(self._ptr)
+        return self
+
+    def number_picker_step_by(self, steps: float) -> "Widget":
+        steps = float(steps)
+        if not _math.isfinite(steps):
+            raise ValueError("the number picker step multiplier must be finite")
+        _pt_number_picker_step_by(self._ptr, steps)
+        return self
+
+    @property
+    def number_picker_text(self) -> str:
+        return _text_out(_pt_number_picker_get_text(self._ptr))
+
+    @number_picker_text.setter
+    def number_picker_text(self, text: str) -> None:
+        if not _pt_number_picker_set_text(self._ptr, _string(text)):
+            raise ValueError(_error_message())
+
+    def set_number_picker_text(self, text: str) -> bool:
+        """Parses and commits text; non-numeric input is rejected and preserved."""
+        return bool(_pt_number_picker_set_text(self._ptr, _string(text)))
+
+    @property
+    def number_picker_placeholder(self) -> str:
+        return _text_out(_pt_number_picker_get_placeholder(self._ptr))
+
+    @number_picker_placeholder.setter
+    def number_picker_placeholder(self, text: str) -> None:
+        _pt_number_picker_set_placeholder(self._ptr, _string(text))
+
+    def on_number_change(
+        self, callback: Optional[Callable[["Widget", float], Any]]
+    ) -> "Widget":
+        """Runs on a user value change; programmatic sets stay silent."""
+        if callback is None:
+            _pt_number_picker_set_on_change(self._ptr, _NULL_NUMBER_CALLBACK, None)
+            return self
+
+        def dispatch(_picker: int, value: float, _data: int) -> None:
+            callback(Widget._wrap(_picker) or self, float(value))
+
+        trampoline = _NUMBER_CALLBACK(dispatch)
+        self._keep(trampoline)
+        _pt_number_picker_set_on_change(self._ptr, trampoline, None)
+        return self
+
+    # ----- colour picker -----
+
+    @property
+    def color_picker_color(self) -> int:
+        return int(_pt_color_picker_get_color(self._ptr))
+
+    @color_picker_color.setter
+    def color_picker_color(self, color: int) -> None:
+        _pt_color_picker_set_color(self._ptr, int(color))
+
+    @property
+    def color_picker_hex(self) -> str:
+        return _text_out(_pt_color_picker_get_hex(self._ptr))
+
+    @color_picker_hex.setter
+    def color_picker_hex(self, text: str) -> None:
+        if not _pt_color_picker_set_hex(self._ptr, _string(text)):
+            raise ValueError(_error_message())
+
+    def set_color_picker_hex(self, text: str) -> bool:
+        """Parses and commits #RRGGBB / #RRGGBBAA; invalid text is preserved."""
+        return bool(_pt_color_picker_set_hex(self._ptr, _string(text)))
+
+    def color_picker_add_preset(self, color: int) -> "Widget":
+        _pt_color_picker_add_preset(self._ptr, int(color))
+        return self
+
+    def clear_color_picker_presets(self) -> "Widget":
+        _pt_color_picker_clear_presets(self._ptr)
+        return self
+
+    @property
+    def color_picker_preset_count(self) -> int:
+        return int(_pt_color_picker_get_preset_count(self._ptr))
+
+    def color_picker_preset(self, index: int) -> int:
+        return int(_pt_color_picker_get_preset(self._ptr, int(index)))
+
+    def color_picker_open(self) -> "Widget":
+        _pt_color_picker_open(self._ptr)
+        return self
+
+    def color_picker_close(self) -> "Widget":
+        _pt_color_picker_close(self._ptr)
+        return self
+
+    @property
+    def color_picker_popup_open(self) -> bool:
+        return bool(_pt_color_picker_is_open(self._ptr))
+
+    def on_color_change(
+        self, callback: Optional[Callable[["Widget", int], Any]]
+    ) -> "Widget":
+        """Runs on a user colour change; programmatic sets stay silent."""
+        if callback is None:
+            _pt_color_picker_set_on_change(self._ptr, _NULL_COLOR_CALLBACK, None)
+            return self
+
+        def dispatch(_picker: int, color: int, _data: int) -> None:
+            callback(Widget._wrap(_picker) or self, int(color))
+
+        trampoline = _COLOR_CALLBACK(dispatch)
+        self._keep(trampoline)
+        _pt_color_picker_set_on_change(self._ptr, trampoline, None)
         return self
 
     def add_tab(self, title: str) -> "Widget":
@@ -4148,6 +5211,86 @@ class Window:
 
     def set_clipboard(self, text: str) -> "Window":
         self.clipboard = text
+        return self
+
+    @property
+    def clipboard_image(self) -> Optional[tuple[bytes, int, int]]:
+        """The clipboard image as ``(pixels, width, height)`` or None.
+
+        ``pixels`` holds width * height premultiplied 0xAARRGGBB words in native
+        byte order, exactly the layout accepted by :meth:`set_clipboard_image`;
+        pass the bytes straight back for a lossless round trip. Missing,
+        non-PNG or corrupt clipboard data returns None.
+        """
+        width = _c_int()
+        height = _c_int()
+        pointer = _pt_window_clipboard_get_image_png(
+            self._ptr, _ctypes.byref(width), _ctypes.byref(height)
+        )
+        if not pointer:
+            return None
+        try:
+            image_width = int(width.value)
+            image_height = int(height.value)
+            if image_width <= 0 or image_height <= 0:
+                return None
+            size = image_width * image_height * 4
+            return (_ctypes.string_at(pointer, size), image_width, image_height)
+        finally:
+            _pt_free(pointer)
+
+    def set_clipboard_image(self, pixels: Any, width: int, height: int) -> bool:
+        """Writes a premultiplied 0xAARRGGBB image as image/png.
+
+        ``pixels`` is a sequence of 0xAARRGGBB words or any bytes-like object
+        holding them in native order. The data is copied. Rejects non-positive
+        sizes and short buffers with ``ValueError``; a C-side rejection (for
+        example a dimension above ``clipboard_image_max_dimension``) returns
+        False and records the reason in the Pt error state.
+        """
+        width = int(width)
+        height = int(height)
+        if width <= 0 or height <= 0:
+            raise ValueError("clipboard image dimensions must be positive")
+        array = _pixel_array(pixels, width * height)
+        return bool(
+            _pt_window_clipboard_set_image_png(self._ptr, array, width, height)
+        )
+
+    def set_clipboard_uri_list(self, uris: list[str]) -> bool:
+        """Writes absolute paths or URIs as a text/uri-list payload.
+
+        Pt percent-encodes paths into file:// URIs and separates entries with
+        CRLF. Returns False for an empty list, a relative path, a CR/LF inside
+        an entry or an oversized payload.
+        """
+        if not uris:
+            return False
+        encoded = [_string(uri) for uri in uris]
+        array = (_c_char_p * len(encoded))(*encoded)
+        return bool(
+            _pt_window_clipboard_set_uri_list(self._ptr, array, len(encoded))
+        )
+
+    @property
+    def icon_image(self) -> Optional["IconImage"]:
+        """The window icon slot as a new owned reference, or None."""
+        return _owned_icon(_pt_window_get_icon(self._ptr))
+
+    @icon_image.setter
+    def icon_image(self, image: Optional["IconImage"]) -> None:
+        self.set_icon_image(image)
+
+    def set_icon_image(self, image: Optional["IconImage"]) -> "Window":
+        """Submits a raster window icon (best effort); None removes it."""
+        if image is not None and not isinstance(image, IconImage):
+            raise TypeError("image must be a pt.IconImage or None")
+        pointer = None
+        if image is not None:
+            if not image._ptr:
+                raise RuntimeError("the icon image has been destroyed")
+            pointer = image._ptr
+        _pt_window_set_icon(self._ptr, pointer)
         return self
 
     def show(self) -> "Window":
@@ -4779,6 +5922,140 @@ class Toast:
         return f"<pt.Toast visible={self.visible} at 0x{self._ptr:x}>"
 
 
+class Popup:
+    """An application-owned popup surface with an adopted content widget.
+
+    Create it with :meth:`create`; the caller owns the handle and destroys it
+    with :meth:`destroy` (or lets the parent window's destruction free it). The
+    popup adopts ``content`` and its subtree, so the content wrapper becomes
+    invalid after :meth:`destroy`. Instances are cached by native pointer, so
+    the dismiss callback and :meth:`content` return the same Python objects.
+    """
+
+    def __init__(self, pointer: Optional[int], content: Optional[Widget] = None,
+                 window: Optional[Window] = None) -> None:
+        if not pointer:
+            raise RuntimeError("Pt returned a null popup")
+        self._ptr = int(pointer)
+        self._content = content
+        self._window = window
+        self._callbacks: list[Any] = []
+        _popups[self._ptr] = self
+
+    @classmethod
+    def create(cls, window: Window, content: Widget) -> "Popup":
+        if not isinstance(window, Window):
+            raise TypeError("window must be a pt.Window")
+        if not isinstance(content, Widget):
+            raise TypeError("content must be a pt.Widget")
+        pointer = _pt_popup_create(window._ptr, content._ptr)
+        if not pointer:
+            raise RuntimeError(_error_message())
+        return cls(pointer, content, window)
+
+    @classmethod
+    def _wrap(cls, pointer: Optional[int]) -> Optional["Popup"]:
+        if not pointer:
+            return None
+        existing = _popups.get(int(pointer))
+        if existing is not None and existing._ptr:
+            return existing
+        return cls(pointer)
+
+    @property
+    def raw(self) -> int:
+        return self._ptr
+
+    @property
+    def is_open(self) -> bool:
+        return bool(self._ptr) and bool(_pt_popup_is_open(self._ptr))
+
+    @property
+    def content(self) -> Optional[Widget]:
+        """The adopted content widget, valid only until :meth:`destroy`."""
+        if not self._ptr:
+            return None
+        pointer = _pt_popup_content(self._ptr)
+        wrapped = Widget._wrap(pointer) if pointer else None
+        return wrapped if wrapped is not None else self._content
+
+    @property
+    def placement(self) -> int:
+        if not self._ptr:
+            return popup_placement_below
+        return int(_pt_popup_get_placement(self._ptr))
+
+    @placement.setter
+    def placement(self, placement: int) -> None:
+        if self._ptr:
+            # Out-of-range values select below, matching the C contract.
+            _pt_popup_set_placement(self._ptr, int(placement))
+
+    def show(self, anchor: Any) -> bool:
+        """Opens or repositions the popup at an anchor rectangle."""
+        if not self._ptr:
+            return False
+        return bool(_pt_popup_show(self._ptr, _anchor(anchor)))
+
+    def reposition(self, anchor: Any) -> bool:
+        """Updates the anchor of an open popup; False when closed/invalid."""
+        if not self._ptr:
+            return False
+        return bool(_pt_popup_reposition(self._ptr, _anchor(anchor)))
+
+    def dismiss(self) -> "Popup":
+        """Closes the popup and runs the dismiss callback after it is closed."""
+        if self._ptr:
+            _pt_popup_dismiss(self._ptr)
+        return self
+
+    def on_dismiss(self, callback: Optional[Callable[["Popup"], Any]]) -> "Popup":
+        """Registers the post-dismiss callback; None clears it.
+
+        The callback runs once for every show that ends through dismissal, and
+        may re-show or destroy the popup. Destroying the popup directly never
+        invokes it.
+        """
+        if not self._ptr:
+            return self
+        if callback is None:
+            _pt_popup_set_on_dismiss(self._ptr, _NULL_POPUP_DISMISS, None)
+            return self
+
+        def dispatch(_popup: int, _data: int) -> None:
+            target = Popup._wrap(_popup)
+            callback(target if target is not None else self)
+
+        trampoline = _POPUP_DISMISS(dispatch)
+        self._callbacks.append(trampoline)
+        _callback_roots.append(trampoline)
+        _pt_popup_set_on_dismiss(self._ptr, trampoline, None)
+        return self
+
+    def destroy(self) -> None:
+        """Destroys the popup and its adopted content tree.
+
+        Safe while open and does not run the dismiss callback. Calling it twice
+        is a no-op; a popup freed with its parent window must not be destroyed
+        here, but the wrapper is invalidated by :meth:`App.destroy` instead.
+        """
+        if not self._ptr:
+            return
+        pointer = self._ptr
+        content = self._content
+        self._ptr = 0
+        _popups.pop(pointer, None)
+        self._callbacks.clear()
+        _pt_popup_destroy(pointer)
+        self._content = None
+        if content is not None and content._ptr:
+            _widgets.pop(content._ptr, None)
+            content._ptr = 0
+
+    def __repr__(self) -> str:
+        return f"<pt.Popup open={self.is_open} at 0x{self._ptr:x}>"
+
+
 class App:
     """Owns the native application, event loop and timers."""
 
@@ -4813,10 +6090,15 @@ class App:
             for window in _windows.values():
                 if window._app is self:
                     window._closed = True
+            for popup in _popups.values():
+                popup._ptr = 0
+                popup._content = None
+                popup._callbacks.clear()
             _pt_app_destroy(self._ptr)
             self._ptr = 0
             _widgets.clear()
             _windows.clear()
+            _popups.clear()
             _drop_streams.clear()
 
     def add_timeout(self, milliseconds: int, callback: Callable[[], Any]) -> int:
@@ -4915,6 +6197,72 @@ class App:
 
     def set_font_family(self, family: str) -> None:
         _pt_app_set_font_family(self._ptr, _string(family))
+
+    @property
+    def font_fallbacks(self) -> list[str]:
+        """The process-wide app-default fallback chain (copied per call).
+
+        The C pointers borrow global chain storage; decode each immediately.
+        """
+        return [self.font_fallback(index)
+                for index in range(self.font_fallback_count)]
+
+    @font_fallbacks.setter
+    def font_fallbacks(self, families: Optional[list[str]]) -> None:
+        self.set_font_fallbacks(families)
+
+    def set_font_fallbacks(self, families: Optional[list[str]]) -> None:
+        """Installs the app-default chain; None or [] restores Fontconfig order.
+
+        Families are copied, empty entries are skipped and the list is clamped
+        to ``font_fallback_max_families`` by the C layer.
+        """
+        array, count = _family_array(families)
+        _pt_app_set_font_fallbacks(self._ptr, array, count)
+
+    @property
+    def font_fallback_count(self) -> int:
+        return int(_pt_app_get_font_fallback_count(self._ptr))
+
+    def font_fallback(self, index: int) -> str:
+        """One borrowed family name; "" for an out-of-range index."""
+        return _text_out(_pt_app_get_font_fallback(self._ptr, int(index)))
+
+    def set_font_fallbacks_for_family(self, family: str,
+                                      families: Optional[list[str]]) -> None:
+        """Overrides the chain only for the exact primary family string."""
+        array, count = _family_array(families)
+        _pt_app_set_font_fallbacks_for_family(
+            self._ptr, _string(family), array, count
+        )
+
+    def font_fallback_count_for_family(self, family: str) -> int:
+        """The override count; zero means the app default applies."""
+        return int(
+            _pt_app_get_font_fallback_count_for_family(self._ptr, _string(family))
+        )
+
+    def font_fallback_for_family(self, family: str, index: int) -> str:
+        """One borrowed override family; "" when no override/index is present."""
+        return _text_out(
+            _pt_app_get_font_fallback_for_family(
+                self._ptr, _string(family), int(index)
+            )
+        )
+
+    def font_uncovered_count(self, family: Optional[str], text: str) -> int:
+        """Counts codepoints no face in ``family``'s chain covers.
+
+        ``family`` None selects the app's configured primary family at the
+        default style; the count is in codepoints, not bytes.
+        """
+        data = _string(text)
+        family_bytes = _string(family) if family is not None else None
+        return int(
+            _pt_app_font_uncovered_count(
+                self._ptr, family_bytes, data, len(data)
+            )
+        )
 
     @property
     def reduced_motion(self) -> bool:
@@ -5065,6 +6413,26 @@ def tree(parent: Optional[Widget]) -> Widget:
 
 def combobox(parent: Optional[Widget]) -> Widget:
     return _create(_pt_combobox_create(parent._ptr if parent else None))
+
+
+def select(parent: Optional[Widget]) -> Widget:
+    """Creates a searchable select: a combo-box-kind widget with a popup list."""
+    return _create(_pt_select_create(parent._ptr if parent else None))
+
+
+def date_picker(parent: Optional[Widget]) -> Widget:
+    """Creates a date picker: a formatted entry and a popup calendar."""
+    return _create(_pt_date_picker_create(parent._ptr if parent else None))
+
+
+def number_picker(parent: Optional[Widget]) -> Widget:
+    """Creates a spin box: an entry with increment and decrement buttons."""
+    return _create(_pt_number_picker_create(parent._ptr if parent else None))
+
+
+def color_picker(parent: Optional[Widget]) -> Widget:
+    """Creates a colour picker: a hex entry, swatch and popup palette."""
+    return _create(_pt_color_picker_create(parent._ptr if parent else None))
 
 
 def tabs(parent: Optional[Widget]) -> Widget:

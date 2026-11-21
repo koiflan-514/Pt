@@ -11,12 +11,31 @@ Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import ctypes
+import gc
 import os
+import shutil
+import struct
+import tempfile
 import time
 import unittest
+import zlib
 from typing import Any
 
 import pt
+
+
+def _make_png(width: int, height: int, color: tuple[int, int, int, int] = (255, 0, 0, 255)) -> bytes:
+    """Builds a minimal 8-bit RGBA non-interlaced PNG for the icon tests."""
+    row = bytes(color) * width
+    raw = b"".join(b"\x00" + row for _ in range(height))
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (struct.pack(">I", len(payload)) + tag + payload +
+                struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) +
+            chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
 class BindingTests(unittest.TestCase):
@@ -1666,6 +1685,909 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(ctypes.sizeof(event), 36)
         self.assertIs(event.phase.type, ctypes.c_uint32)
         self.assertIs(event.pressed.type, ctypes.c_bool)
+
+
+class M19BindingTests(unittest.TestCase):
+    """1.2 wave: popups, font fallback, clipboard media, columns, icons, pickers."""
+
+    def setUp(self) -> None:
+        self.app = pt.App("pt.tests.python.12")
+        self.window = pt.Window(self.app, "python 1.2 tests", 480, 360)
+        self.root = self.window.root
+        self.column = pt.column(self.root).set_gap(6)
+
+    def tearDown(self) -> None:
+        # Font fallback chains are process-wide: reset before the app goes away.
+        try:
+            self.app.set_font_fallbacks([])
+        except Exception:
+            pass
+        self.app.destroy()
+
+    @staticmethod
+    def _capture(attribute: str, register: Any) -> Any:
+        """Captures the trampoline passed to a private C setter."""
+        captured: list[Any] = []
+        original = getattr(pt, attribute)
+
+        def spy(*args: Any) -> Any:
+            captured.append(args[1])
+            return original(*args)
+
+        setattr(pt, attribute, spy)
+        try:
+            register()
+        finally:
+            setattr(pt, attribute, original)
+        return captured[-1]
+
+    # ------------------------------------------------------------------
+    # Signature and layout pins for the whole 1.2 surface
+    # ------------------------------------------------------------------
+
+    def test_12_binding_signatures(self) -> None:
+        """Every 1.2 entry point pins restype and argtypes."""
+        v = ctypes.c_void_p
+        cp = ctypes.c_char_p
+        i = ctypes.c_int
+        u32 = ctypes.c_uint32
+        b = ctypes.c_bool
+        d = ctypes.c_double
+        f = ctypes.c_float
+        sz = ctypes.c_size_t
+        p_u32 = ("ptr", ctypes.c_uint32)
+        p_i = ("ptr", ctypes.c_int)
+        p_cp = ("ptr", ctypes.c_char_p)
+        date = pt.Date
+        anchor = pt.PopupAnchor
+
+        signatures: dict[str, tuple[Any, list[Any]]] = {
+            # popup (10)
+            "pt_popup_create": (v, [v, v]),
+            "pt_popup_destroy": (None, [v]),
+            "pt_popup_show": (b, [v, anchor]),
+            "pt_popup_reposition": (b, [v, anchor]),
+            "pt_popup_dismiss": (None, [v]),
+            "pt_popup_is_open": (b, [v]),
+            "pt_popup_content": (v, [v]),
+            "pt_popup_set_on_dismiss": (None, [v, pt._POPUP_DISMISS, v]),
+            "pt_popup_set_placement": (None, [v, i]),
+            "pt_popup_get_placement": (i, [v]),
+            # font fallback (7)
+            "pt_app_set_font_fallbacks": (None, [v, p_cp, i]),
+            "pt_app_get_font_fallback_count": (i, [v]),
+            "pt_app_get_font_fallback": (cp, [v, i]),
+            "pt_app_set_font_fallbacks_for_family": (None, [v, cp, p_cp, i]),
+            "pt_app_get_font_fallback_count_for_family": (i, [v, cp]),
+            "pt_app_get_font_fallback_for_family": (cp, [v, cp, i]),
+            "pt_app_font_uncovered_count": (i, [v, cp, cp, sz]),
+            # clipboard media (3)
+            "pt_window_clipboard_set_image_png": (b, [v, p_u32, i, i]),
+            "pt_window_clipboard_get_image_png": (v, [v, p_i, p_i]),
+            "pt_window_clipboard_set_uri_list": (b, [v, p_cp, u32]),
+            # column persistence (4)
+            "pt_table_set_column_key": (None, [v, u32, cp]),
+            "pt_table_get_column_key": (cp, [v, u32]),
+            "pt_table_columns_save": (v, [v]),
+            "pt_table_columns_restore": (b, [v, cp]),
+            # icons (12)
+            "pt_icon_image_load_file": (v, [cp]),
+            "pt_icon_image_load_memory": (v, [v, sz]),
+            "pt_icon_image_from_name": (v, [cp, i]),
+            "pt_icon_image_ref": (v, [v]),
+            "pt_icon_image_destroy": (None, [v]),
+            "pt_icon_image_width": (i, [v]),
+            "pt_icon_image_height": (i, [v]),
+            "pt_button_set_icon_image": (None, [v, v]),
+            "pt_button_get_icon_image": (v, [v]),
+            "pt_button_set_icon_tint": (None, [v, u32]),
+            "pt_window_set_icon": (None, [v, v]),
+            "pt_window_get_icon": (v, [v]),
+            # searchable select (25)
+            "pt_select_create": (v, [v]),
+            "pt_select_set_placeholder": (None, [v, cp]),
+            "pt_select_get_placeholder": (cp, [v]),
+            "pt_select_add_item": (None, [v, cp]),
+            "pt_select_insert_item": (None, [v, u32, cp]),
+            "pt_select_add_item_with_data": (None, [v, cp, v]),
+            "pt_select_remove_item": (None, [v, u32]),
+            "pt_select_clear": (None, [v]),
+            "pt_select_get_item_count": (u32, [v]),
+            "pt_select_get_item_text": (cp, [v, u32]),
+            "pt_select_get_item_data": (v, [v, u32]),
+            "pt_select_set_item_data": (None, [v, u32, v]),
+            "pt_select_get_selected": (u32, [v]),
+            "pt_select_set_selected": (None, [v, u32]),
+            "pt_select_clear_selection": (None, [v]),
+            "pt_select_get_query": (cp, [v]),
+            "pt_select_set_query": (None, [v, cp]),
+            "pt_select_get_match_count": (u32, [v]),
+            "pt_select_get_match_item": (u32, [v, u32]),
+            "pt_select_set_max_popup_rows": (None, [v, u32]),
+            "pt_select_get_max_popup_rows": (u32, [v]),
+            "pt_select_open": (None, [v]),
+            "pt_select_close": (None, [v]),
+            "pt_select_is_open": (b, [v]),
+            "pt_select_set_on_change": (None, [v, pt._INDEX, v]),
+            # date (16)
+            "pt_date_today": (date, []),
+            "pt_date_is_valid": (b, [date]),
+            "pt_date_picker_create": (v, [v]),
+            "pt_date_picker_set_date": (b, [v, date]),
+            "pt_date_picker_get_date": (date, [v]),
+            "pt_date_picker_clear": (None, [v]),
+            "pt_date_picker_set_format": (None, [v, i]),
+            "pt_date_picker_get_format": (i, [v]),
+            "pt_date_picker_set_text": (b, [v, cp]),
+            "pt_date_picker_get_text": (cp, [v]),
+            "pt_date_picker_set_placeholder": (None, [v, cp]),
+            "pt_date_picker_get_placeholder": (cp, [v]),
+            "pt_date_picker_open": (None, [v]),
+            "pt_date_picker_close": (None, [v]),
+            "pt_date_picker_is_open": (b, [v]),
+            "pt_date_picker_set_on_change": (None, [v, pt._DATE_CALLBACK, v]),
+            # number (16)
+            "pt_number_picker_create": (v, [v]),
+            "pt_number_picker_set_range": (None, [v, d, d]),
+            "pt_number_picker_get_min": (d, [v]),
+            "pt_number_picker_get_max": (d, [v]),
+            "pt_number_picker_set_step": (None, [v, d]),
+            "pt_number_picker_get_step": (d, [v]),
+            "pt_number_picker_set_value": (None, [v, d]),
+            "pt_number_picker_get_value": (d, [v]),
+            "pt_number_picker_has_value": (b, [v]),
+            "pt_number_picker_clear": (None, [v]),
+            "pt_number_picker_step_by": (None, [v, d]),
+            "pt_number_picker_set_text": (b, [v, cp]),
+            "pt_number_picker_get_text": (cp, [v]),
+            "pt_number_picker_set_placeholder": (None, [v, cp]),
+            "pt_number_picker_get_placeholder": (cp, [v]),
+            "pt_number_picker_set_on_change": (None, [v, pt._NUMBER_CALLBACK, v]),
+            # colour (13)
+            "pt_color_picker_create": (v, [v]),
+            "pt_color_picker_set_color": (None, [v, u32]),
+            "pt_color_picker_get_color": (u32, [v]),
+            "pt_color_picker_set_hex": (b, [v, cp]),
+            "pt_color_picker_get_hex": (cp, [v]),
+            "pt_color_picker_add_preset": (None, [v, u32]),
+            "pt_color_picker_clear_presets": (None, [v]),
+            "pt_color_picker_get_preset_count": (u32, [v]),
+            "pt_color_picker_get_preset": (u32, [v, u32]),
+            "pt_color_picker_open": (None, [v]),
+            "pt_color_picker_close": (None, [v]),
+            "pt_color_picker_is_open": (b, [v]),
+            "pt_color_picker_set_on_change": (None, [v, pt._COLOR_CALLBACK, v]),
+        }
+
+        def matches(actual: Any, expected: Any) -> bool:
+            if isinstance(expected, tuple):
+                return getattr(actual, "_type_", None) is expected[1]
+            return actual is expected
+
+        self.assertEqual(len(signatures), 106)
+        for name, (restype, argtypes) in signatures.items():
+            function = getattr(pt, f"_{name}")
+            self.assertIs(function.restype, restype, name)
+            self.assertEqual(len(function.argtypes), len(argtypes), name)
+            for index, expected in enumerate(argtypes):
+                self.assertTrue(matches(function.argtypes[index], expected),
+                                f"{name} arg {index}")
+
+        callback_signatures = {
+            pt._POPUP_DISMISS: (None, (v, v)),
+            pt._DATE_CALLBACK: (None, (v, date, v)),
+            pt._NUMBER_CALLBACK: (None, (v, ctypes.c_double, v)),
+            pt._COLOR_CALLBACK: (None, (v, u32, v)),
+        }
+        for callback_type, (restype, argtypes) in callback_signatures.items():
+            self.assertIs(callback_type._restype_, restype)
+            self.assertEqual(len(callback_type._argtypes_), len(argtypes))
+            for index, expected in enumerate(argtypes):
+                self.assertTrue(matches(callback_type._argtypes_[index], expected))
+
+        self.assertEqual(pt.popup_placement_below, 0)
+        self.assertEqual(pt.popup_placement_above, 1)
+        self.assertEqual(pt.popup_placement_right, 2)
+        self.assertEqual(pt.popup_placement_left, 3)
+        self.assertEqual(pt.date_format_iso, 0)
+        self.assertEqual(pt.date_format_dmy, 1)
+        self.assertEqual(pt.date_format_mdy, 2)
+        self.assertEqual(pt.popup_max_open, 16)
+        self.assertEqual(pt.select_max_items, 1024)
+        self.assertEqual(pt.picker_max_candidates, 256)
+        self.assertEqual(pt.color_max_presets, 64)
+        self.assertEqual(pt.clipboard_image_max_dimension, 8192)
+        self.assertEqual(pt.icon_max_dimension, 4096)
+        self.assertEqual(pt.font_fallback_max_families, 8)
+        self.assertEqual(pt.font_fallback_max_overrides, 16)
+        self.assertEqual(pt.table_max_columns, 1024)
+        self.assertEqual(pt.table_column_key_max, 64)
+        self.assertEqual(pt.table_column_layout_max, 262144)
+
+    def test_12_struct_layouts(self) -> None:
+        date = pt.Date
+        self.assertEqual(date.year.offset, 0)
+        self.assertEqual(date.month.offset, 4)
+        self.assertEqual(date.day.offset, 5)
+        self.assertIs(date.year.type, ctypes.c_int32)
+        self.assertIs(date.month.type, ctypes.c_uint8)
+        self.assertIs(date.day.type, ctypes.c_uint8)
+        self.assertEqual(ctypes.sizeof(date), 8)
+
+        anchor = pt.PopupAnchor
+        self.assertEqual(anchor.x.offset, 0)
+        self.assertEqual(anchor.y.offset, 4)
+        self.assertEqual(anchor.width.offset, 8)
+        self.assertEqual(anchor.height.offset, 12)
+        self.assertIs(anchor.x.type, ctypes.c_float)
+        self.assertEqual(ctypes.sizeof(anchor), 16)
+
+        self.assertTrue(pt.Date(2024, 2, 29).is_valid())
+        self.assertFalse(pt.Date(2023, 2, 29).is_valid())
+        self.assertTrue(pt.date_is_valid(pt.Date(2000, 2, 29)))
+        self.assertFalse(pt.date_is_valid(pt.Date(0, 0, 0)))
+        today = pt.date_today()
+        self.assertIsInstance(today, pt.Date)
+        self.assertTrue(today.is_valid())
+        self.assertEqual((pt.PopupAnchor(1, 2, 3, 4).x,
+                          pt.PopupAnchor(1, 2, 3, 4).height), (1.0, 4.0))
+
+    # ------------------------------------------------------------------
+    # Popups
+    # ------------------------------------------------------------------
+
+    def test_12_popup_show_dismiss_and_lifetime(self) -> None:
+        self.window.show()
+        content = pt.box(None)
+        popup = pt.Popup.create(self.window, content)
+        self.assertFalse(popup.is_open)
+        self.assertEqual(popup.placement, pt.popup_placement_below)
+        self.assertIs(pt.Popup._wrap(popup.raw), popup)
+        self.assertIs(popup.content, content)
+
+        self.assertTrue(popup.show((10.0, 20.0, 30.0, 40.0)))
+        self.assertTrue(popup.is_open)
+        self.assertTrue(popup.show(pt.PopupAnchor(12.0, 24.0, 0.0, 0.0)))
+        self.assertTrue(popup.is_open)
+        self.assertTrue(popup.reposition((14.0, 28.0, 8.0, 8.0)))
+
+        popup.placement = pt.popup_placement_above
+        self.assertEqual(popup.placement, pt.popup_placement_above)
+        popup.placement = 99
+        self.assertEqual(popup.placement, pt.popup_placement_below)
+
+        self.assertFalse(popup.show(pt.PopupAnchor(float("nan"), 0.0, 1.0, 1.0)))
+        self.assertTrue(popup.is_open)
+        self.assertFalse(popup.show(pt.PopupAnchor(0.0, 0.0, -1.0, 1.0)))
+
+        dismissals: list[tuple[bool, bool]] = []
+
+        def on_dismiss(target: pt.Popup) -> None:
+            dismissals.append((target is popup, target.is_open))
+
+        popup.on_dismiss(on_dismiss)
+        popup.dismiss()
+        self.assertFalse(popup.is_open)
+        self.assertEqual(dismissals, [(True, False)])
+        popup.dismiss()
+        self.assertEqual(len(dismissals), 1)
+        self.assertFalse(popup.reposition((0.0, 0.0, 1.0, 1.0)))
+
+        # A direct destroy is not a dismissal and must not fire the callback.
+        self.assertTrue(popup.show((4.0, 4.0, 1.0, 1.0)))
+        popup.destroy()
+        self.assertEqual(len(dismissals), 1)
+        self.assertEqual(popup.raw, 0)
+        self.assertFalse(popup.is_open)
+        self.assertIsNone(popup.content)
+        self.assertFalse(popup.show((0.0, 0.0, 1.0, 1.0)))
+        popup.dismiss()
+        popup.destroy()
+
+        # Content wrappers are invalidated by the owning popup's destruction.
+        self.assertEqual(content.raw, 0)
+
+    def test_12_popup_open_limit_and_clear_callback(self) -> None:
+        self.window.show()
+        popups = []
+        for index in range(pt.popup_max_open):
+            content = pt.box(None).set_size(8.0, 8.0)
+            popup = pt.Popup.create(self.window, content)
+            popup.on_dismiss(None)
+            self.assertTrue(popup.show((index, 0.0, 1.0, 1.0)), index)
+            popups.append(popup)
+
+        content = pt.box(None).set_size(8.0, 8.0)
+        overflow = pt.Popup.create(self.window, content)
+        self.assertFalse(overflow.show((0.0, 0.0, 1.0, 1.0)))
+        self.assertFalse(overflow.is_open)
+        overflow.destroy()
+
+        for popup in popups:
+            popup.destroy()
+
+    # ------------------------------------------------------------------
+    # Font fallback
+    # ------------------------------------------------------------------
+
+    def test_12_font_fallback_chains(self) -> None:
+        self.assertEqual(self.app.font_fallbacks, [])
+        self.assertEqual(self.app.font_fallback_count, 0)
+        self.assertEqual(self.app.font_fallback(0), "")
+
+        self.app.set_font_fallbacks(["Noto Sans CJK SC", "DejaVu Sans"])
+        self.assertEqual(self.app.font_fallbacks,
+                         ["Noto Sans CJK SC", "DejaVu Sans"])
+        self.assertEqual(self.app.font_fallback(1), "DejaVu Sans")
+        self.assertEqual(self.app.font_fallback(2), "")
+        self.assertEqual(self.app.font_fallback(-1), "")
+
+        self.app.font_fallbacks = ["", ""]
+        self.assertEqual(self.app.font_fallbacks, [])
+        self.app.font_fallbacks = [f"f{index}" for index in range(10)]
+        self.assertEqual(self.app.font_fallback_count, pt.font_fallback_max_families)
+        self.assertEqual(self.app.font_fallback(7), "f7")
+        self.assertEqual(self.app.font_fallback(8), "")
+
+        self.app.set_font_fallbacks(["DejaVu Sans"])
+        family = "pt-python-fallback"
+        self.assertEqual(self.app.font_fallback_count_for_family(family), 0)
+        self.app.set_font_fallbacks_for_family(
+            family, ["DejaVu Serif", "DejaVu Sans"]
+        )
+        self.assertEqual(self.app.font_fallback_count_for_family(family), 2)
+        self.assertEqual(self.app.font_fallback_for_family(family, 0),
+                         "DejaVu Serif")
+        self.assertEqual(self.app.font_fallback_for_family(family, 2), "")
+        self.app.set_font_fallbacks_for_family(family, [])
+        self.assertEqual(self.app.font_fallback_count_for_family(family), 0)
+        self.assertEqual(self.app.font_fallback_count, 1)
+
+        # U+0378 is unassigned; it has no covering face in any chain.
+        self.assertEqual(self.app.font_uncovered_count("DejaVu Sans", "\u0378"), 1)
+        self.assertEqual(self.app.font_uncovered_count(None, "\u0378"), 1)
+        self.assertEqual(self.app.font_uncovered_count(None, ""), 0)
+        self.app.set_font_fallbacks([])
+        self.assertEqual(self.app.font_fallbacks, [])
+
+    # ------------------------------------------------------------------
+    # Clipboard media
+    # ------------------------------------------------------------------
+
+    def test_12_clipboard_image_roundtrip(self) -> None:
+        pixels = [0xFFFF0000, 0x80004000, 0x00000000, 0xFF00FF00]
+        self.assertTrue(self.window.set_clipboard_image(pixels, 2, 2))
+        image = self.window.clipboard_image
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        raw, width, height = image
+        self.assertEqual((width, height), (2, 2))
+        self.assertEqual(len(raw), 16)
+        self.assertEqual(
+            [int.from_bytes(raw[index:index + 4], "little")
+             for index in range(0, 16, 4)],
+            [0xFFFF0000, 0x80004000, 0x00000000, 0xFF00FF00],
+        )
+        # An image selection replaces the text one.
+        self.assertEqual(self.window.clipboard, "")
+        # The bytes feed straight back into the setter.
+        self.assertTrue(self.window.set_clipboard_image(raw, width, height))
+        self.assertIsNotNone(self.window.clipboard_image)
+
+        # A list and a bytearray are both accepted by the buffer path.
+        self.assertTrue(self.window.set_clipboard_image(bytearray(raw), 2, 2))
+        with self.assertRaises(ValueError):
+            self.window.set_clipboard_image(raw[:8], 2, 2)
+        with self.assertRaises(ValueError):
+            self.window.set_clipboard_image([], 0, 1)
+        # The C-side dimension cap rejects without raising.
+        self.assertFalse(
+            self.window.set_clipboard_image([0] * 8193, 8193, 1)
+        )
+
+    def test_12_clipboard_uri_list(self) -> None:
+        self.assertTrue(
+            self.window.set_clipboard_uri_list(["/tmp/a b", "file:///tmp/x"])
+        )
+        self.assertEqual(self.window.clipboard, "")
+        self.assertIsNone(self.window.clipboard_image)
+        self.assertFalse(self.window.set_clipboard_uri_list([]))
+        self.assertFalse(self.window.set_clipboard_uri_list(["relative/path"]))
+        self.assertFalse(self.window.set_clipboard_uri_list(["/tmp/a\nb"]))
+        self.assertTrue(self.window.clipboard == "")
+
+    # ------------------------------------------------------------------
+    # Column identity and persistence
+    # ------------------------------------------------------------------
+
+    def test_12_column_identity_and_persistence(self) -> None:
+        table = pt.table(self.column)
+        table.column_count = 3
+        table.set_column_title(0, "Name").set_column_title(1, "Age")
+        table.set_column_title(2, "City")
+        table.set_column_width(0, 100.0)
+        table.set_column_width(1, 80.0)
+        table.set_column_width(2, 60.0)
+        table.set_column_key(0, "name")
+        table.set_column_key(1, "age")
+        table.set_column_key(2, "city")
+        table.set_column_hidden(1, True)
+        table.set_sort(2, pt.sort_descending)
+
+        self.assertEqual([table.column_key(index) for index in range(3)],
+                         ["name", "age", "city"])
+        self.assertEqual(table.column_key(99), "")
+
+        blob = table.columns_save()
+        self.assertTrue(blob.startswith("PTCOLS 1\nC 3\n"))
+        self.assertIn("6e616d65 100000 0", blob)
+        self.assertIn("616765 80000 1", blob)
+        self.assertTrue(blob.endswith("S 1\n2 2\n"))
+
+        # Reorder and mutate, then restore the saved layout.
+        self.assertTrue(table.move_column(0, 2))
+        self.assertEqual(table.column_key(2), "name")
+        table.set_column_width(2, 42.0)
+        table.set_column_hidden(0, False)
+        self.assertTrue(table.columns_restore(blob))
+        self.assertEqual([table.column_key(index) for index in range(3)],
+                         ["name", "age", "city"])
+        self.assertAlmostEqual(table.column_width(0), 100.0, places=2)
+        self.assertAlmostEqual(table.column_width(1), 80.0, places=2)
+        self.assertAlmostEqual(table.column_width(2), 60.0, places=2)
+        self.assertTrue(table.column_hidden(1))
+        self.assertFalse(table.column_hidden(0))
+        self.assertEqual(table.sort, (pt.sort_descending, 2))
+
+        # Duplicate keys are rejected; the existing key stays in place.
+        table.set_column_key(1, "name")
+        self.assertEqual(table.column_key(1), "age")
+
+        # Invalid blobs are atomic: the layout is untouched.
+        before = (table.column_key(0), table.column_width(0),
+                  table.sort, table.column_hidden(0))
+        self.assertFalse(table.columns_restore("garbage"))
+        self.assertFalse(table.columns_restore("PTCOLS 9\nC 0\n"))
+        self.assertEqual(
+            (table.column_key(0), table.column_width(0),
+             table.sort, table.column_hidden(0)),
+            before,
+        )
+
+        # Empty keys serialize as "-" and restore by display position.
+        table.set_column_key(2, "")
+        empty_blob = table.columns_save()
+        self.assertIn("- 60000 0", empty_blob)
+        self.assertTrue(table.columns_restore(empty_blob))
+        self.assertEqual(table.column_key(2), "")
+
+        # A non-table widget has no persistence.
+        self.assertEqual(pt.label(self.column, "x").columns_save(), "")
+        self.assertFalse(pt.label(self.column, "x").columns_restore(blob))
+
+    # ------------------------------------------------------------------
+    # Raster icons
+    # ------------------------------------------------------------------
+
+    def test_12_icon_images_and_slots(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        self.assertEqual((image.width, image.height), (4, 4))
+        self.assertEqual(pt.IconImage.load_memory(bytearray(png)).width, 4)
+        self.assertEqual(pt.IconImage.load_memory(memoryview(png)).width, 4)
+        self.assertIsNone(pt.IconImage.load_memory(b"not a png"))
+        self.assertIsNone(pt.IconImage.load_memory(png[:20]))
+
+        reference = image.ref()
+        self.assertEqual(reference.raw, image.raw)
+        reference.close()
+        self.assertEqual(image.width, 4)
+        self.assertRaises(RuntimeError, reference.ref)
+        image.close()
+        image.close()
+        self.assertEqual(image.raw, 0)
+        self.assertEqual(image.width, 0)
+        self.assertRaises(RuntimeError, image.ref)
+
+        button = pt.button(self.column, "Icon")
+        icon = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(icon)
+        if icon is None:
+            return
+        button.set_icon_image(icon)
+        slot = button.icon_image
+        self.assertIsNotNone(slot)
+        if slot is None:
+            return
+        self.assertEqual(slot.raw, icon.raw)
+        self.assertEqual(slot.width, 4)
+        # The getter owns a reference: dropping it keeps the slot alive.
+        slot.destroy()
+        self.assertEqual(button.icon_image.width, 4)
+        button.set_icon_tint(0xFF00FFFF)
+        button.icon_image = None
+        self.assertIsNone(button.icon_image)
+        icon.destroy()
+        self.assertRaises(RuntimeError, button.set_icon_image, icon)
+
+        window_icon = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(window_icon)
+        if window_icon is not None:
+            self.window.set_icon_image(window_icon)
+            self.assertIsNotNone(self.window.icon_image)
+            if self.window.icon_image is not None:
+                self.assertEqual(self.window.icon_image.width, 4)
+            self.window.set_icon_image(None)
+            self.assertIsNone(self.window.icon_image)
+            window_icon.destroy()
+        self.window.icon_image = None
+
+    def test_12_icon_file_theme_lookup_and_finalizer(self) -> None:
+        png = _make_png(8, 8)
+        directory = tempfile.mkdtemp(prefix="pt-python-icon-")
+        previous = os.environ.get("XDG_DATA_HOME")
+        try:
+            path = os.path.join(directory, "roundtrip.png")
+            with open(path, "wb") as handle:
+                handle.write(png)
+            loaded = pt.IconImage.load_file(path)
+            self.assertIsNotNone(loaded)
+            if loaded is not None:
+                self.assertEqual((loaded.width, loaded.height), (8, 8))
+                loaded.close()
+            self.assertIsNone(pt.IconImage.load_file(path + ".missing"))
+            self.assertIsNone(pt.IconImage.load_file(directory))
+
+            apps = os.path.join(directory, "icons", "hicolor", "32x32", "apps")
+            os.makedirs(apps)
+            with open(os.path.join(apps, "pt-python-icon.png"), "wb") as handle:
+                handle.write(png)
+            with open(os.path.join(directory, "icons", "hicolor", "index.theme"),
+                      "w", encoding="utf-8") as handle:
+                handle.write("[Icon Theme]\nName=Pt Test\n"
+                             "Directories=32x32/apps\n\n"
+                             "[32x32/apps]\nSize=32\nType=Fixed\nContext=Apps\n")
+            os.environ["XDG_DATA_HOME"] = directory
+            themed = pt.IconImage.from_name("pt-python-icon", 32)
+            self.assertIsNotNone(themed)
+            if themed is not None:
+                self.assertEqual(themed.width, 8)
+                themed.close()
+            self.assertIsNone(pt.IconImage.from_name("pt-python-missing", 32))
+            self.assertIsNone(pt.IconImage.from_name("../escape", 32))
+            self.assertIsNone(pt.IconImage.from_name("", 32))
+        finally:
+            if previous is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = previous
+            shutil.rmtree(directory, ignore_errors=True)
+
+        # __del__ drops the reference that was never released explicitly.
+        destroyed: list[int] = []
+        original = pt._pt_icon_image_destroy
+
+        def spy(pointer: int) -> None:
+            destroyed.append(int(pointer))
+            original(pointer)
+
+        pt._pt_icon_image_destroy = spy
+        try:
+            temporary = pt.IconImage.load_memory(png)
+            self.assertIsNotNone(temporary)
+            pointer = temporary.raw if temporary is not None else 0
+            del temporary
+            gc.collect()
+        finally:
+            pt._pt_icon_image_destroy = original
+        self.assertIn(pointer, destroyed)
+
+    # ------------------------------------------------------------------
+    # Pickers: select
+    # ------------------------------------------------------------------
+
+    def test_12_select_model_and_popup(self) -> None:
+        select = pt.select(self.column)
+        self.assertEqual(select.kind, 34)  # pt_widget_combobox
+        self.assertEqual(select.select_item_count, 0)
+        self.assertEqual(select.select_selected, pt.list_index_none)
+        self.assertEqual(select.select_placeholder, "")
+        select.select_placeholder = "Pick"
+        self.assertEqual(select.select_placeholder, "Pick")
+
+        payload = {"row": 1}
+        select.select_add_item("alpha")
+        select.select_add_item_with_data("beta", payload)
+        select.select_insert_item(1, "alpine")
+        self.assertEqual([select.select_item_text(index) for index in range(3)],
+                         ["alpha", "alpine", "beta"])
+        self.assertIs(select.select_item_data(2), payload)
+        select.select_insert_item(0, "first")
+        self.assertIs(select.select_item_data(3), payload)
+        select.select_remove_item(0)
+        self.assertIs(select.select_item_data(2), payload)
+        select.select_set_item_data(0, payload)
+        self.assertIs(select.select_item_data(0), payload)
+
+        # Programmatic selection is silent and out-of-range clears.
+        select.select_selected = 2
+        self.assertEqual(select.select_selected, 2)
+        select.select_selected = 99
+        self.assertEqual(select.select_selected, pt.list_index_none)
+        select.select_selected = 0
+        select.select_clear_selection()
+        self.assertEqual(select.select_selected, pt.list_index_none)
+
+        select.select_query = "al"
+        self.assertEqual(select.select_query, "al")
+        self.assertEqual(select.select_match_count, 2)
+        self.assertEqual(select.select_match_item(0), 0)
+        self.assertEqual(select.select_match_item(1), 1)
+        self.assertEqual(select.select_match_item(99), pt.list_index_none)
+        select.set_select_query("")
+        self.assertEqual(select.select_query, "")
+
+        self.assertEqual(select.select_max_popup_rows, 8)
+        select.select_max_popup_rows = 0
+        self.assertEqual(select.select_max_popup_rows, 1)
+        select.select_max_popup_rows = 999
+        self.assertEqual(select.select_max_popup_rows, pt.picker_max_candidates)
+
+        self.window.show()
+        self.assertFalse(select.select_popup_open)
+        select.select_open()
+        self.assertTrue(select.select_popup_open)
+        select.select_close()
+        self.assertFalse(select.select_popup_open)
+
+        select.select_clear()
+        self.assertEqual(select.select_item_count, 0)
+        self.assertEqual(select.select_selected, pt.list_index_none)
+
+    # ------------------------------------------------------------------
+    # Pickers: date
+    # ------------------------------------------------------------------
+
+    def test_12_date_picker(self) -> None:
+        picker = pt.date_picker(self.column)
+        self.assertEqual(picker.date_picker_format, pt.date_format_iso)
+        self.assertEqual(picker.date_picker_text, "")
+        self.assertEqual(picker.date_picker_placeholder, "Date")
+        self.assertEqual(picker.date_picker_date, pt.Date(0, 0, 0))
+        picker.date_picker_placeholder = "Birthday"
+        self.assertEqual(picker.date_picker_placeholder, "Birthday")
+
+        self.assertTrue(picker.set_date_picker_date(pt.Date(2024, 2, 29)))
+        self.assertEqual(picker.date_picker_date, pt.Date(2024, 2, 29))
+        self.assertEqual(picker.date_picker_text, "2024-02-29")
+
+        picker.date_picker_format = pt.date_format_dmy
+        self.assertEqual(picker.date_picker_text, "29/02/2024")
+        picker.date_picker_format = pt.date_format_mdy
+        self.assertEqual(picker.date_picker_text, "02/29/2024")
+        picker.date_picker_format = 99
+        self.assertEqual(picker.date_picker_format, pt.date_format_iso)
+
+        # ISO is always accepted as a paste fallback and rewritten in the
+        # selected picture.
+        picker.date_picker_format = pt.date_format_dmy
+        self.assertTrue(picker.set_date_picker_text("2025-12-31"))
+        self.assertEqual(picker.date_picker_date, pt.Date(2025, 12, 31))
+        self.assertEqual(picker.date_picker_text, "31/12/2025")
+
+        before = (picker.date_picker_date, picker.date_picker_text)
+        self.assertFalse(picker.set_date_picker_text("31/02/2025"))
+        self.assertEqual((picker.date_picker_date, picker.date_picker_text), before)
+        with self.assertRaises(ValueError):
+            picker.date_picker_text = "not a date"
+        self.assertEqual((picker.date_picker_date, picker.date_picker_text), before)
+
+        # Structural errors are rejected and leave the value untouched.
+        self.assertFalse(picker.set_date_picker_date(pt.Date(2023, 2, 29)))
+        self.assertEqual(picker.date_picker_date, pt.Date(2025, 12, 31))
+        with self.assertRaises(ValueError):
+            picker.date_picker_date = pt.Date(2023, 2, 29)
+        self.assertEqual(picker.date_picker_date, pt.Date(2025, 12, 31))
+
+        self.assertTrue(picker.set_date_picker_date(pt.Date(0, 0, 0)))
+        self.assertEqual(picker.date_picker_date, pt.Date(0, 0, 0))
+        self.assertEqual(picker.date_picker_text, "")
+        picker.set_date_picker_date(pt.Date(2026, 1, 2))
+        picker.date_picker_clear()
+        self.assertEqual(picker.date_picker_date, pt.Date(0, 0, 0))
+
+        self.window.show()
+        picker.set_date_picker_date(pt.Date(2026, 1, 2))
+        self.assertFalse(picker.date_picker_popup_open)
+        picker.date_picker_open()
+        self.assertTrue(picker.date_picker_popup_open)
+        picker.date_picker_close()
+        self.assertFalse(picker.date_picker_popup_open)
+
+    # ------------------------------------------------------------------
+    # Pickers: number
+    # ------------------------------------------------------------------
+
+    def test_12_number_picker(self) -> None:
+        picker = pt.number_picker(self.column)
+        self.assertEqual(picker.number_picker_range, (0.0, 100.0))
+        self.assertEqual(picker.number_picker_step, 1.0)
+        self.assertFalse(picker.number_picker_has_value)
+        self.assertEqual(picker.number_picker_value, 0.0)
+        self.assertEqual(picker.number_picker_text, "")
+        self.assertEqual(picker.number_picker_placeholder, "Number")
+        picker.number_picker_placeholder = "Count"
+        self.assertEqual(picker.number_picker_placeholder, "Count")
+
+        # A finite value is clamped into the inclusive range.
+        picker.number_picker_value = 250.0
+        self.assertTrue(picker.number_picker_has_value)
+        self.assertEqual(picker.number_picker_value, 100.0)
+        self.assertEqual(picker.number_picker_text, "100")
+
+        picker.number_picker_step = 0.25
+        picker.number_picker_range = (-5.0, 5.0)
+        self.assertEqual(picker.number_picker_value, 5.0)
+        picker.number_picker_value = 1.2
+        picker.number_picker_step_by(2.0)
+        self.assertAlmostEqual(picker.number_picker_value, 1.7, places=6)
+
+        # Raising the lower bound clamps the current value.
+        picker.number_picker_range = (10.0, 20.0)
+        self.assertEqual(picker.number_picker_value, 10.0)
+
+        self.assertFalse(picker.set_number_picker_text("abc"))
+        self.assertEqual(picker.number_picker_value, 10.0)
+        self.assertEqual(picker.number_picker_text, "10")
+        with self.assertRaises(ValueError):
+            picker.number_picker_text = "1e"
+        self.assertTrue(picker.set_number_picker_text("3,5"))
+        self.assertEqual(picker.number_picker_value, 10.0)
+        self.assertTrue(picker.set_number_picker_text("15.5"))
+        self.assertAlmostEqual(picker.number_picker_value, 15.5, places=6)
+        self.assertTrue(picker.set_number_picker_text(""))
+        self.assertFalse(picker.number_picker_has_value)
+        self.assertEqual(picker.number_picker_text, "")
+
+        with self.assertRaises(ValueError):
+            picker.number_picker_step = 0.0
+        with self.assertRaises(ValueError):
+            picker.number_picker_step = float("inf")
+        with self.assertRaises(ValueError):
+            picker.number_picker_range = (5.0, -5.0)
+        with self.assertRaises(ValueError):
+            picker.number_picker_range = (float("nan"), 1.0)
+        with self.assertRaises(ValueError):
+            picker.number_picker_value = float("nan")
+        with self.assertRaises(ValueError):
+            picker.number_picker_step_by(float("inf"))
+
+        picker.number_picker_value = 15.0
+        picker.number_picker_clear()
+        self.assertFalse(picker.number_picker_has_value)
+
+    # ------------------------------------------------------------------
+    # Pickers: colour
+    # ------------------------------------------------------------------
+
+    def test_12_color_picker(self) -> None:
+        picker = pt.color_picker(self.column)
+        self.assertEqual(picker.color_picker_color, 0x000000FF)
+        self.assertEqual(picker.color_picker_hex, "#000000")
+        self.assertEqual(picker.color_picker_preset_count, 24)
+
+        self.assertTrue(picker.set_color_picker_hex("#ff0000"))
+        self.assertEqual(picker.color_picker_color, 0xFF0000FF)
+        self.assertEqual(picker.color_picker_hex, "#FF0000")
+        self.assertTrue(picker.set_color_picker_hex("#11223344"))
+        self.assertEqual(picker.color_picker_color, 0x11223344)
+        self.assertEqual(picker.color_picker_hex, "#11223344")
+        self.assertFalse(picker.set_color_picker_hex("zz"))
+        self.assertEqual(picker.color_picker_color, 0x11223344)
+        with self.assertRaises(ValueError):
+            picker.color_picker_hex = "#12"
+
+        picker.color_picker_color = 0x010203FF
+        self.assertEqual(picker.color_picker_hex, "#010203")
+        self.assertEqual(picker.color_picker_color, 0x010203FF)
+
+        picker.color_picker_add_preset(0xABCDEFFF)
+        self.assertEqual(picker.color_picker_preset_count, 25)
+        self.assertEqual(picker.color_picker_preset(24), 0xABCDEFFF)
+        self.assertEqual(picker.color_picker_preset(999), 0)
+        remaining = pt.color_max_presets - picker.color_picker_preset_count
+        for index in range(remaining):
+            picker.color_picker_add_preset(0x102030FF + index)
+        self.assertEqual(picker.color_picker_preset_count, pt.color_max_presets)
+        picker.color_picker_add_preset(0xFFFFFFFF)
+        self.assertEqual(picker.color_picker_preset_count, pt.color_max_presets)
+        picker.clear_color_picker_presets()
+        self.assertEqual(picker.color_picker_preset_count, 0)
+
+        self.window.show()
+        self.assertFalse(picker.color_picker_popup_open)
+        picker.color_picker_open()
+        self.assertTrue(picker.color_picker_popup_open)
+        picker.color_picker_close()
+        self.assertFalse(picker.color_picker_popup_open)
+
+    # ------------------------------------------------------------------
+    # Callback dispatch and trampoline lifetime
+    # ------------------------------------------------------------------
+
+    def test_12_picker_callbacks_dispatch_and_keepalive(self) -> None:
+        """Synthetic upcalls check decoding and keep-alive for each picker.
+
+        The Python surface cannot inject pointer/key input: the C tests call
+        the internal pt_window_input_* helpers. Programmatic setters are silent
+        by contract, so there is no public path that fires these callbacks.
+        This drives the captured trampolines directly and marks the gap.
+        """
+        select = pt.select(self.column)
+        select.select_add_item("one")
+        select.select_add_item("two")
+        changes: list[tuple[pt.Widget, int]] = []
+        trampoline = self._capture(
+            "_pt_select_set_on_change",
+            lambda: select.on_select_change(
+                lambda widget, index: changes.append((widget, index))),
+        )
+        trampoline(select.raw, 1, None)
+        self.assertEqual(changes, [(select, 1)])
+        select.select_selected = 0
+        self.assertEqual(changes, [(select, 1)])  # programmatic set is silent
+
+        dates: list[tuple[pt.Widget, pt.Date]] = []
+        picker = pt.date_picker(self.column)
+        trampoline = self._capture(
+            "_pt_date_picker_set_on_change",
+            lambda: picker.on_date_change(
+                lambda widget, date: dates.append((widget, date))),
+        )
+        trampoline(picker.raw, pt.Date(2024, 1, 2), None)
+        self.assertEqual(dates, [(picker, pt.Date(2024, 1, 2))])
+        self.assertEqual(dates[0][1].year, 2024)
+
+        numbers: list[tuple[pt.Widget, float]] = []
+        number = pt.number_picker(self.column)
+        trampoline = self._capture(
+            "_pt_number_picker_set_on_change",
+            lambda: number.on_number_change(
+                lambda widget, value: numbers.append((widget, value))),
+        )
+        trampoline(number.raw, 2.5, None)
+        self.assertEqual(numbers, [(number, 2.5)])
+
+        colors: list[tuple[pt.Widget, int]] = []
+        color = pt.color_picker(self.column)
+        trampoline = self._capture(
+            "_pt_color_picker_set_on_change",
+            lambda: color.on_color_change(
+                lambda widget, value: colors.append((widget, value))),
+        )
+        trampoline(color.raw, 0xFF00FFFF, None)
+        self.assertEqual(colors, [(color, 0xFF00FFFF)])
+
+        # Clearing a callback substitutes a real NULL function pointer.
+        select.on_select_change(None)
+        picker.on_date_change(None)
+        number.on_number_change(None)
+        color.on_color_change(None)
+
+    def test_12_popup_dismiss_callback_native_dispatch(self) -> None:
+        self.window.show()
+        content = pt.box(None)
+        popup = pt.Popup.create(self.window, content)
+        seen: list[tuple[pt.Popup, bool]] = []
+        popup.on_dismiss(lambda target: seen.append((target, target.is_open)))
+        self.assertTrue(popup.show((1.0, 1.0, 1.0, 1.0)))
+        popup.dismiss()
+        self.assertEqual(seen, [(popup, False)])
+        popup.destroy()
 
 
 if __name__ == "__main__":
