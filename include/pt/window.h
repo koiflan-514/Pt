@@ -167,10 +167,12 @@ typedef struct pt_pointer_event {
 } pt_pointer_event;
 
 /* Runs before overlay/widget pointer dispatch. Returning true consumes down,
- * up and axis events. Enter, leave and motion callbacks are advisory: the
- * return value is ignored for them so hover tracking keeps working. The pointer
- * event is borrowed for the call and becomes invalid when the callback
- * returns. */
+ * up and axis events for the remaining widget dispatch of that event only;
+ * button state, click counts, focus and serials are updated before the callback
+ * and are never rolled back, and the next event is dispatched normally. Enter,
+ * leave and motion callbacks are advisory: the return value is ignored for them
+ * so hover tracking keeps working. The pointer event is borrowed for the call
+ * and becomes invalid when the callback returns. */
 typedef bool (*pt_pointer_callback)(pt_window *window, const pt_pointer_event *event,
                                     void *user_data);
 pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callback callback,

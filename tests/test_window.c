@@ -662,6 +662,14 @@ static void test_raw_key_dispatch(pt_app *app) {
     probe.consume_raw = true;
     pt_window_input_key(window, XKB_KEY_F5, 0, NULL, true);
     pt_check(probe.raw_calls == before + 1);
+
+    /* Consume affects only the current event: the next key is delivered to the
+     * legacy callback and the focused widget normally. */
+    probe.consume_raw = false;
+    probe.consume_legacy = false;
+    pt_window_input_key(window, XKB_KEY_d, 0, "d", true);
+    pt_check(probe.raw_calls == before + 2);
+    pt_check(strcmp(pt_widget_get_text(entry), "cd") == 0);
     pt_menu_destroy(menu);
 
     pt_canvas_destroy(canvas);
