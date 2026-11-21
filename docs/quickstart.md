@@ -522,6 +522,72 @@ Purposes are hints: a compositor is free to ignore them. Preedit, commit,
 surrounding-text and delete-surrounding-text follow `text-input-v3` for the
 focused widget, and IME commits group into a single undo step.
 
+### Custom IME for custom widgets
+
+Entries get text input automatically. A widget that owns its own text — a
+terminal, a code editor or a canvas — can opt into the same input method with
+window-level callbacks:
+
+```c
+static void on_ime_commit(pt_window *window, const char *text, void *data) {
+    (void)window;
+    (void)data;
+    append_text(text); /* the application owns insertion and redraw */
+}
+
+static void on_ime_preedit(pt_window *window, const char *text, int32_t begin,
+                           int32_t end, void *data) {
+    (void)window;
+    (void)begin;
+    (void)end;
+    (void)data;
+    set_preedit(text); /* an empty string ends the composition */
+}
+
+pt_window_set_ime_callbacks(window, on_ime_commit, on_ime_preedit, state);
+pt_window_set_ime_enabled(window, true);
+pt_window_set_ime_cursor_rect(window, caret_x, caret_y, 1, 18);
+```
+
+Pt does not insert the text for you: the commit callback owns insertion and the
+preedit callback replaces the current composition. Cursor offsets are UTF-8
+byte offsets into the preedit, or -1 when unspecified. The caret rectangle is
+in window logical pixels; it is remembered while IME is disabled and pushed when
+it activates. Callbacks run on the UI thread and the text is borrowed for the
+call. Pt re-sends the full surrounding state on every change instead of relying
+on incremental acknowledgement, which is what keeps KWin/fcitx5 and sway focus
+desyncs from dropping a commit. A `pt_window_set_ime_enabled(window, false)`
+call hands input back to the focused entry, if any.
+
+## Primary selection
+
+The primary selection is the X11-style buffer behind middle-click paste. Pt
+exposes it with the same shape as the clipboard pair:
+
+```c
+pt_window_primary_set(window, "selected text");
+
+char *text = pt_window_primary_get(window);
+if (text) {
+    pt_widget_set_text(entry, text); /* middle-click paste */
+    pt_free(text);
+}
+```
+
+Both sides work without the protocol: when the seat does not expose
+`wp_primary_selection_unstable_v1`, or in a headless run, Pt falls back to an
+in-process buffer. On Wayland the selection is set with the serial of the event
+that triggered it — the pointer release for a drag selection or the last key
+press for a keyboard selection. A programmatic set with no triggering event
+does not send to the compositor; an application that mirrors a selection made
+outside its own input callback passes the serial explicitly with
+`pt_window_primary_set_serial(window, text, serial)`.
+
+`pt_window_primary_get` returns malloc'd UTF-8 owned by the caller; release it
+with `pt_free`. Middle-click paste is the application's policy — Pt does not
+paste into an entry on its own — and primary selection is separate from the
+clipboard that Ctrl+C/Ctrl+V and `pt_window_clipboard_set/get` use.
+
 ## Virtualized lists
 
 `pt_list_view_create` builds a flat list whose rows exist only while they are
@@ -947,6 +1013,55 @@ XKB keysyms, so `0xFF1B` is Escape, `0xFF09` is Tab and `0xFF0D` is Return.
 `pt_widget_has_focus` queries it. `pt_widget_set_enabled(widget, false)`
 excludes a widget from hit testing and focus traversal.
 
+## Window-level input callbacks
+
+Three window callbacks expose the raw event stream before widget dispatch. They
+run on the UI thread and may call the API:
+
+```c
+static void on_focus(pt_window *window, bool focused, void *data) {
+    (void)window;
+    (void)focused;
+    (void)data;
+}
+
+static bool on_key_event(pt_window *window, uint32_t key, uint32_t modifiers,
+                         const char *utf8, void *data) {
+    (void)window;
+    (void)key;
+    (void)modifiers;
+    (void)utf8;
+    (void)data;
+    return false; /* false lets the focused widget handle the key */
+}
+
+static bool on_pointer(pt_window *window, const pt_pointer_event *event,
+                       void *data) {
+    (void)window;
+    (void)event;
+    (void)data;
+    return false;
+}
+
+pt_window_set_focus_callback(window, on_focus, NULL);
+pt_window_set_key_event_callback(window, on_key_event, NULL);
+pt_window_set_pointer_callback(window, on_pointer, NULL);
+```
+
+Dispatch order is: overlay key handling, the raw key callback, the legacy
+`pt_window_set_key_callback`, then the focused widget. Returning `true` from the
+raw callback consumes the key for widget dispatch, but internal focus and serial
+accounting still completes, so a popup grab never sees a stale serial; a
+consumed key is not also delivered to text input as a commit.
+
+`pt_pointer_event` carries a phase (enter, leave, motion, down, up, axis,
+cancel), logical window coordinates, a `BTN_*` button code for down/up and 0
+otherwise, modifiers, a per-button `click_count`, and `pressed` for the button in
+question. Pointer callbacks run before overlay and widget pointer dispatch.
+Returning `true` consumes down/up/axis; enter, leave and motion are advisory and
+their return value is ignored so hover tracking keeps working. Non-left buttons
+do not disturb left-button press state or double-click counting.
+
 ## Windows and events
 
 ```c
@@ -955,12 +1070,30 @@ pt_window_set_size(window, 900, 640);
 pt_window_set_min_size(window, 480, 320);
 pt_window_set_resizable(window, true);
 pt_window_set_decorated(window, true);
+pt_window_set_decoration_mode(window, pt_decoration_mode_client);
 pt_window_request_redraw(window);
 ```
 
-Decorated windows get a Pt-drawn 44 px title bar when the compositor allows
-client-side decorations. If the compositor insists on server-side decorations,
-the header is omitted and the compositor draws the frame.
+Decoration is two independent decisions. `pt_window_set_decorated` controls
+whether Pt draws its own 44 px header; `pt_window_set_decoration_mode` controls
+who decorates the surface. The default is explicit client-side decoration
+(`pt_decoration_mode_client`), because the header, its edge resize zones and hit
+testing are built for it. `pt_window_set_decorated(window, false)` removes the
+header and those zones and never asks the compositor for a frame. Server-side
+decoration is an explicit choice:
+
+```c
+pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+```
+
+`pt_decoration_mode_auto` follows the framework default, which is client-side
+decoration in 1.1. The request is a preference: Pt tracks the requested and
+effective modes separately and lays the window out for the mode `configure`
+returns. Sway forces server-side decoration on tiled windows, and Mutter and
+Weston expose no decoration manager, so a client-side request can still end up
+with a compositor-drawn frame or with Pt's header. Fullscreen hides the header
+in every mode. [compositor-matrix.md](compositor-matrix.md) records the
+per-compositor behaviour.
 
 Close callbacks return `false` to veto a close:
 
@@ -1385,6 +1518,33 @@ events for at most the given duration, which is useful for tests and for
 integrating Pt into another event loop. `pt_app_is_running` reports whether a
 loop is active.
 
+### Watching file descriptors
+
+`pt_app_watch_fd` folds an application descriptor into the same poll loop as the
+Wayland display, so a pipe, eventfd or timerfd wakes the UI thread next to the
+timers:
+
+```c
+static void on_ready(pt_app *app, uint32_t events, void *data) {
+    (void)app;
+    if (events & pt_fd_event_read) {
+        drain_pipe(data);
+    }
+}
+
+uint64_t watch = pt_app_watch_fd(app, fd, pt_fd_event_read, on_ready, state);
+pt_app_unwatch_fd(app, watch); /* also safe from inside the callback */
+```
+
+The mask combines `pt_fd_event_read`, `pt_fd_event_write`, `pt_fd_event_error`
+and `pt_fd_event_hangup`. `POLLHUP`, `POLLERR` and `POLLNVAL` arrive as the
+error event and the callback fires at least once. Callbacks run on the UI thread
+and must not block; a callback may unwatch itself, and Pt defers the free until
+the dispatch returns. The descriptor is borrowed — Pt never closes it — and a
+descriptor is watched once per app; a duplicate watch is rejected and returns
+0. Watches count toward `pt_app_run_for`'s timeout like timers, so a run with no
+other events still wakes for them.
+
 ## Sizing, scale and painting
 
 `pt_window_get_width` and `pt_window_get_height` return logical pixels.
@@ -1400,7 +1560,9 @@ backing canvas, re-clips to the damaged region and submits the matching
 `wl_surface.damage_buffer` rectangle, so a spinner or a hovered button does not
 repaint the whole window. A window with no damage is neither painted nor
 committed. There is no public "draw now" call; `pt_window_request_redraw`
-forces a full-window frame when that is what you want.
+forces a full-window frame when that is what you want, and
+`pt_window_paint_pixels` renders an offscreen snapshot without touching the
+live frame.
 
 Touch input is supported on compositors that expose `wl_touch`: the first
 active touch follows the pointer hit-testing, enter/leave, press, drag and
@@ -1413,6 +1575,49 @@ Damage rectangles are not public API. Widgets and windows manage damage
 automatically, and tests exercise input and painting through the internal
 headers used by the repository suites. Gesture, drag and stylus events are
 public.
+
+### Custom paint and offscreen snapshots
+
+Any widget can paint its own content with `pt_widget_set_paint_callback`. The
+callback runs after the widget's normal background and content pass, receives a
+borrowed `pt_paint_context` in widget-local logical pixels, and draws with the
+`pt_paint_*` helpers:
+
+```c
+static void paint_gauge(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)widget;
+    float level = *(float *)data;
+    float width = pt_paint_width(context);
+    float height = pt_paint_height(context);
+    pt_paint_fill_rounded_rect(context, 0, 0, width, height, 4, pt_rgb(0x3568E0));
+    pt_paint_fill_rect(context, 0, 0, width * level, height, pt_rgb(0x8AB4FF));
+    pt_paint_draw_text(context, "sans", 12, pt_font_weight_regular,
+                       pt_font_slant_upright, 6, height * 0.7f, "42 %", 4,
+                       pt_rgb(0xFFFFFF));
+}
+
+pt_widget_set_paint_callback(gauge, paint_gauge, &level);
+```
+
+The context is valid only inside the call. A paint callback is pure and
+idempotent: the same widget may be painted 0..N times per frame (once per damage
+tile) and must produce the same pixels regardless of tile order or count. It
+must not change the tree or trigger layout, must balance `pt_paint_push_clip`
+and `pt_paint_pop_clip`, and must not call `pt_window_paint_pixels` re-entrantly.
+Use `pt_widget_request_redraw` or `pt_widget_request_redraw_rect` to queue
+another frame; the rect form damages only a widget-local sub-rectangle, which
+suits a caret or cursor. `pt_paint_scale` is the device-pixel ratio and
+`pt_paint_clip_rect` reports the current damage tile so a callback can skip work
+outside it. Custom paint does not create accessibility semantics: declare role,
+name and state through the normal widget API or a screen reader sees an empty
+box.
+
+`pt_window_paint_pixels` renders one full frame into a caller-owned `uint32_t`
+buffer at scale 1.0 (premultiplied `0xAARRGGBB`, row-major, `width` pixels per
+row). It is a pure snapshot: it does not damage the window, clear
+`needs_draw`/`redraw_scheduled`, touch the last paint time or collect deferred
+overlays, so calling it on a mapped window does not swallow the next live frame.
+That is how custom paint and golden images are tested without a compositor.
 
 ## Errors
 
@@ -1453,10 +1658,10 @@ PT_HEADLESS=1 ./my_ui_test
 ```
 
 Headless apps support windows, widgets, timers, callbacks and
-`pt_app_run_for`, so state and event logic can be tested on CI. Painting is
-exercised by the repository tests through internal canvas entry points; the
-public API deliberately does not expose synthetic input or offscreen painting.
-The bundled tests show the pattern:
+`pt_app_run_for`, so state and event logic can be tested on CI. The public API
+does not expose synthetic input; painting can still be driven headlessly with
+`pt_window_paint_pixels` and widget paint callbacks, which is how the repository
+tests render frames without a compositor. The bundled tests show the pattern:
 
 ```sh
 make check

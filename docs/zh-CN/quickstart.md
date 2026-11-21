@@ -496,6 +496,65 @@ pt_entry_set_password(secret, true);
 用途只是提示：合成器可以自由忽略它们。预编辑、提交、周围文本和删除周围
 文本会针对聚焦控件遵循 `text-input-v3`，输入法提交会合并为单个撤销步骤。
 
+### 自定义控件的自定义输入法
+
+输入框会自动获得文本输入。自行拥有文本的控件——终端、代码编辑器或画布——
+可以通过窗口级回调接入同一套输入法：
+
+```c
+static void on_ime_commit(pt_window *window, const char *text, void *data) {
+    (void)window;
+    (void)data;
+    append_text(text); /* the application owns insertion and redraw */
+}
+
+static void on_ime_preedit(pt_window *window, const char *text, int32_t begin,
+                           int32_t end, void *data) {
+    (void)window;
+    (void)begin;
+    (void)end;
+    (void)data;
+    set_preedit(text); /* an empty string ends the composition */
+}
+
+pt_window_set_ime_callbacks(window, on_ime_commit, on_ime_preedit, state);
+pt_window_set_ime_enabled(window, true);
+pt_window_set_ime_cursor_rect(window, caret_x, caret_y, 1, 18);
+```
+
+Pt 不会替你插入文本：提交回调负责插入，预编辑回调替换当前组合内容。光标
+偏移是预编辑文本中的 UTF-8 字节偏移，未指定时为 -1。光标矩形采用窗口逻辑
+像素；在输入法禁用期间它会被记住，并在启用时推送。回调在 UI 线程上运行，
+文本仅在本次调用期间有效。Pt 在每次更改时重新发送完整周边状态，而不是依赖
+增量确认，这正是避免 KWin/fcitx5 和 sway 焦点失步丢提交的手段。调用
+`pt_window_set_ime_enabled(window, false)` 会把输入交还给聚焦的输入框（如果有）。
+
+## 主选区
+
+主选区是鼠标中键粘贴背后的 X11 风格缓冲区。Pt 以与剪贴板一对函数相同的
+形态暴露它：
+
+```c
+pt_window_primary_set(window, "selected text");
+
+char *text = pt_window_primary_get(window);
+if (text) {
+    pt_widget_set_text(entry, text); /* middle-click paste */
+    pt_free(text);
+}
+```
+
+两侧在没有协议时也可用：当 seat 不暴露
+`wp_primary_selection_unstable_v1`，或在无头运行时，Pt 回退到进程内缓冲区。
+在 Wayland 上，选区使用触发事件的 serial 设置——拖动选择对应指针释放，
+键盘选择对应最后一次按键。没有触发事件的编程设置不会发送给合成器；如果
+应用要镜像在自己的输入回调之外产生的选区，可通过
+`pt_window_primary_set_serial(window, text, serial)` 显式传入 serial。
+
+`pt_window_primary_get` 返回由调用方拥有的 malloc 分配的 UTF-8 字符串；
+用 `pt_free` 释放。中键粘贴是应用策略——Pt 不会自行粘贴到输入框——并且主
+选区与 Ctrl+C/Ctrl+V 和 `pt_window_clipboard_set/get` 使用的剪贴板彼此独立。
+
 ## 虚拟化列表
 
 `pt_list_view_create` 构建一个平面列表，其行仅在可见时存在。设置行数和固定
@@ -892,6 +951,53 @@ pt_window_set_key_callback(window, on_key, NULL);
 查询它。`pt_widget_set_enabled(widget, false)` 将控件从命中测试和焦点遍历中
 排除。
 
+## 窗口级输入回调
+
+三个窗口级回调在控件分发之前暴露原始事件流。它们在 UI 线程上运行，并且
+可以调用 API：
+
+```c
+static void on_focus(pt_window *window, bool focused, void *data) {
+    (void)window;
+    (void)focused;
+    (void)data;
+}
+
+static bool on_key_event(pt_window *window, uint32_t key, uint32_t modifiers,
+                         const char *utf8, void *data) {
+    (void)window;
+    (void)key;
+    (void)modifiers;
+    (void)utf8;
+    (void)data;
+    return false; /* false lets the focused widget handle the key */
+}
+
+static bool on_pointer(pt_window *window, const pt_pointer_event *event,
+                       void *data) {
+    (void)window;
+    (void)event;
+    (void)data;
+    return false;
+}
+
+pt_window_set_focus_callback(window, on_focus, NULL);
+pt_window_set_key_event_callback(window, on_key_event, NULL);
+pt_window_set_pointer_callback(window, on_pointer, NULL);
+```
+
+分发顺序是：覆盖层按键处理、原始按键回调、传统
+`pt_window_set_key_callback`，然后是聚焦控件。原始回调返回 `true` 会为控件
+分发消费该按键，但内部焦点和 serial 记账仍会完成，因此弹出层抓取绝不会
+看到过期的 serial；被消费的按键也不会再作为提交送达文本输入。
+
+`pt_pointer_event` 携带阶段（enter、leave、motion、down、up、axis、cancel）、
+窗口逻辑坐标、down/up 时的 `BTN_*` 按钮码（其他情况为 0）、修饰键、逐按钮
+的 `click_count`，以及针对该按钮的 `pressed`。指针回调在覆盖层和控件指针
+分发之前运行。返回 `true` 会消费 down/up/axis；enter、leave 和 motion 是
+建议性的，其返回值被忽略，因此悬停跟踪仍然有效。非左键不会干扰左键按压
+状态或双击计数。
+
 ## 窗口与事件
 
 ```c
@@ -900,11 +1006,26 @@ pt_window_set_size(window, 900, 640);
 pt_window_set_min_size(window, 480, 320);
 pt_window_set_resizable(window, true);
 pt_window_set_decorated(window, true);
+pt_window_set_decoration_mode(window, pt_decoration_mode_client);
 pt_window_request_redraw(window);
 ```
 
-当合成器允许客户端装饰时，带装饰的窗口会获得一个由 Pt 绘制的 44 px 标题
-栏。如果合成器坚持使用服务端装饰，则省略标题栏，由合成器绘制边框。
+装饰是两个独立的决定。`pt_window_set_decorated` 控制 Pt 是否绘制自己的
+44 px 标题栏；`pt_window_set_decoration_mode` 控制谁装饰表面。默认是显式的
+客户端装饰（`pt_decoration_mode_client`），因为标题栏、其边缘调整大小区域
+和命中测试都是为此构建的。`pt_window_set_decorated(window, false)` 会移除
+标题栏及其边缘区域，并且绝不向合成器请求边框。服务端装饰是显式选择：
+
+```c
+pt_window_set_decoration_mode(window, pt_decoration_mode_server);
+```
+
+`pt_decoration_mode_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求只是
+偏好：Pt 分别跟踪请求模式和生效模式，并按 `configure` 返回的模式布局窗口。
+Sway 会对平铺窗口强制服务端装饰，而 Mutter 和 Weston 不提供装饰管理器，
+因此客户端请求仍可能得到合成器绘制的边框，或得到 Pt 的标题栏。全屏会在
+任何模式下隐藏标题栏。各合成器的行为记录在
+[compositor-matrix.md](../compositor-matrix.md) 中。
 
 关闭回调返回 `false` 以否决关闭：
 
@@ -1302,6 +1423,31 @@ pt_app_cancel_timeout(app, id); /* no-op if it already fired */
 最多在给定时长内泵送事件，这对测试以及将 Pt 集成到另一个事件循环很有用。
 `pt_app_is_running` 报告循环是否活动。
 
+### 监视文件描述符
+
+`pt_app_watch_fd` 将应用描述符并入与 Wayland 显示相同的 poll 循环，因此
+管道、eventfd 或 timerfd 会像定时器一样唤醒 UI 线程：
+
+```c
+static void on_ready(pt_app *app, uint32_t events, void *data) {
+    (void)app;
+    if (events & pt_fd_event_read) {
+        drain_pipe(data);
+    }
+}
+
+uint64_t watch = pt_app_watch_fd(app, fd, pt_fd_event_read, on_ready, state);
+pt_app_unwatch_fd(app, watch); /* also safe from inside the callback */
+```
+
+掩码组合 `pt_fd_event_read`、`pt_fd_event_write`、`pt_fd_event_error` 和
+`pt_fd_event_hangup`。`POLLHUP`、`POLLERR` 和 `POLLNVAL` 以错误事件到达，
+并且回调至少会触发一次。回调在 UI 线程上运行且不得阻塞；回调可以取消自身
+的监视，Pt 会将释放推迟到分发返回之后。描述符是借用的——Pt 从不关闭它——
+并且每个应用对同一描述符只监视一次；重复监视会被拒绝并返回 0。监视像
+定时器一样计入 `pt_app_run_for` 的超时，因此即使没有其他事件，运行也会为
+它们唤醒。
+
 ## 尺寸、缩放与绘制
 
 `pt_window_get_width` 和 `pt_window_get_height` 返回逻辑像素。
@@ -1314,7 +1460,8 @@ Pt 按需重绘：状态更改会将受影响的控件或窗口标记为脏，�
 跟踪逻辑损坏区域矩形。渲染器保留持久后备画布，重新裁剪到损坏区域，并提交
 匹配的 `wl_surface.damage_buffer` 矩形，因此旋转指示器或悬停按钮不会重绘
 整个窗口。没有损坏区域的窗口既不会绘制也不会提交。没有公开的“立即绘制”
-调用；当需要时，`pt_window_request_redraw` 会强制生成全窗口帧。
+调用；`pt_window_request_redraw` 在需要时强制生成全窗口帧，
+`pt_window_paint_pixels` 则在不触碰实时帧的情况下渲染离屏快照。
 
 在暴露 `wl_touch` 的合成器上支持触摸输入：第一个活动触摸会遵循指针的命中
 测试、进入/离开、按下、拖动和释放路径，被取消的触摸会释放被按下的控件。
@@ -1323,6 +1470,44 @@ Pt 按需重绘：状态更改会将受影响的控件或窗口标记为脏，�
 
 损坏区域矩形不属于公开 API。控件和窗口会自动管理损坏区域，测试通过仓库
 测试套件使用的内部头文件来检验输入和绘制。手势、拖动和触控笔事件是公开的。
+
+### 自定义绘制与离屏快照
+
+任何控件都可以通过 `pt_widget_set_paint_callback` 绘制自己的内容。回调在
+控件正常的背景和内容绘制之后运行，接收以控件局部逻辑像素表示的借用
+`pt_paint_context`，并使用 `pt_paint_*` 辅助函数绘制：
+
+```c
+static void paint_gauge(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)widget;
+    float level = *(float *)data;
+    float width = pt_paint_width(context);
+    float height = pt_paint_height(context);
+    pt_paint_fill_rounded_rect(context, 0, 0, width, height, 4, pt_rgb(0x3568E0));
+    pt_paint_fill_rect(context, 0, 0, width * level, height, pt_rgb(0x8AB4FF));
+    pt_paint_draw_text(context, "sans", 12, pt_font_weight_regular,
+                       pt_font_slant_upright, 6, height * 0.7f, "42 %", 4,
+                       pt_rgb(0xFFFFFF));
+}
+
+pt_widget_set_paint_callback(gauge, paint_gauge, &level);
+```
+
+上下文仅在本次调用内有效。绘制回调是纯函数且幂等：同一控件每帧可能被绘制
+0..N 次（每个损坏瓦片一次），并且无论瓦片顺序或数量如何都必须产生相同像素。
+它不得更改树或触发布局，必须平衡 `pt_paint_push_clip` 和
+`pt_paint_pop_clip`，并且不得重入 `pt_window_paint_pixels`。使用
+`pt_widget_request_redraw` 或 `pt_widget_request_redraw_rect` 排队下一帧；
+矩形形式只损坏控件局部子矩形，适合光标或插入符。`pt_paint_scale` 是设备
+像素比，`pt_paint_clip_rect` 报告当前损坏瓦片，使回调可以跳过其外的工作。
+自定义绘制不会自动产生无障碍语义：请通过常规控件 API 声明角色、名称和
+状态，否则屏幕阅读器看到的只是一个空框。
+
+`pt_window_paint_pixels` 将完整一帧以 1.0 缩放渲染到调用方拥有的 `uint32_t`
+缓冲区（预乘 `0xAARRGGBB`，行优先，每行 `width` 像素）。它是纯快照：不会
+损坏窗口、清除 `needs_draw`/`redraw_scheduled`、触碰上次绘制时间或收集延迟
+覆盖层，因此在已映射窗口上调用它不会吞掉下一帧实时画面。自定义绘制和黄金
+图像就是这样在没有合成器的情况下测试的。
 
 ## 错误
 
@@ -1361,8 +1546,9 @@ PT_HEADLESS=1 ./my_ui_test
 ```
 
 无头应用支持窗口、控件、定时器、回调和 `pt_app_run_for`，因此可以在 CI 上
-测试状态和事件逻辑。绘制由仓库测试通过内部画布入口进行检验；公共 API 有意
-不暴露合成输入或离屏绘制。随附的测试展示了该模式：
+测试状态和事件逻辑。公共 API 不暴露合成输入；但绘制仍可通过
+`pt_window_paint_pixels` 和控件绘制回调在无头环境中驱动，仓库测试正是这样
+在没有合成器的情况下渲染帧的。随附的测试展示了该模式：
 
 ```sh
 make check
