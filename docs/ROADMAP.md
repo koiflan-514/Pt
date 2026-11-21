@@ -1508,63 +1508,133 @@ P1 — required before the tag, may land alongside P0:
   They are already declared, implemented and C-tested; only the wrappers and
   their dispatch tests remain before the tag.
 
-## M19 - 1.2.0: common-but-missing surface (in progress)
+## M19 - 1.2.0: common-but-missing surface (delivered; tag pending)
 
 Goal: ship the first post-1.0 horizon wave. 1.2.0 stays append-only within
 `libpt.so.1`; every new function follows [standards.md](standards.md) section 2.
-The engineering process that worked for M18 repeats: parallel C workstreams in
+The engineering process that worked for M18 repeated: parallel C workstreams in
 isolated worktrees, then an integration phase that regenerates the baseline and
 reference, adds the three-language wrappers, examples and bilingual docs, bumps
 the version and runs the full gate before the tag.
 
-### Wave 1 (parallel C workstreams)
+Status (2026-11-22): the shared C surface, baseline, reference, version bump and
+public guides are complete on the docs branch based on integration head
+`a5179a1`. The tree exports **554 functions / 907 baseline entries**
+(554 `func`, 281 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`, 6 `define`,
+1 `type`); `VERSION` and the four macros, README, reference and this milestone
+say 1.2.0. All 554 declarations now carry a since marker (412 × 1.0, 36 × 1.1,
+106 × 1.2), and the generated reference exposes it per entry. The six new C
+suites pass with 3,434 checks, the 34 headless C suites total 6,913 checks and
+the bilingual check is green. The three-language wrappers, their tests, the 1.2
+examples and the final gate are the parallel integration work in flight; the
+annotated tag stays uncreated until they land.
 
-1. **App-owned popups** (`m19/popup`): a public `pt_popup` surface on the
-   existing `xdg_popup` backend — create with a parent window and a content
-   widget, show at an anchor rect in parent logical coordinates with
-   flip/slide constrained positioning, reposition, dismiss (outside click, Esc,
-   grab break) with a dismiss callback, headless fallback consistent with the
-   overlay family, keyboard and accessibility semantics. This is the
-   prerequisite for the wave-2 pickers and searchable select. Subsurfaces stay
-   out (2.0).
-2. **Per-run font fallback** (`m19/font-fallback`): HarfBuzz script
-   segmentation plus Fontconfig charset coverage to pick a fallback face per
-   run; an app-level default chain and a per-font override; deterministic
-   metrics and caret offsets through the public API and AT-SPI; tests degrade
-   gracefully when a script's fonts are absent. Prerequisite for readable
-   CJK/Arabic/Devanagari mixing and for RTL (2.0).
-3. **Clipboard media** (`m19/clipboard-media`): `image/png` clipboard read and
-   write with a bounded decode (existing 1.5 s / 16 MiB transfer caps plus an
-   8192x8192 decoded-pixel cap, failure returns NULL), documented
-   premultiplied-ARGB to straight-alpha PNG conversion, and `text/uri-list`
-   clipboard writes (CRLF, percent-encoded `file://`), reusing the drag-source
-   URI-list encoder.
-4. **Column-layout persistence** (`m19/column-persist`): versioned
-   serialize/restore blobs for the row-view column model (widths, order,
-   visibility; table and tree where they share the model); the application
-   stores the blob; unknown versions and corrupt input are rejected, round-trip
-   and boundary tests included.
+### Wave 1 (parallel C workstreams, delivered)
 
-Workstream rules: header + implementation + C tests + ABI pins land together;
-new test binaries are pre-registered (`test_popup`, `test_font_fallback`,
-`test_clipboard_media`, `test_column_persist`); `src/*.c` is wildcard-built.
-Workstreams do not edit bindings, generated artifacts, the Makefile or public
-guides — the integration phase owns those, as in M18.
+1. **App-owned popups — delivered (`e4978f4`, anchor fix `6e9a616`).**
+   `pt_popup` creates from a parent window and content widget, shows at an
+   anchor rect with flip/slide constrained placement, repositions, dismisses on
+   outside click/Escape/grab break with a dismiss callback, keeps the overlay
+   family's headless fallback, enforces `PT_POPUP_MAX_OPEN`, and exposes a panel
+   role while open. `tests/test_popup.c` passes 314 checks.
+2. **Per-run font fallback — delivered (`c5a3dd5`, storage/contract note
+   `12cb876`).** HarfBuzz script segmentation plus Fontconfig charset coverage
+   selects a face per run; the app chain and per-family override are bounded,
+   the cache is process-wide, metrics compose over the faces used, and
+   `pt_app_font_uncovered_count` reports tofu codepoints. `test_font_fallback`
+   passes 131 checks and degrades gracefully when a script font is absent.
+3. **Clipboard media — delivered (`03f3f9a`, `12cac9f`).** `image/png` read and
+   write with the 1.5 s / 16 MiB transfer caps and the 8192×8192 decoded-pixel
+   cap, documented premultiplied-ARGB to straight-alpha conversion, and
+   `text/uri-list` writes with CRLF and percent-encoded `file://` URIs.
+   `test_clipboard_media` passes 871 checks including decode bombs, bounds and
+   colour conversion.
+4. **Column-layout persistence — delivered (`8816881`).** Versioned save/restore
+   for widths, display order, visibility, keys and sort state; corrupt input,
+   unknown versions, missing/duplicate keys and count mismatches are rejected
+   atomically. `test_column_persist` passes 1,390 checks.
 
-### Wave 2 (after wave 1 integrates)
+Integration landed the umbrella include, contract fix and wave-2 test slots in
+`1d18d67`, regenerated the 1.2 baseline in `160a808`, refreshed baseline and
+reference after icons/pickers in `997055e`, and derived the stub self-test from
+the audit in `a5179a1`.
 
-- Date/number/colour pickers and a searchable select built on entry + popup +
-  grid, with full keyboard paths and accessibility assertions.
-- Icon slots (`pt_icon`: PNG, optional SVG, hicolor lookup, per-size/scale
-  cache) and best-effort `xdg-toplevel-icon-v1` where the compositor exposes it.
-- Generated binding stubs from the API manifest.
+### Wave 2 (delivered)
+
+- **Searchable select, date, number and colour pickers — delivered
+  (`5e31e24`, `a8814cb`, `764be6a`, `5cc6043`, edge tightening `67c1083`).**
+  The 70 functions in `pt/picker.h` cover a popup-backed searchable select with
+  item data and a candidate cap, a typed date field with a fixed six-week
+  calendar, a range/step spin box and a hex colour field with a preset palette.
+  All four are editor fields on the shipped combo-box host kind; the
+  `pt_combobox_*` model API is a no-op on them and ordinary comboboxes are
+  unaffected. `test_picker` passes 550 checks covering keyboard, text commit,
+  caps, silent setters and accessibility state/value.
+- **Icon images and toplevel icons — delivered (`b03b629`, protocol
+  generation `4280e74`).** The 12 functions add a reference-counted raster
+  handle (PNG file/memory, hicolor lookup), the button image slot with tint,
+  the window icon slot, a bounded per-size/scale LRU cache and best-effort
+  `xdg-toplevel-icon-v1` submission. `test_icon` passes 178 checks. SVG is
+  deferred (see open items).
+- **Generated binding stubs from the API manifest — delivered (`b79e556`).**
+  `tools/gen-binding-stubs.py` generates the C++/Python/Java skeleton from
+  `api/pt.api`, and `tools/test_gen_binding_stubs.py` passes its 16 cases.
+
+### Documentation and release surface (delivered)
+
+- Header audit `6cc4e68` marks every declaration with 1.0/1.1/1.2 and pins the
+  remaining `pt_date` offsets in `tests/test_abi.c` (13 checks).
+- Version and reference `34c69c3` bumps `VERSION`/the macros to 1.2.0 and
+  regenerates `docs/api-reference.md` at 554 functions with since markers.
+- README `e0e0f34` and the public guides `bf01726` describe the six groups in
+  English and Simplified Chinese; the bilingual check reports 9 clean pairs.
+- The 1.2.0 release record is in [release.md](release.md) with the final gate
+  figures left as `pending final gate run`.
+
+### Open items carried into the final integration
+
+- **Fake-compositor replay is still absent.** Popup, font-fallback and clipboard
+  paths have headless state tests plus the live suite; the in-process protocol
+  replay facility is the same M18 gap, not silently claimed here.
+- **SVG icons are deferred.** `pt_icon_image` accepts PNG only; a scalable-only
+  hicolor theme does not resolve. The header and release record say so.
+- **The number picker has no spin role.** It reports the combo-box role and no
+  expandable state because the 1.2 accessibility enum has no spin-box role;
+  appending one is a later minor addition.
+- **Pickers are locale-independent by design.** The date format is explicit, the
+  committed number decimal separator is `.`, and no localized month or group
+  separator is read from the process locale.
+- **The toplevel-icon path has no live compositor recording.** The matrix
+  records KWin/Labwc/Muffin/Jay/Pila as exposing `xdg-toplevel-icon-v1`, but no
+  live recording was made in this pass; the submission path is covered headless
+  and niri/Sway/Weston take the tested no-op path.
+- **1.2 examples are not in the tree.** No example exercises popups, pickers,
+  icon images, clipboard media, font fallback or column persistence yet; the
+  Java demos are the explicit gap for the final integration.
+- **The three-language wrappers and their dispatch tests are in flight.** The
+  parity target is 554/554 with an empty allowlist; `make check` is the
+  authority and the tag waits for it.
+- **M18's two IME visual items remain deferred.** `preedit_hint` presentation and
+  `show_input_panel`/`hide_input_panel` were moved to 1.2 but are not part of
+  this wave; the event surface and full-state resend remain implemented.
 
 ### Completion criteria
 
-Same gate set as M18 section 4: `make check`, `make check-bindings`,
-`make perf-check`, live suites, `tools/ci.sh`, `tools/release-check.sh --full`,
-bilingual sync, three-language parity with an empty allowlist, ABI pins and an
-append-only diff against `1.1.0`, and a 1.2.0 release record.
+Same gate set as M18 section 4. Current status:
+
+- `make check` / `make check-bindings` / `make perf-check` / live suites /
+  `tools/ci.sh` / `tools/release-check.sh --full`: **pending final gate run**
+  (the wrappers, examples and final gate are the parallel integration work;
+  release-check passes version, baseline, reference, examples and bilingual
+  gates and reports the in-flight 106-function-per-language parity gap, plus
+  its two human items).
+- Bilingual sync, version agreement, 554-function baseline and reference
+  coverage: **delivered and passing**; the reference names all 554 functions.
+- ABI pins and an append-only diff against 1.1.0: **delivered for the C surface**
+  (554/907, 0 removed; SONAME unchanged). The symbol-level comparison against
+  1.1.0 is part of the final gate record.
+- A 1.2.0 release record: **drafted in [release.md](release.md)** with the final
+  numbers marked `pending final gate run`.
 
 ## Post-1.0 horizons
 
@@ -1573,7 +1643,7 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 [compositor-matrix.md](compositor-matrix.md); the engineering rules are in
 [standards.md](standards.md).
 
-### 1.2 — common but missing (wave 1 in progress, see M19)
+### 1.2 — common but missing (delivered in M19; tag pending)
 
 - Application-owned popups via the existing `xdg_popup` backend (content widget,
   anchor, dismiss, reposition). This is the prerequisite for searchable select
@@ -1585,8 +1655,9 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 - Date/number/colour pickers and a searchable select beyond the filterable
   combobox, built on entry + popup + grid, with full keyboard paths and
   accessibility assertions.
-- Icon slots (`pt_icon`: PNG, optional SVG, hicolor lookup, per-size/scale
-  cache) and best-effort `xdg-toplevel-icon-v1` where the compositor exposes it.
+- Icon slots (`pt_icon`: PNG, hicolor lookup, per-size/scale cache; SVG
+  deferred) and best-effort `xdg-toplevel-icon-v1` where the compositor
+  exposes it.
 - Per-run font fallback chains (HarfBuzz script segmentation + Fontconfig
   charset matching), the prerequisite for readable CJK/Arabic/Devanagari mixing
   and for RTL.
