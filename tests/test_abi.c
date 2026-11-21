@@ -112,6 +112,12 @@ _Static_assert(pt_text_align_end == 2, "text align end must stay 2");
 _Static_assert(pt_font_weight_regular == 400, "regular weight must stay 400");
 _Static_assert(pt_font_weight_bold == 700, "bold weight must stay 700");
 _Static_assert(pt_font_slant_oblique == 2, "oblique must stay 2");
+
+/* M19: font-fallback
+ * The chain bounds size application arrays and are part of the public contract;
+ * increasing one changes the documented ceiling, so it is pinned like an enum. */
+_Static_assert(PT_FONT_FALLBACK_MAX_FAMILIES == 8, "fallback chain cap must stay 8");
+_Static_assert(PT_FONT_FALLBACK_MAX_OVERRIDES == 16, "fallback override cap must stay 16");
 _Static_assert(pt_text_span_underline == (1u << 0), "underline span bit");
 _Static_assert(pt_text_span_has_size == (1u << 5), "size span bit");
 _Static_assert(pt_key_modifier_shift == (1u << 0), "shift modifier bit");

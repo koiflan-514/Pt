@@ -249,7 +249,7 @@ static void preferred_size(pt_widget *widget, const pt_layout_ctx *ctx, float av
         if (!font) {
             break;
         }
-        float line_height = font->line_height / scale;
+        float line_height = pt_font_line_height_for(font, text, text_len) / scale;
         float natural = pt_font_measure(font, text, text_len) / scale;
         if (widget->wrap && logical_avail > 0.0f) {
             width = pt_min_float(natural, logical_avail);
@@ -264,7 +264,8 @@ static void preferred_size(pt_widget *widget, const pt_layout_ctx *ctx, float av
     }
     case pt_widget_button: {
         font = pt_widget_font_for(widget, ctx);
-        float line_height = font ? font->line_height / scale : pt_default_font_size * 1.3f;
+        float line_height = font ? pt_font_line_height_for(font, text, text_len) / scale
+                                 : pt_default_font_size * 1.3f;
         width = (font ? pt_font_measure(font, text, text_len) / scale : 0.0f) + padding_w;
         width = pt_max_float(width, 64.0f);
         height = line_height + padding_h;

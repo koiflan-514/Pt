@@ -168,10 +168,14 @@ static void paint_single_line(pt_canvas *canvas, const pt_widget *widget, const 
         return;
     }
     float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
-    float line_height = font->line_height / scale;
-    float baseline = area.y + (area.h - line_height) * 0.5f + font->ascent / scale;
+    size_t text_len = strlen(text);
+    float ascent_px = 0.0f;
+    float descent_px = 0.0f;
+    pt_font_metrics_for_text(font, text, text_len, &ascent_px, &descent_px);
+    float line_height = pt_max_float(ascent_px + descent_px, font->line_height) / scale;
+    float baseline = area.y + (area.h - line_height) * 0.5f + ascent_px / scale;
     pt_canvas_push_clip(canvas, area.x, area.y, area.w, area.h);
-    pt_canvas_draw_text_line(canvas, font, text, strlen(text),
+    pt_canvas_draw_text_line(canvas, font, text, text_len,
                              area.x + offset_x, baseline, area.w - offset_x, align, color,
                              ellipsis);
     pt_canvas_pop_clip(canvas);
@@ -703,7 +707,7 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
         return;
     }
     float scale = layout.scale;
-    float ascent = layout.has_runs ? layout.runs.ascent : font->ascent / scale;
+    float ascent = layout.has_runs ? layout.runs.ascent : layout.ascent;
     pt_rect inner = text_area(area);
     float top = inner.y - area->scroll_y;
     pt_color color = text_color(area);
