@@ -9,15 +9,19 @@
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 /* Internal UI-thread hooks. The C suite uses the same entry points to drive
  * synthetic compositor input; they are not part of the public ABI, but the
@@ -41,6 +45,13 @@ void pt_window_input_ime_compose(pt_window *window, const char *commit, const ch
  * failure path without a live xdg_toplevel configure. */
 void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
                                      bool fullscreen);
+/* Headless offscreen canvas from src/internal.h, declared locally for the 1.2
+ * picker and popup sections. Tests only paint through it; the binding itself
+ * never exposes it. */
+struct pt_canvas;
+pt_canvas *pt_canvas_create(int width, int height, float scale);
+void pt_canvas_destroy(pt_canvas *canvas);
+bool pt_window_paint(pt_window *window, pt_canvas *canvas);
 }
 
 namespace {
@@ -433,6 +444,86 @@ void fd_self_probe(pt_app *app, uint32_t events, void *data) {
     capture->calls += 1;
     capture->last = events;
     pt_app_unwatch_fd(app, capture->watch_id);
+}
+
+/* ---- 1.2 M19 probes: popup, icons, pickers, persistence ---- */
+
+/* 2x2 opaque-red PNG used to exercise the raster icon path without depending
+ * on the host's icon theme. */
+constexpr uint8_t icon_png[] = {
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6,
+    0, 0, 0, 114, 182, 13, 36, 0, 0, 0, 17, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240,
+    31, 132, 25, 96, 12, 0, 71, 202, 7, 249, 103, 89, 110, 183, 0, 0, 0, 0, 73, 69, 78, 68,
+    174, 66, 96, 130,
+};
+
+void click_at(pt_window *window, float x, float y) {
+    pt_window_input_pointer_enter(window, x, y);
+    pt_window_input_pointer_button(window, 0x110u, true, x, y, 1, 10);
+    pt_window_input_pointer_button(window, 0x110u, false, x, y, 2, 20);
+}
+
+void type_key(pt_window *window, uint32_t keysym, const char *utf8 = nullptr) {
+    pt_window_input_key(window, keysym, 0, utf8, true);
+}
+
+struct popup_probe {
+    int dismissals = 0;
+    bool open_at_dismiss = true;
+};
+
+void popup_dismissed(pt_popup *popup, void *data) {
+    auto *probe = static_cast<popup_probe *>(data);
+    probe->dismissals += 1;
+    probe->open_at_dismiss = pt_popup_is_open(popup);
+}
+
+struct select_probe {
+    int changes = 0;
+    uint32_t index = pt_list_index_none;
+};
+
+void select_changed(pt_widget *widget, uint32_t index, void *data) {
+    (void)widget;
+    auto *probe = static_cast<select_probe *>(data);
+    probe->changes += 1;
+    probe->index = index;
+}
+
+struct date_probe {
+    int changes = 0;
+    pt_date value{};
+};
+
+void date_changed(pt_widget *widget, pt_date value, void *data) {
+    (void)widget;
+    auto *probe = static_cast<date_probe *>(data);
+    probe->changes += 1;
+    probe->value = value;
+}
+
+struct number_probe {
+    int changes = 0;
+    double value = 0.0;
+};
+
+void number_changed(pt_widget *widget, double value, void *data) {
+    (void)widget;
+    auto *probe = static_cast<number_probe *>(data);
+    probe->changes += 1;
+    probe->value = value;
+}
+
+struct color_probe {
+    int changes = 0;
+    pt_color value = 0;
+};
+
+void color_changed(pt_widget *widget, pt_color color, void *data) {
+    (void)widget;
+    auto *probe = static_cast<color_probe *>(data);
+    probe->changes += 1;
+    probe->value = color;
 }
 
 } // namespace
@@ -1107,6 +1198,186 @@ int main() {
     check(window.set_clipboard("copied text"));
     check(window.clipboard() == "copied text");
 
+    /* ---- 1.2 font fallback chains (process-wide, read back here) ---- */
+    application.set_font_fallbacks(std::span<const std::string_view>{});
+    check(application.font_fallback_count() == 0);
+    check(!application.font_fallback(0).has_value());
+    application.set_font_fallbacks({"DejaVu Sans", "Noto Sans"});
+    check(application.font_fallback_count() == 2);
+    check(application.font_fallback(0).value_or("") == "DejaVu Sans");
+    check(application.font_fallback(1).value_or("") == "Noto Sans");
+    check(!application.font_fallback(2).has_value());
+    check(!application.font_fallback(-1).has_value());
+    application.set_font_fallbacks_for_family("serif", {"DejaVu Sans"});
+    check(application.font_fallback_count_for_family("serif") == 1);
+    check(application.font_fallback_for_family("serif", 0).value_or("") == "DejaVu Sans");
+    check(!application.font_fallback_for_family("serif", 1).has_value());
+    check(!application.font_fallback_for_family("sans-serif", 0).has_value());
+    check(application.font_fallback_count() == 2); // default untouched
+    application.set_font_fallbacks_for_family("serif", std::span<const std::string_view>{});
+    check(application.font_fallback_count_for_family("serif") == 0);
+
+    /* The public cap is enforced by Pt; the wrapper passes the whole list. */
+    const std::vector<std::string_view> many = {"f0", "f1", "f2", "f3", "f4",
+                                                "f5", "f6", "f7", "f8", "f9"};
+    application.set_font_fallbacks(std::span<const std::string_view>(many));
+    check(application.font_fallback_count() == PT_FONT_FALLBACK_MAX_FAMILIES);
+    check(application.font_fallback(7).value_or("") == "f7");
+    check(!application.font_fallback(8).has_value());
+    check(application.font_uncovered_count("DejaVu Sans", "") == 0);
+    application.set_font_fallbacks(std::span<const std::string_view>{});
+
+    /* ---- 1.2 clipboard media: owned image copy and uri-list write ---- */
+    const pt_color clipboard_pixels[] = {
+        0x00000000u, 0x00FFFFFFu, 0x01FFFFFFu, 0x80402010u,
+        0x7F3F1F0Fu, 0xFF102030u, 0xFFFFFFFFu, 0x80FF0000u,
+    };
+    check(window.set_clipboard_image(
+        std::span<const pt_color>(clipboard_pixels, 8), 4, 2));
+    check(window.clipboard().empty()); // the clipboard holds one type at a time
+    const std::optional<pt::clipboard_image> decoded = window.clipboard_image_png();
+    check(decoded.has_value());
+    if (decoded) {
+        check(decoded->width == 4 && decoded->height == 2);
+        check(decoded->pixels.size() == 8);
+        check(decoded->pixels.size() == 8 && decoded->pixels[0] == 0x00000000u);
+        check(decoded->pixels.size() == 8 && decoded->pixels[5] == 0xFF102030u);
+        check(decoded->pixels.size() == 8 && decoded->pixels[7] == 0x80800000u);
+    }
+    /* A span shorter than width * height is rejected before the C call. */
+    check(!window.set_clipboard_image(std::span<const pt_color>(clipboard_pixels, 7), 4, 2));
+    check(!window.set_clipboard_image(std::span<const pt_color>(), 0, 0));
+    check(!window.set_clipboard_image(std::span<const pt_color>(clipboard_pixels, 8), 0, 2));
+    check(!window.set_clipboard_image(std::span<const pt_color>(clipboard_pixels, 1),
+                                      pt_clipboard_image_max_dimension + 1, 1));
+    pt::window no_window;
+    check(!no_window.set_clipboard_image(
+        std::span<const pt_color>(clipboard_pixels, 8), 4, 2));
+
+    check(window.set_clipboard_uri_list(
+        {"/tmp/a b.txt", "file:///tmp/already%20encoded.txt"}));
+    check(window.clipboard().empty());
+    check(!window.clipboard_image_png().has_value());
+    check(!window.set_clipboard_uri_list({}));
+    check(!window.set_clipboard_uri_list({"relative/a.txt"}));
+    check(!window.set_clipboard_uri_list({"/tmp/a\rb.txt"}));
+    check(window.set_clipboard("text again"));
+    check(window.clipboard() == "text again");
+
+    /* ---- 1.2 column identity and layout persistence ---- */
+    table.set_column_key(0, "id").set_column_key(1, "name").set_column_key(2, "kind");
+    check(table.column_key(0) == "id");
+    check(table.column_key(1) == "name");
+    check(table.column_key(2) == "kind");
+    check(table.column_key(9).empty()); // never NULL from the C getter
+    table.set_column_width(0, 100.0f)
+        .set_column_width(1, 220.5f)
+        .set_column_width(2, 77.25f)
+        .set_column_hidden(2, true);
+    table.set_sort_columns({{1, pt_sort_ascending}, {2, pt_sort_descending}});
+    const std::string layout = table.columns_save();
+    check(!layout.empty());
+    check(layout.rfind("PTCOLS 1\nC 3\n", 0) == 0);
+    table.set_column_width(0, 42.0f).set_column_hidden(2, false);
+    table.set_sort_columns({{0, pt_sort_ascending}});
+    check(table.columns_restore(layout));
+    check(std::fabs(table.column_width(0) - 100.0f) < 0.0001f);
+    check(std::fabs(table.column_width(1) - 220.5f) < 0.0001f);
+    check(std::fabs(table.column_width(2) - 77.25f) < 0.0001f);
+    check(table.column_hidden(2));
+    const std::vector<pt::sort_key> restored_sort = table.sort_columns();
+    check(restored_sort.size() == 2);
+    if (restored_sort.size() == 2) {
+        check(restored_sort[0].column == 1 &&
+              restored_sort[0].direction == pt_sort_ascending);
+        check(restored_sort[1].column == 2 &&
+              restored_sort[1].direction == pt_sort_descending);
+    }
+    /* Rejection is atomic and leaves the applied layout alone. */
+    check(!table.columns_restore("garbage"));
+    check(!table.columns_restore(""));
+    check(std::fabs(table.column_width(0) - 100.0f) < 0.0001f);
+    check(title.columns_save().empty()); // not a table
+    check(!title.columns_restore(layout));
+    pt::widget no_widget;
+    check(no_widget.columns_save().empty());
+    check(!no_widget.columns_restore(layout));
+
+    /* ---- 1.2 raster icons: reference counted RAII handle and slots ---- */
+    pt::icon_image image =
+        pt::icon_image::load_memory(std::span<const uint8_t>(icon_png, sizeof(icon_png)));
+    check(image.valid());
+    check(image.width() == 2);
+    check(image.height() == 2);
+    pt::icon_image shared = image.ref();
+    check(shared.valid());
+    check(shared.get() == image.get()); // same reference-counted object
+    button.set_icon_image(image).set_icon_tint(0xFF3366FFu);
+    check(button.icon_image_raw() == image.get());
+    image.reset();
+    check(!image.valid());
+    check(shared.valid());
+    check(shared.width() == 2); // the extra reference kept the pixels alive
+    pt::icon_image copy = shared;
+    check(copy.get() == shared.get());
+    pt::icon_image retained = button.icon_image_ref();
+    check(retained.valid());
+    check(retained.get() == shared.get());
+    button.clear_icon_image();
+    check(button.icon_image_raw() == nullptr);
+    window.set_icon(shared);
+    check(window.icon_image_raw() == shared.get());
+    check(window.icon_image_ref().valid());
+    window.clear_icon();
+    check(window.icon_image_raw() == nullptr);
+    check(!pt::icon_image::load_file("/definitely/not/here.png").valid());
+    check(!pt::icon_image::from_name("../escape", 32).valid());
+    check(!pt::icon_image::load_memory(std::span<const uint8_t>()).valid());
+    pt::icon_image empty_image;
+    check(!empty_image.valid());
+    check(empty_image.width() == 0 && empty_image.height() == 0);
+
+    /* ---- 1.2 popup surface: owned handle, placement, dismiss callback ---- */
+    pt::popup empty_popup;
+    check(!empty_popup.valid());
+    check(!empty_popup.show(0.0f, 0.0f, 1.0f, 1.0f));
+    check(!empty_popup.is_open());
+    {
+        pt::widget popup_content = pt::button(nullptr, "Inside");
+        pt::popup surface(window, popup_content);
+        check(surface.valid());
+        check(surface.placement() == pt_popup_placement_below);
+        surface.set_placement(pt_popup_placement_right);
+        check(surface.placement() == pt_popup_placement_right);
+        popup_probe probe;
+        surface.on_dismiss(popup_dismissed, &probe);
+        check(surface.show(10.0f, 10.0f, 20.0f, 20.0f));
+        check(surface.is_open());
+        check(surface.content().get() == popup_content.get());
+        check(surface.reposition(pt::popup_anchor{12.0f, 12.0f, 30.0f, 30.0f}));
+        check(surface.reposition(pt::rect{14.0f, 14.0f, 30.0f, 30.0f}));
+        check(!surface.show(std::numeric_limits<float>::quiet_NaN(), 0.0f, 1.0f, 1.0f));
+        surface.dismiss();
+        check(!surface.is_open());
+        check(probe.dismissals == 1);
+        check(!probe.open_at_dismiss); // is_open is already false in the callback
+        check(!surface.reposition(0.0f, 0.0f, 1.0f, 1.0f)); // closed
+        check(surface.show(pt::rect{20.0f, 20.0f, 40.0f, 10.0f}));
+        check(surface.is_open());
+        surface.reset(); // destroy is not a dismissal
+        check(!surface.valid());
+        check(probe.dismissals == 1);
+    }
+    {
+        pt::popup first;
+        pt::widget content = pt::label(nullptr, "moved");
+        pt::popup second(window, content);
+        check(second.valid());
+        first = std::move(second);
+        check(!second.valid());
+        check(first.valid());
+    }
+
     /* ---- 1.1 extension API: decoration requests and maximize gates ---- */
     check(window.decoration_mode() == pt_decoration_client);
     check(window.effective_decoration_mode() == pt_decoration_client);
@@ -1500,6 +1771,260 @@ int main() {
     check(fired);
     check(window.is_open());
     check(application.get() != nullptr);
+
+    /* ---- 1.2 pickers: model, value round trips, headless popups, callbacks ---- */
+    pt::window picker_window(application, "cpp pickers", 640, 520);
+    check(picker_window.valid());
+    pt::widget picker_root = picker_window.root();
+    pt::widget picker_column = pt::column(picker_root.get());
+    picker_column.set_gap(6.0f).set_padding(8.0f, 8.0f, 8.0f, 8.0f);
+    picker_window.show();
+    pt_canvas *canvas = pt_canvas_create(640, 520, 1.0f);
+    check(canvas != nullptr);
+
+    /* searchable select: model, query, programmatic open/close, commit event */
+    pt::widget sel = pt::select(picker_column.get());
+    check(sel.valid());
+    check(sel.kind() == pt_widget_combobox);
+    sel.set_width(260.0f);
+    check(sel.select_placeholder().empty());
+    sel.set_select_placeholder("Region");
+    check(sel.select_placeholder() == "Region");
+    int select_marker = 7;
+    int select_marker_two = 8;
+    sel.add_select_item("North")
+        .add_select_item("Norfolk")
+        .add_select_item_with_data("South", &select_marker);
+    check(sel.select_item_count() == 3);
+    check(sel.select_item_text(0) == "North");
+    check(sel.select_item_text(1) == "Norfolk");
+    check(sel.select_item_text(2) == "South");
+    check(sel.select_item_text(9).empty());
+    check(sel.select_item_data(2) == &select_marker);
+    check(sel.select_item_data(9) == nullptr);
+    sel.set_select_item_data(0, &select_marker_two);
+    check(sel.select_item_data(0) == &select_marker_two);
+    sel.insert_select_item(1, "Amber");
+    check(sel.select_item_count() == 4);
+    check(sel.select_item_text(1) == "Amber");
+    sel.remove_select_item(1);
+    check(sel.select_item_count() == 3);
+    check(sel.select_item_text(1) == "Norfolk");
+    check(sel.select_selected() == pt_list_index_none);
+    sel.set_select_selected(2);
+    check(sel.select_selected() == 2);
+    sel.set_select_selected(99);
+    check(sel.select_selected() == pt_list_index_none);
+    sel.set_select_selected(1);
+    sel.clear_select_selection();
+    check(sel.select_selected() == pt_list_index_none);
+    sel.set_select_query("nor");
+    check(!sel.is_select_open()); // a programmatic query does not open
+    check(sel.select_match_count() == 2);
+    check(sel.select_match_item(0) == 0);
+    check(sel.select_match_item(1) == 1);
+    check(sel.select_query() == "nor");
+    sel.set_select_query("");
+    check(sel.select_match_count() == 3);
+    check(sel.select_max_popup_rows() == 8);
+    sel.set_select_max_popup_rows(0);
+    check(sel.select_max_popup_rows() == 1);
+    sel.set_select_max_popup_rows(9999);
+    check(sel.select_max_popup_rows() == PT_PICKER_MAX_CANDIDATES);
+    sel.set_select_max_popup_rows(8);
+    check(pt_window_paint(picker_window.get(), canvas));
+    sel.open_select();
+    check(sel.is_select_open());
+    sel.close_select();
+    check(!sel.is_select_open());
+    select_probe select_state;
+    sel.on_select_change(select_changed, &select_state);
+    const pt::rect select_bounds = sel.bounds();
+    check(select_bounds.width > 0.0f);
+    click_at(picker_window.get(), select_bounds.x + select_bounds.width - 8.0f,
+             select_bounds.y + select_bounds.height * 0.5f);
+    check(sel.is_select_open());
+    type_key(picker_window.get(), XKB_KEY_Return);
+    check(!sel.is_select_open());
+    check(select_state.changes == 1);
+    check(select_state.index == 0);
+    check(sel.select_selected() == 0);
+
+    /* date picker: value/format/text round trips and a calendar commit event */
+    pt::widget date_field = pt::date_picker(picker_column.get());
+    check(date_field.valid());
+    date_field.set_width(240.0f);
+    check(pt::date_valid({2026, 11, 22}));
+    check(pt::date_valid({2024, 2, 29}));
+    check(!pt::date_valid({2026, 13, 1}));
+    check(!pt::date_valid({2026, 2, 30}));
+    check(!pt::date_valid({2026, 0, 1}));
+    const pt::date today_date = pt::date_today();
+    check(!pt::date_valid(today_date) ||
+          (today_date.year >= 1 && today_date.year <= 9999));
+    check(date_field.date_value().year == 0);
+    check(date_field.set_date(pt::date{2026, 11, 22}));
+    const pt::date stored_date = date_field.date_value();
+    check(stored_date.year == 2026 && stored_date.month == 11 &&
+          stored_date.day == 22);
+    check(!date_field.set_date(pt::date{2026, 13, 1}));
+    const pt::date unchanged_date = date_field.date_value();
+    check(unchanged_date.year == 2026 && unchanged_date.month == 11 &&
+          unchanged_date.day == 22);
+    check(date_field.date_format() == pt_date_format_iso);
+    date_field.set_date_format(pt_date_format_dmy);
+    check(date_field.date_text() == "22/11/2026");
+    date_field.set_date_format(pt_date_format_iso);
+    check(date_field.date_text() == "2026-11-22");
+    date_field.set_date_placeholder("Pick a date");
+    check(date_field.date_placeholder() == "Pick a date");
+    check(date_field.set_date_text("2024-02-29"));
+    check(date_field.date_value().year == 2024 && date_field.date_value().month == 2 &&
+          date_field.date_value().day == 29);
+    check(!date_field.set_date_text("2024-02-30"));
+    check(date_field.date_value().year == 2024 && date_field.date_value().day == 29);
+    check(date_field.set_date_text(""));
+    check(date_field.date_value().year == 0);
+    check(date_field.date_text().empty());
+    date_field.clear_date();
+    check(date_field.date_value().year == 0);
+    check(date_field.set_date(pt::date{2026, 11, 22}));
+    check(pt_window_paint(picker_window.get(), canvas));
+    date_field.open_date_picker();
+    check(date_field.is_date_picker_open());
+    date_field.close_date_picker();
+    check(!date_field.is_date_picker_open());
+    date_probe date_state;
+    date_field.on_date_change(date_changed, &date_state);
+    const pt::rect date_bounds = date_field.bounds();
+    check(date_bounds.width > 0.0f);
+    click_at(picker_window.get(), date_bounds.x + date_bounds.width * 0.5f,
+             date_bounds.y + date_bounds.height * 0.5f);
+    check(date_field.is_date_picker_open());
+    type_key(picker_window.get(), XKB_KEY_Right);
+    type_key(picker_window.get(), XKB_KEY_Return);
+    check(!date_field.is_date_picker_open());
+    check(date_state.changes == 1);
+    check(date_state.value.year == 2026 && date_state.value.month == 11 &&
+          date_state.value.day == 23);
+    check(date_field.date_value().day == 23);
+
+    /* number picker: range/step/value clamping, text commit, step event */
+    pt::widget number_field = pt::number_picker(picker_column.get());
+    check(number_field.valid());
+    number_field.set_width(200.0f);
+    check(number_field.number_min() == 0.0);
+    check(number_field.number_max() == 100.0);
+    check(number_field.number_step() == 1.0);
+    check(!number_field.number_has_value());
+    check(number_field.number_value() == 0.0); // empty reads as 0
+    number_field.set_number_range(0.0, 10.0);
+    check(number_field.number_min() == 0.0);
+    check(number_field.number_max() == 10.0);
+    number_field.set_number_range(10.0, 0.0); // rejected: min > max
+    check(number_field.number_min() == 0.0 && number_field.number_max() == 10.0);
+    number_field.set_number_step(2.0);
+    check(number_field.number_step() == 2.0);
+    number_field.set_number_step(-1.0); // rejected: not positive
+    check(number_field.number_step() == 2.0);
+    number_field.set_number_value(7.0);
+    check(number_field.number_has_value());
+    check(number_field.number_value() == 7.0);
+    check(number_field.number_text() == "7");
+    number_field.set_number_value(99.0); // clamped
+    check(number_field.number_value() == 10.0);
+    number_field.set_number_value(std::numeric_limits<double>::quiet_NaN());
+    check(number_field.number_value() == 10.0); // non-finite ignored
+    number_field.step_number_by(-1.0);
+    check(number_field.number_value() == 8.0);
+    check(number_field.set_number_text("3.5"));
+    check(number_field.number_value() == 3.5);
+    check(!number_field.set_number_text("not a number"));
+    check(number_field.number_value() == 3.5);
+    check(number_field.number_text() == "3.5");
+    number_field.set_number_placeholder("Amount");
+    check(number_field.number_placeholder() == "Amount");
+    check(number_field.set_number_text(""));
+    check(!number_field.number_has_value());
+    number_field.set_number_value(5.0);
+    number_field.clear_number();
+    check(!number_field.number_has_value());
+    check(number_field.number_text().empty());
+    check(pt_window_paint(picker_window.get(), canvas));
+    number_probe number_state;
+    number_field.on_number_change(number_changed, &number_state);
+    const pt::rect number_bounds = number_field.bounds();
+    check(number_bounds.width > 0.0f);
+    click_at(picker_window.get(), number_bounds.x + number_bounds.width * 0.5f,
+             number_bounds.y + number_bounds.height * 0.5f);
+    type_key(picker_window.get(), XKB_KEY_Up);
+    check(number_state.changes == 1);
+    check(number_state.value == 2.0); // empty steps from clamped zero, then +2
+    check(number_field.number_value() == 2.0);
+
+    /* colour picker: hex round trips, palette cap, preset commit event */
+    pt::widget color_field = pt::color_picker(picker_column.get());
+    check(color_field.valid());
+    color_field.set_width(240.0f);
+    check(color_field.color() == 0x000000FFu);
+    check(color_field.color_hex() == "#000000");
+    color_field.set_color(0x123456FFu);
+    check(color_field.color() == 0x123456FFu);
+    check(color_field.color_hex() == "#123456");
+    check(color_field.set_color_hex("#ABCDEF"));
+    check(color_field.color() == 0xABCDEFFFu);
+    check(color_field.color_hex() == "#ABCDEF");
+    check(!color_field.set_color_hex("bogus"));
+    check(color_field.color() == 0xABCDEFFFu);
+    check(color_field.set_color_hex("#11223344"));
+    check(color_field.color() == 0x11223344u);
+    check(color_field.color_hex() == "#11223344");
+    check(color_field.color_preset_count() == 24);
+    color_field.add_color_preset(0x010203FFu);
+    check(color_field.color_preset_count() == 25);
+    check(color_field.color_preset(24) == 0x010203FFu);
+    for (uint32_t i = 0; i < PT_COLOR_MAX_PRESETS + 2u; ++i) {
+        color_field.add_color_preset(0x040506FFu);
+    }
+    check(color_field.color_preset_count() == PT_COLOR_MAX_PRESETS);
+    color_field.clear_color_presets();
+    check(color_field.color_preset_count() == 0);
+    color_field.add_color_preset(0x123456FFu);
+    color_field.add_color_preset(0x654321FFu);
+    check(color_field.color_preset(1) == 0x654321FFu);
+    check(pt_window_paint(picker_window.get(), canvas));
+    color_field.open_color_picker();
+    check(color_field.is_color_picker_open());
+    color_field.close_color_picker();
+    check(!color_field.is_color_picker_open());
+    color_field.set_color(0xFFFFFFFFu); // differ from the presets so the commit fires
+    color_probe color_state;
+    color_field.on_color_change(color_changed, &color_state);
+    const pt::rect color_bounds = color_field.bounds();
+    check(color_bounds.width > 0.0f);
+    click_at(picker_window.get(), color_bounds.x + color_bounds.width * 0.5f,
+             color_bounds.y + color_bounds.height * 0.5f);
+    check(color_field.is_color_picker_open());
+    type_key(picker_window.get(), XKB_KEY_Right);
+    type_key(picker_window.get(), XKB_KEY_Return);
+    check(!color_field.is_color_picker_open());
+    check(color_state.changes == 1);
+    check(color_state.value == 0x123456FFu || color_state.value == 0x654321FFu);
+    check(color_field.color() == color_state.value);
+
+    /* NULL handles are no-ops and report the defaults. */
+    pt::widget null_picker;
+    check(null_picker.select_item_count() == 0);
+    check(null_picker.select_selected() == pt_list_index_none);
+    check(null_picker.number_min() == 0.0 && null_picker.number_max() == 0.0);
+    check(null_picker.color_preset_count() == 0);
+    check(null_picker.date_value().year == 0);
+    check(!null_picker.set_date(pt::date{2026, 1, 1}));
+    check(!null_picker.set_number_text("1"));
+    check(!null_picker.set_color_hex("#000000"));
+    check(!null_picker.is_select_open());
+
+    pt_canvas_destroy(canvas);
 
     const int result = failures == 0 ? 0 : 1;
     std::printf("cpp binding: %d checks, %d failure(s)\n", checks, failures);

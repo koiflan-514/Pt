@@ -1410,6 +1410,261 @@ class widget {
         return *this;
     }
 
+    /* ---- searchable select (1.2) ----
+     * The select is a combobox-backed host; use only these entries on it. The
+     * combobox item/mode API is inert on a picker. Setters are chainable and
+     * text getters return owned copies of the borrowed C strings. */
+    widget &set_select_placeholder(std::string_view text) {
+        std::string value = copy_string(text);
+        pt_select_set_placeholder(handle_, value.c_str());
+        return *this;
+    }
+    [[nodiscard]] std::string select_placeholder() const {
+        const char *value = pt_select_get_placeholder(handle_);
+        return value ? value : "";
+    }
+    widget &add_select_item(std::string_view text) {
+        std::string value = copy_string(text);
+        pt_select_add_item(handle_, value.c_str());
+        return *this;
+    }
+    /* index is clamped to the current count by Pt. */
+    widget &insert_select_item(uint32_t index, std::string_view text) {
+        std::string value = copy_string(text);
+        pt_select_insert_item(handle_, index, value.c_str());
+        return *this;
+    }
+    /* Appends an item whose data pointer stays owned by the application. */
+    widget &add_select_item_with_data(std::string_view text, void *data) {
+        std::string value = copy_string(text);
+        pt_select_add_item_with_data(handle_, value.c_str(), data);
+        return *this;
+    }
+    widget &remove_select_item(uint32_t index) {
+        pt_select_remove_item(handle_, index);
+        return *this;
+    }
+    widget &clear_select_items() {
+        pt_select_clear(handle_);
+        return *this;
+    }
+    [[nodiscard]] uint32_t select_item_count() const {
+        return pt_select_get_item_count(handle_);
+    }
+    [[nodiscard]] std::string select_item_text(uint32_t index) const {
+        const char *value = pt_select_get_item_text(handle_, index);
+        return value ? value : "";
+    }
+    [[nodiscard]] void *select_item_data(uint32_t index) const {
+        return pt_select_get_item_data(handle_, index);
+    }
+    widget &set_select_item_data(uint32_t index, void *data) {
+        pt_select_set_item_data(handle_, index, data);
+        return *this;
+    }
+    [[nodiscard]] uint32_t select_selected() const {
+        return pt_select_get_selected(handle_);
+    }
+    /* Silent: never fires on_select_change; an out-of-range index clears. */
+    widget &set_select_selected(uint32_t index) {
+        pt_select_set_selected(handle_, index);
+        return *this;
+    }
+    widget &clear_select_selection() {
+        pt_select_clear_selection(handle_);
+        return *this;
+    }
+    [[nodiscard]] std::string select_query() const {
+        const char *value = pt_select_get_query(handle_);
+        return value ? value : "";
+    }
+    /* Filters the model without opening the popup. */
+    widget &set_select_query(std::string_view text) {
+        std::string value = copy_string(text);
+        pt_select_set_query(handle_, value.c_str());
+        return *this;
+    }
+    [[nodiscard]] uint32_t select_match_count() const {
+        return pt_select_get_match_count(handle_);
+    }
+    /* Visible position to model index, or pt_list_index_none. */
+    [[nodiscard]] uint32_t select_match_item(uint32_t position) const {
+        return pt_select_get_match_item(handle_, position);
+    }
+    /* Clamped to 1..PT_PICKER_MAX_CANDIDATES. */
+    widget &set_select_max_popup_rows(uint32_t rows) {
+        pt_select_set_max_popup_rows(handle_, rows);
+        return *this;
+    }
+    [[nodiscard]] uint32_t select_max_popup_rows() const {
+        return pt_select_get_max_popup_rows(handle_);
+    }
+    widget &open_select() {
+        pt_select_open(handle_);
+        return *this;
+    }
+    /* Closing is a cancel: the committed label returns and the filter drops. */
+    widget &close_select() {
+        pt_select_close(handle_);
+        return *this;
+    }
+    [[nodiscard]] bool is_select_open() const { return pt_select_is_open(handle_); }
+    widget &on_select_change(pt_index_callback callback, void *data = nullptr) {
+        pt_select_set_on_change(handle_, callback, data);
+        return *this;
+    }
+
+    /* ---- date picker (1.2) ----
+     * pt_date is a value type (year/month/day); a zero year is the empty value.
+     * Text commit setters return false and keep the previous value on invalid
+     * input. */
+    /* Silent. Returns false for a structurally invalid date. */
+    bool set_date(date value) { return pt_date_picker_set_date(handle_, value); }
+    [[nodiscard]] date date_value() const { return pt_date_picker_get_date(handle_); }
+    widget &clear_date() {
+        pt_date_picker_clear(handle_);
+        return *this;
+    }
+    widget &set_date_format(pt_date_format format) {
+        pt_date_picker_set_format(handle_, format);
+        return *this;
+    }
+    [[nodiscard]] pt_date_format date_format() const {
+        return pt_date_picker_get_format(handle_);
+    }
+    bool set_date_text(std::string_view text) {
+        std::string value = copy_string(text);
+        return pt_date_picker_set_text(handle_, value.c_str());
+    }
+    [[nodiscard]] std::string date_text() const {
+        const char *value = pt_date_picker_get_text(handle_);
+        return value ? value : "";
+    }
+    widget &set_date_placeholder(std::string_view text) {
+        std::string value = copy_string(text);
+        pt_date_picker_set_placeholder(handle_, value.c_str());
+        return *this;
+    }
+    [[nodiscard]] std::string date_placeholder() const {
+        const char *value = pt_date_picker_get_placeholder(handle_);
+        return value ? value : "";
+    }
+    widget &open_date_picker() {
+        pt_date_picker_open(handle_);
+        return *this;
+    }
+    widget &close_date_picker() {
+        pt_date_picker_close(handle_);
+        return *this;
+    }
+    [[nodiscard]] bool is_date_picker_open() const {
+        return pt_date_picker_is_open(handle_);
+    }
+    widget &on_date_change(pt_date_callback callback, void *data = nullptr) {
+        pt_date_picker_set_on_change(handle_, callback, data);
+        return *this;
+    }
+
+    /* ---- number picker (1.2) ----
+     * A spin box with no popup. Values, bounds and step are finite doubles;
+     * Pt rejects non-finite arguments and clamps values into the range. */
+    widget &set_number_range(double minimum, double maximum) {
+        pt_number_picker_set_range(handle_, minimum, maximum);
+        return *this;
+    }
+    [[nodiscard]] double number_min() const { return pt_number_picker_get_min(handle_); }
+    [[nodiscard]] double number_max() const { return pt_number_picker_get_max(handle_); }
+    widget &set_number_step(double step) {
+        pt_number_picker_set_step(handle_, step);
+        return *this;
+    }
+    [[nodiscard]] double number_step() const { return pt_number_picker_get_step(handle_); }
+    /* Clamped into the range; non-finite values are ignored. */
+    widget &set_number_value(double value) {
+        pt_number_picker_set_value(handle_, value);
+        return *this;
+    }
+    [[nodiscard]] double number_value() const { return pt_number_picker_get_value(handle_); }
+    [[nodiscard]] bool number_has_value() const {
+        return pt_number_picker_has_value(handle_);
+    }
+    widget &clear_number() {
+        pt_number_picker_clear(handle_);
+        return *this;
+    }
+    widget &step_number_by(double steps) {
+        pt_number_picker_step_by(handle_, steps);
+        return *this;
+    }
+    bool set_number_text(std::string_view text) {
+        std::string value = copy_string(text);
+        return pt_number_picker_set_text(handle_, value.c_str());
+    }
+    [[nodiscard]] std::string number_text() const {
+        const char *value = pt_number_picker_get_text(handle_);
+        return value ? value : "";
+    }
+    widget &set_number_placeholder(std::string_view text) {
+        std::string value = copy_string(text);
+        pt_number_picker_set_placeholder(handle_, value.c_str());
+        return *this;
+    }
+    [[nodiscard]] std::string number_placeholder() const {
+        const char *value = pt_number_picker_get_placeholder(handle_);
+        return value ? value : "";
+    }
+    widget &on_number_change(pt_number_callback callback, void *data = nullptr) {
+        pt_number_picker_set_on_change(handle_, callback, data);
+        return *this;
+    }
+
+    /* ---- colour picker (1.2) ----
+     * Hex field plus a preset palette popup. Hex getters return owned copies;
+     * the palette is capped at PT_COLOR_MAX_PRESETS. */
+    widget &set_color(pt_color color) {
+        pt_color_picker_set_color(handle_, color);
+        return *this;
+    }
+    [[nodiscard]] pt_color color() const { return pt_color_picker_get_color(handle_); }
+    /* Parses #RRGGBB or #RRGGBBAA; false keeps the previous colour and text. */
+    bool set_color_hex(std::string_view hex) {
+        std::string value = copy_string(hex);
+        return pt_color_picker_set_hex(handle_, value.c_str());
+    }
+    [[nodiscard]] std::string color_hex() const {
+        const char *value = pt_color_picker_get_hex(handle_);
+        return value ? value : "";
+    }
+    widget &add_color_preset(pt_color color) {
+        pt_color_picker_add_preset(handle_, color);
+        return *this;
+    }
+    widget &clear_color_presets() {
+        pt_color_picker_clear_presets(handle_);
+        return *this;
+    }
+    [[nodiscard]] uint32_t color_preset_count() const {
+        return pt_color_picker_get_preset_count(handle_);
+    }
+    [[nodiscard]] pt_color color_preset(uint32_t index) const {
+        return pt_color_picker_get_preset(handle_, index);
+    }
+    widget &open_color_picker() {
+        pt_color_picker_open(handle_);
+        return *this;
+    }
+    widget &close_color_picker() {
+        pt_color_picker_close(handle_);
+        return *this;
+    }
+    [[nodiscard]] bool is_color_picker_open() const {
+        return pt_color_picker_is_open(handle_);
+    }
+    widget &on_color_change(pt_color_callback callback, void *data = nullptr) {
+        pt_color_picker_set_on_change(handle_, callback, data);
+        return *this;
+    }
+
     widget add_tab(std::string_view title) const {
         std::string value = copy_string(title);
         return widget(pt_tabs_add_page(handle_, value.c_str()));
@@ -1614,6 +1869,19 @@ inline widget list_view(pt_widget *parent) { return widget(pt_list_view_create(p
 inline widget table(pt_widget *parent) { return widget(pt_table_create(parent)); }
 inline widget tree(pt_widget *parent) { return widget(pt_tree_create(parent)); }
 inline widget combobox(pt_widget *parent) { return widget(pt_combobox_create(parent)); }
+/* 1.2 pickers. Each returns a widget that the parent's subtree owns; a NULL
+ * parent returns a detached control owned by the caller. */
+inline widget select(pt_widget *parent) { return widget(pt_select_create(parent)); }
+inline widget date_picker(pt_widget *parent) { return widget(pt_date_picker_create(parent)); }
+inline widget number_picker(pt_widget *parent) {
+    return widget(pt_number_picker_create(parent));
+}
+inline widget color_picker(pt_widget *parent) { return widget(pt_color_picker_create(parent)); }
+
+/* True for a real civil date; a zero-initialized pt_date is the empty value. */
+inline bool date_valid(date value) { return pt_date_is_valid(value); }
+/* Today's local civil date, or the empty date outside the 1..9999 range. */
+inline date date_today() { return pt_date_today(); }
 inline widget tabs(pt_widget *parent) { return widget(pt_tabs_create(parent)); }
 inline widget sidebar(pt_widget *parent) { return widget(pt_sidebar_create(parent)); }
 inline widget icon(pt_widget *parent, pt_icon glyph) {
