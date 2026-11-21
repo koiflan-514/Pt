@@ -1205,9 +1205,13 @@ int pt_app_font_uncovered_count(const pt_app *app, const char *family, const cha
     if (!app || !text || length == 0) {
         return 0;
     }
-    const char *name = family && family[0] ? family : "sans-serif";
+    const char *name = family && family[0] ? family : app->theme.font_family;
+    if (!name || !name[0]) {
+        name = "sans-serif";
+    }
     pt_font *font = pt_font_acquire_internal(name, pt_font_weight_regular,
-                                             pt_font_slant_upright, 14.0f, false);
+                                             pt_font_slant_upright,
+                                             pt_default_font_size, false);
     if (!font) {
         return 0;
     }

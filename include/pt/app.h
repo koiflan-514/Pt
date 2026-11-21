@@ -134,9 +134,15 @@ pt_api void pt_app_set_font_family(pt_app *app, const char *family);
  * Errors. Setters are no-ops for a NULL app. Getters return 0/NULL for a NULL
  * app or out-of-range index. The per-family getters report the override only;
  * zero means no override is installed and the app default applies. Returned
- * family pointers are borrowed from the installed chain and stay valid until the
- * next setter call or app destroy. pt_app_font_uncovered_count returns 0 on a
- * NULL app or empty text and counts codepoints, not bytes.
+ * family pointers borrow process-wide chain storage rather than memory owned by
+ * `app`: pt_app_destroy does not invalidate them, but any fallback installation
+ * (including one made through another application in the process), any
+ * per-family override eviction, and pt_font_manager_shutdown() do. Copy a
+ * returned family immediately if it must outlive the call.
+ * pt_app_font_uncovered_count returns 0 on a NULL app or empty text and counts
+ * codepoints, not bytes. A NULL or empty family selects the app's configured
+ * font family at the default text style (14 px, regular, upright), so NULL means
+ * the application default rather than a fixed family.
  *
  * Every function in this block is since 1.2.
  */

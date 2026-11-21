@@ -316,18 +316,24 @@ static void check_selection_order(pt_app *app, const char *first, const char *se
     pt_app_set_font_fallbacks_for_family(app, base->family, NULL, 0);
 }
 
-static void test_tofu(pt_app *app, const char *non_covering_family) {
+static void test_tofu(pt_app *app, const char *non_covering_family, const char *cjk_family) {
     pt_font *base = acquire(latin_family);
     if (!base) {
         return;
     }
 
-    /* With no explicit chain the system order is authoritative only over what
-     * it actually has; an unassigned codepoint has no face anywhere. */
+    /* A NULL family selects the app's configured family, not a hard-coded
+     * fallback: with both set to the same family the counts agree. */
+    pt_app_set_font_family(app, latin_family);
     pt_app_set_font_fallbacks(app, NULL, 0);
     const char *unassigned = "\xCD\xB8"; /* U+0378 */
     pt_check(pt_app_font_uncovered_count(app, latin_family, unassigned,
                                          strlen(unassigned)) == 1);
+    pt_check(pt_app_font_uncovered_count(app, NULL, unassigned,
+                                         strlen(unassigned)) == 1);
+
+    /* With no explicit chain the system order is authoritative only over what
+     * it actually has; an unassigned codepoint has no face anywhere. */
     pt_font_run *runs = NULL;
     int count = pt_font_runs(base, unassigned, strlen(unassigned), &runs);
     pt_check(count == 1);
@@ -366,10 +372,23 @@ static void test_tofu(pt_app *app, const char *non_covering_family) {
             pt_check(runs[0].font == base);
         }
         pt_font_runs_free(runs);
+
+        /* NULL follows the app configuration while an explicit argument
+         * overrides it: the app's CJK family covers Han on its own, the
+         * explicit Latin family falls through to the non-covering chain. */
+        if (cjk_family) {
+            pt_app_set_font_family(app, cjk_family);
+            pt_check(pt_app_font_uncovered_count(app, NULL, cjk, strlen(cjk)) == 0);
+            pt_check(pt_app_font_uncovered_count(app, latin_family, cjk,
+                                                 strlen(cjk)) == 2);
+        } else {
+            skip_script("no CJK family for the NULL-family app-default check");
+        }
     } else {
         skip_script("no non-covering family for the authoritative-chain check");
     }
 
+    pt_app_set_font_family(app, "sans-serif");
     pt_app_set_font_fallbacks(app, NULL, 0);
 }
 
@@ -662,7 +681,7 @@ int main(void) {
     check_arabic_segmentation(app, arabic);
     check_devanagari_segmentation(app, devanagari);
     check_selection_order(app, cjk, cjk_second);
-    test_tofu(app, non_covering);
+    test_tofu(app, non_covering, cjk);
     test_metrics(app, cjk);
     test_cache_bounds(app, cjk);
     test_caret(app, cjk);
