@@ -11,8 +11,10 @@ Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import ctypes
+import os
 import time
 import unittest
+from typing import Any
 
 import pt
 
@@ -1066,33 +1068,461 @@ class ExtensionApiTests(unittest.TestCase):
         self.window.primary = "second"
         self.assertEqual(self.window.primary, "second")
 
-    def test_window_input_callbacks_register_and_run(self) -> None:
-        keys: list[tuple[int, int, str]] = []
-        pointers: list[pt.PointerEvent] = []
-        focus: list[bool] = []
-        self.window.on_key_event(
-            lambda _window, key, modifiers, text: keys.append((key, modifiers, text)) or True
-        )
-        self.window.on_pointer(
-            lambda _window, event: pointers.append(event) or True
-        )
-        self.window.on_focus(lambda _window, focused: focus.append(focused))
-        self.assertEqual(self.app.run_for(20), 0)
+    def test_extension_binding_signatures(self) -> None:
+        """Every 1.1 extension entry point pins restype and argtypes."""
+        v = ctypes.c_void_p
+        f = ctypes.c_float
+        i = ctypes.c_int
+        u32 = ctypes.c_uint32
+        u64 = ctypes.c_uint64
+        b = ctypes.c_bool
+        sz = ctypes.c_size_t
+        pf = ("ptr", ctypes.c_float)
+        pu32 = ("ptr", ctypes.c_uint32)
+        signatures = {
+            "pt_widget_set_paint_callback": (None, [v, pt._PAINT, v]),
+            "pt_widget_clear_paint_callback": (None, [v]),
+            "pt_widget_request_redraw": (None, [v]),
+            "pt_widget_request_redraw_rect": (None, [v, f, f, f, f]),
+            "pt_paint_width": (f, [v]),
+            "pt_paint_height": (f, [v]),
+            "pt_paint_scale": (f, [v]),
+            "pt_paint_clip_rect": (b, [v, pf, pf, pf, pf]),
+            "pt_paint_push_clip": (None, [v, f, f, f, f]),
+            "pt_paint_pop_clip": (None, [v]),
+            "pt_paint_fill_rect": (None, [v, f, f, f, f, u32]),
+            "pt_paint_fill_rounded_rect": (None, [v, f, f, f, f, f, u32]),
+            "pt_paint_stroke_rect": (None, [v, f, f, f, f, f, u32]),
+            "pt_paint_draw_line": (None, [v, f, f, f, f, f, u32]),
+            "pt_paint_draw_text": (None, [v, ctypes.c_char_p, f, i, i, f, f,
+                                            ctypes.c_char_p, sz, u32]),
+            "pt_paint_font_has_glyph": (b, [v, ctypes.c_char_p, f, u32]),
+            "pt_paint_measure_text": (f, [v, ctypes.c_char_p, f, i, i,
+                                           ctypes.c_char_p, sz]),
+            "pt_paint_font_metrics": (b, [v, ctypes.c_char_p, f, i, i,
+                                           pf, pf, pf, pf]),
+            "pt_window_paint_pixels": (b, [v, pu32, i, i]),
+            "pt_window_set_focus_callback": (None, [v, pt._FOCUS, v]),
+            "pt_window_set_key_event_callback": (None, [v, pt._KEY_EVENT, v]),
+            "pt_window_set_pointer_callback": (None, [v, pt._POINTER, v]),
+            "pt_window_set_ime_callbacks": (None, [v, pt._IME_COMMIT,
+                                                   pt._IME_PREEDIT, v]),
+            "pt_window_set_ime_enabled": (None, [v, b]),
+            "pt_window_set_ime_cursor_rect": (None, [v, i, i, i, i]),
+            "pt_window_primary_set": (b, [v, ctypes.c_char_p]),
+            "pt_window_primary_get": (v, [v]),
+            "pt_app_watch_fd": (u64, [v, i, u32, pt._FD, v]),
+            "pt_app_unwatch_fd": (None, [v, u64]),
+        }
 
-    def test_ime_callbacks_register_and_clear(self) -> None:
-        commits: list[str] = []
-        preedits: list[tuple[str, int, int]] = []
-        self.window.set_ime_callbacks(
-            commit=lambda _window, text: commits.append(text),
-            preedit=lambda _window, text, begin, end: preedits.append((text, begin, end)),
-        )
-        self.window.set_ime_enabled(True)
-        self.window.set_ime_cursor_rect(4, 8, 12, 16)
-        self.assertEqual(self.app.run_for(20), 0)
-        # Clearing both callbacks disables custom IME handling again.
-        self.window.set_ime_callbacks()
-        self.window.set_ime_enabled(False)
-        self.assertEqual(self.app.run_for(20), 0)
+        def matches(actual: Any, expected: Any) -> bool:
+            if isinstance(expected, tuple):
+                return getattr(actual, "_type_", None) is expected[1]
+            return actual is expected
+
+        self.assertEqual(len(signatures), 29)
+        for name, (restype, argtypes) in signatures.items():
+            function = getattr(pt, f"_{name}")
+            self.assertIs(function.restype, restype, name)
+            self.assertEqual(len(function.argtypes), len(argtypes), name)
+            for index, expected in enumerate(argtypes):
+                self.assertTrue(matches(function.argtypes[index], expected),
+                                f"{name} arg {index}")
+
+        callback_signatures = {
+            pt._PAINT: (None, (v, v, v)),
+            pt._FD: (None, (v, u32, v)),
+            pt._IME_COMMIT: (None, (v, ctypes.c_char_p, v)),
+            pt._IME_PREEDIT: (None, (v, ctypes.c_char_p, ctypes.c_int32,
+                                     ctypes.c_int32, v)),
+            pt._FOCUS: (None, (v, b, v)),
+            pt._KEY_EVENT: (b, (v, u32, u32, ctypes.c_char_p, v)),
+            pt._POINTER: (b, (v, ("ptr", pt.PointerEvent), v)),
+        }
+        for callback_type, (restype, argtypes) in callback_signatures.items():
+            self.assertIs(callback_type._restype_, restype)
+            self.assertEqual(len(callback_type._argtypes_), len(argtypes))
+            for index, expected in enumerate(argtypes):
+                self.assertTrue(matches(callback_type._argtypes_[index], expected))
+
+    def test_paint_context_null_paths(self) -> None:
+        context = pt.PaintContext(0)
+        self.assertEqual(context.width, 0.0)
+        self.assertEqual(context.height, 0.0)
+        self.assertEqual(context.scale, 1.0)  # the C default for no canvas
+        self.assertIsNone(context.clip_rect())
+        self.assertIs(context.push_clip(0, 0, 1, 1), context)
+        self.assertIs(context.pop_clip(), context)
+        self.assertIs(context.fill_rect(0, 0, 1, 1, 0xFFFFFFFF), context)
+        self.assertIs(context.fill_rounded_rect(0, 0, 1, 1, 2, 0xFFFFFFFF), context)
+        self.assertIs(context.stroke_rect(0, 0, 1, 1, 1, 0xFFFFFFFF), context)
+        self.assertIs(context.draw_line(0, 0, 1, 1, 1, 0xFFFFFFFF), context)
+        self.assertIs(context.draw_text("sans", 10, pt.font_weight_regular,
+                                        pt.font_slant_upright, 0, 0, "x",
+                                        0xFFFFFFFF), context)
+        self.assertEqual(context.measure_text("sans", 10, pt.font_weight_regular,
+                                              pt.font_slant_upright, "x"), 0.0)
+        self.assertIsNone(context.font_metrics("sans", 10, pt.font_weight_regular,
+                                               pt.font_slant_upright))
+        self.assertFalse(context.font_has_glyph("sans", 10, ord("P")))
+
+    def test_paint_callback_dispatch_and_payload_copy(self) -> None:
+        fill_color = pt.rgb(0xAA3300)
+        widgets: list[pt.Widget] = []
+        payloads: list[dict[str, Any]] = []
+        calls: list[int] = []
+
+        def paint(widget: pt.Widget, context: pt.PaintContext) -> None:
+            # Copy every value that is needed later while the context is
+            # borrowed. Nothing below retains the native pointer.
+            clip = context.clip_rect()
+            widgets.append(widget)
+            payloads.append({
+                "width": context.width,
+                "height": context.height,
+                "scale": context.scale,
+                "clip": clip,
+                "measured": context.measure_text(
+                    "sans", 12.0, pt.font_weight_regular,
+                    pt.font_slant_upright, "Pt"),
+                "metrics": context.font_metrics(
+                    "sans", 12.0, pt.font_weight_regular,
+                    pt.font_slant_upright),
+                "glyph": context.font_has_glyph("sans", 12.0, ord("P")),
+            })
+            context.push_clip(0.0, 0.0, 40.0, 20.0).fill_rect(
+                0.0, 0.0, 40.0, 20.0, fill_color).pop_clip()
+            context.fill_rounded_rect(0.0, 0.0, 8.0, 8.0, 2.0, pt.rgb(0x00AA33))
+            context.stroke_rect(1.0, 1.0, 6.0, 6.0, 1.0, pt.rgb(0x0033AA))
+            context.draw_line(0.0, 0.0, 4.0, 4.0, 1.0, pt.rgb(0x333333))
+            context.draw_text("sans", 12.0, pt.font_weight_regular,
+                              pt.font_slant_upright, 2.0, 10.0, "Pt",
+                              pt.rgb(0x111111))
+            calls.append(1)
+
+        box = pt.box(self.column)
+        box.set_size(40, 20)
+        box.on_paint(paint)
+        first_pixels = pt.paint_window_pixels(self.window, 320, 240)
+        self.assertEqual(len(first_pixels), 320 * 240)
+        self.assertTrue(calls)
+        self.assertIs(widgets[0], box)
+        payload = payloads[0]
+        self.assertGreaterEqual(payload["width"], 40.0)
+        self.assertGreaterEqual(payload["height"], 20.0)
+        self.assertGreater(payload["scale"], 0.0)
+        self.assertIsNotNone(payload["clip"])
+        if payload["clip"] is not None:
+            self.assertGreaterEqual(payload["clip"][2], 40.0)
+            self.assertGreaterEqual(payload["clip"][3], 20.0)
+        self.assertGreater(payload["measured"], 0.0)
+        self.assertIsNotNone(payload["metrics"])
+        if payload["metrics"] is not None:
+            self.assertEqual(len(payload["metrics"]), 4)
+            self.assertGreater(payload["metrics"][2], 0.0)
+        self.assertTrue(payload["glyph"])
+
+        # A second snapshot must run the callback again and report the same
+        # geometry: the paint pass is idempotent for this widget.
+        first_count = len(calls)
+        second_pixels = pt.paint_window_pixels(self.window, 320, 240)
+        self.assertEqual(len(second_pixels), 320 * 240)
+        self.assertGreater(len(calls), first_count)
+        self.assertEqual(payloads[first_count], payloads[-1])
+
+        # 0xRRGGBBAA in, 0xAARRGGBB in the buffer.
+        buffer_value = ((fill_color & 0xFF) << 24) | (fill_color >> 8)
+        self.assertIn(buffer_value, first_pixels)
+        self.assertIn(buffer_value, second_pixels)
+
+        box.clear_paint_callback()
+        count = len(calls)
+        pt.paint_window_pixels(self.window, 320, 240)
+        self.assertEqual(len(calls), count)
+
+    def test_paint_redraw_requests_and_offscreen_errors(self) -> None:
+        ran: list[bool] = []
+        box = pt.box(self.column)
+        box.set_size(24, 16)
+        box.on_paint(lambda _widget, _context: ran.append(True))
+        self.assertIs(box.request_redraw(), box)
+        self.assertIs(box.request_redraw_rect(-5.0, -5.0, 4.0, 4.0), box)
+        self.assertIs(box.request_redraw_rect(0.0, 0.0, 0.0, 0.0), box)
+        pt.paint_window_pixels(self.window, 320, 240)
+        self.assertTrue(ran)
+        ran.clear()
+        box.clear_paint_callback()
+
+        with self.assertRaises(ValueError):
+            pt.paint_window_pixels(self.window, 0, 10)
+        with self.assertRaises(ValueError):
+            pt.paint_window_pixels(self.window, 10, -1)
+        buffer = (ctypes.c_uint32 * 4)()
+        self.assertFalse(pt._pt_window_paint_pixels(None, buffer, 2, 2))
+        self.assertFalse(pt._pt_window_paint_pixels(self.window.raw, None, 2, 2))
+        self.assertFalse(pt._pt_window_paint_pixels(self.window.raw, buffer, 0, 2))
+
+    def test_primary_selection_ownership_and_utf8(self) -> None:
+        self.assertIs(self.window.set_primary("primary payload"), self.window)
+        self.assertEqual(self.window.primary, "primary payload")
+        self.window.primary = "第一行 naïve ✓"
+        self.assertEqual(self.window.primary, "第一行 naïve ✓")
+        self.assertEqual(self.window.set_primary("").primary, "")
+        self.assertEqual(self.window.primary, "")
+
+        # The getter hands malloc'd memory to the wrapper; the wrapper must
+        # copy it and release it exactly once.
+        freed: list[int] = []
+        original_free = pt._pt_free
+
+        def tracked_free(pointer: Any) -> None:
+            freed.append(int(pointer))
+            original_free(pointer)
+
+        pt._pt_free = tracked_free
+        try:
+            self.assertEqual(self.window.primary, "")
+            self.window.primary = "release me"
+            self.assertEqual(self.window.primary, "release me")
+        finally:
+            pt._pt_free = original_free
+        self.assertEqual(len(freed), 2)
+        self.assertTrue(all(freed))
+
+    def test_fd_watch_dispatch_events_and_validation(self) -> None:
+        read_fd, write_fd = os.pipe()
+        write_open = True
+        try:
+            read_events: list[int] = []
+            watch = self.app.watch_fd(read_fd, read_events.append)
+            self.assertGreater(watch, 0)
+            self.assertIn(watch, self.app._watch_fds)
+            os.write(write_fd, b"x")
+            self.assertEqual(self.app.run_for(60), 0)
+            self.assertTrue(read_events)
+            self.assertTrue(read_events[0] & pt.fd_read)
+
+            self.app.unwatch_fd(watch)
+            self.assertNotIn(watch, self.app._watch_fds)
+            self.app.unwatch_fd(watch)  # idempotent
+            read_events.clear()
+            os.write(write_fd, b"y")
+            self.assertEqual(self.app.run_for(40), 0)
+            self.assertEqual(read_events, [])
+
+            # The header allows two independent watches on the same fd.
+            first: list[int] = []
+            second: list[int] = []
+            first_id = self.app.watch_fd(read_fd, first.append)
+            second_id = self.app.watch_fd(read_fd, second.append)
+            self.assertNotEqual(first_id, second_id)
+            os.write(write_fd, b"z")
+            self.assertEqual(self.app.run_for(60), 0)
+            self.assertTrue(first and second)
+            self.app.unwatch_fd(first_id)
+            self.app.unwatch_fd(second_id)
+
+            # A writable descriptor is reported immediately.
+            writable: list[int] = []
+            write_watch = self.app.watch_fd(write_fd, writable.append,
+                                            events=pt.fd_write)
+            self.assertEqual(self.app.run_for(60), 0)
+            self.assertTrue(writable)
+            self.assertTrue(writable[0] & pt.fd_write)
+            self.app.unwatch_fd(write_watch)
+
+            # A callback may unwatch itself; it must fire at least once and
+            # then stop, without a use-after-free in the C dispatcher.
+            self_unwatch = {"id": 0, "events": []}
+
+            def unwatch_self(mask: int) -> None:
+                self_unwatch["events"].append(mask)
+                self.app.unwatch_fd(self_unwatch["id"])
+
+            self_unwatch["id"] = self.app.watch_fd(read_fd, unwatch_self)
+            self.assertEqual(self.app.run_for(60), 0)
+            self.assertEqual(len(self_unwatch["events"]), 1)
+            os.write(write_fd, b"w")
+            self.assertEqual(self.app.run_for(40), 0)
+            self.assertEqual(len(self_unwatch["events"]), 1)
+
+            # POLLHUP is surfaced once the write end disappears.
+            hung_up: list[int] = []
+            hup_watch = self.app.watch_fd(read_fd, hung_up.append)
+            os.close(write_fd)
+            write_open = False
+            self.assertEqual(self.app.run_for(60), 0)
+            self.assertTrue(hung_up)
+            self.assertTrue(hung_up[0] & (pt.fd_hangup | pt.fd_error))
+            self.app.unwatch_fd(hup_watch)
+
+            with self.assertRaises(ValueError):
+                self.app.watch_fd(-1, read_events.append)
+            with self.assertRaises(ValueError):
+                self.app.watch_fd(read_fd, read_events.append, events=0)
+            self.app.unwatch_fd(0)
+        finally:
+            if write_open:
+                os.close(write_fd)
+            os.close(read_fd)
+
+    def test_ime_callback_dispatch_and_clear(self) -> None:
+        commits: list[tuple[pt.Window, str]] = []
+        preedits: list[tuple[pt.Window, str, int, int]] = []
+        registered: list[tuple[Any, Any]] = []
+        original = pt._pt_window_set_ime_callbacks
+
+        def spy(window: int, commit: Any, preedit: Any, data: int) -> None:
+            registered.append((commit, preedit))
+            original(window, commit, preedit, data)
+
+        pt._pt_window_set_ime_callbacks = spy
+        try:
+            self.assertIs(self.window.set_ime_callbacks(
+                commit=lambda window, text: commits.append((window, text)),
+                preedit=lambda window, text, begin, end: preedits.append(
+                    (window, text, begin, end)),
+            ), self.window)
+            self.assertIs(self.window.set_ime_enabled(True), self.window)
+            self.assertIs(self.window.set_ime_cursor_rect(4, 8, 12, 16),
+                          self.window)
+        finally:
+            pt._pt_window_set_ime_callbacks = original
+
+        self.assertEqual(len(registered), 1)
+        commit_ptr, preedit_ptr = registered[0]
+        self.assertIsNot(commit_ptr, pt._NULL_IME_COMMIT)
+        self.assertIsNot(preedit_ptr, pt._NULL_IME_PREEDIT)
+
+        # Execute the exact trampoline registered with C with a synthetic
+        # payload; this checks the upcall decoding and copy semantics.
+        commit_ptr(self.window.raw, b"hello \xe4\xb8\x96", None)
+        preedit_ptr(self.window.raw, b"ni", 0, 2, None)
+        self.assertEqual(commits, [(self.window, "hello 世")])
+        self.assertEqual(preedits, [(self.window, "ni", 0, 2)])
+        commit_ptr(self.window.raw, None, None)
+        preedit_ptr(self.window.raw, b"", -1, -1, None)
+        self.assertEqual(commits[-1], (self.window, ""))
+        self.assertEqual(preedits[-1], (self.window, "", -1, -1))
+
+        registered.clear()
+        pt._pt_window_set_ime_callbacks = spy
+        try:
+            # Clearing both removes custom handling; omitting preedit leaves
+            # that slot NULL independently.
+            self.window.set_ime_callbacks()
+            self.window.set_ime_callbacks(
+                commit=lambda _window, _text: None)
+            self.assertIs(self.window.set_ime_enabled(False), self.window)
+        finally:
+            pt._pt_window_set_ime_callbacks = original
+        self.assertEqual(len(registered), 2)
+        self.assertIs(registered[0][0], pt._NULL_IME_COMMIT)
+        self.assertIs(registered[0][1], pt._NULL_IME_PREEDIT)
+        self.assertIsNot(registered[1][0], pt._NULL_IME_COMMIT)
+        self.assertIs(registered[1][1], pt._NULL_IME_PREEDIT)
+
+    def test_raw_input_callbacks_dispatch_and_payloads(self) -> None:
+        focus_events: list[tuple[pt.Window, bool]] = []
+        key_events: list[tuple[pt.Window, int, int, str]] = []
+        pointer_events: list[pt.PointerEvent] = []
+        captured: dict[str, Any] = {}
+
+        def install(name: str, original: Any, register: Any) -> None:
+            def spy(window: int, callback: Any, data: Any) -> None:
+                captured[name] = callback
+                original(window, callback, data)
+
+            setattr(pt, name, spy)
+            try:
+                register()
+            finally:
+                setattr(pt, name, original)
+
+        install("_pt_window_set_focus_callback",
+                pt._pt_window_set_focus_callback,
+                lambda: self.window.on_focus(
+                    lambda window, focused: focus_events.append(
+                        (window, focused))))
+        install("_pt_window_set_key_event_callback",
+                pt._pt_window_set_key_event_callback,
+                lambda: self.window.on_key_event(
+                    lambda window, key, modifiers, text: key_events.append(
+                        (window, key, modifiers, text)) or True))
+        install("_pt_window_set_pointer_callback",
+                pt._pt_window_set_pointer_callback,
+                lambda: self.window.on_pointer(
+                    lambda window, event: pointer_events.append(event) or True))
+
+        self.assertTrue(captured)
+
+        captured["_pt_window_set_focus_callback"](self.window.raw, True, None)
+        captured["_pt_window_set_focus_callback"](self.window.raw, False, None)
+        self.assertEqual(focus_events, [(self.window, True), (self.window, False)])
+
+        consumed = captured["_pt_window_set_key_event_callback"](
+            self.window.raw, 0x61, pt.key_modifier_ctrl, b"a", None)
+        self.assertTrue(consumed)
+        captured["_pt_window_set_key_event_callback"](
+            self.window.raw, 0xFF09, 0, None, None)
+        self.assertEqual(key_events[0],
+                         (self.window, 0x61, pt.key_modifier_ctrl, "a"))
+        self.assertEqual(key_events[1], (self.window, 0xFF09, 0, ""))
+
+        event = pt.PointerEvent()
+        event.phase = pt.pointer_phase_down
+        event.x = 12.0
+        event.y = 34.0
+        event.delta_x = 1.5
+        event.delta_y = -2.5
+        event.button = 0x110
+        event.modifiers = pt.key_modifier_shift
+        event.click_count = 2
+        event.pressed = True
+        consumed_pointer = captured["_pt_window_set_pointer_callback"](
+            self.window.raw, ctypes.pointer(event), None)
+        self.assertTrue(consumed_pointer)
+        self.assertEqual(len(pointer_events), 1)
+        received = pointer_events[0]
+        self.assertEqual(received.phase, pt.pointer_phase_down)
+        self.assertEqual(received.position, (12.0, 34.0))
+        self.assertEqual(received.delta_x, 1.5)
+        self.assertEqual(received.delta_y, -2.5)
+        self.assertEqual(received.button, 0x110)
+        self.assertEqual(received.modifiers, pt.key_modifier_shift)
+        self.assertEqual(received.click_count, 2)
+        self.assertTrue(received.pressed)
+        # The wrapper copies the C struct, so mutating the caller's copy after
+        # the upcall must not affect what the callback retained.
+        event.x = 999.0
+        event.pressed = False
+        self.assertEqual(received.x, 12.0)
+        self.assertTrue(received.pressed)
+
+        # A declining pointer callback propagates False.
+        declined: list[bool] = []
+        install("_pt_window_set_pointer_callback",
+                pt._pt_window_set_pointer_callback,
+                lambda: self.window.on_pointer(
+                    lambda _window, _event: declined.append(True) or False))
+        self.assertFalse(captured["_pt_window_set_pointer_callback"](
+            self.window.raw, ctypes.pointer(event), None))
+        self.assertEqual(declined, [True])
+
+    def test_pointer_event_layout(self) -> None:
+        event = pt.PointerEvent
+        self.assertEqual(event.phase.offset, 0)
+        self.assertEqual(event.x.offset, 4)
+        self.assertEqual(event.y.offset, 8)
+        self.assertEqual(event.delta_x.offset, 12)
+        self.assertEqual(event.delta_y.offset, 16)
+        self.assertEqual(event.button.offset, 20)
+        self.assertEqual(event.modifiers.offset, 24)
+        self.assertEqual(event.click_count.offset, 28)
+        self.assertEqual(event.pressed.offset, 32)
+        self.assertEqual(ctypes.sizeof(event), 36)
+        self.assertIs(event.phase.type, ctypes.c_uint32)
+        self.assertIs(event.pressed.type, ctypes.c_bool)
 
 
 if __name__ == "__main__":

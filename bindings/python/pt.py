@@ -1014,7 +1014,10 @@ _KEY_EVENT = _ctypes.CFUNCTYPE(
     _ctypes.c_void_p,
 )
 _POINTER = _ctypes.CFUNCTYPE(
-    _ctypes.c_bool, _ctypes.c_void_p, _ctypes.c_void_p, _ctypes.c_void_p
+    _ctypes.c_bool,
+    _ctypes.c_void_p,
+    _ctypes.POINTER(PointerEvent),
+    _ctypes.c_void_p,
 )
 # Unregistered IME callbacks must be real NULL function pointers, which is
 # what the C side checks for; ctypes rejects None for these slots.
@@ -4246,7 +4249,21 @@ class Window:
         """Window-level pointer events; return True to consume down/up/axis."""
 
         def dispatch(_window: int, event: Any, _data: int) -> bool:
-            return bool(callback(self, event.contents))
+            # The C event is only valid for this call; copy every field into a
+            # Python object so the callback may retain it after returning.
+            source = event.contents
+            copy = PointerEvent(
+                source.phase,
+                source.x,
+                source.y,
+                source.delta_x,
+                source.delta_y,
+                source.button,
+                source.modifiers,
+                source.click_count,
+                source.pressed,
+            )
+            return bool(callback(self, copy))
 
         trampoline = _POINTER(dispatch)
         self._callbacks.append(trampoline)
@@ -4676,9 +4693,15 @@ class App:
 
         ``callback`` receives the event mask (``fd_read`` / ``fd_write`` /
         ``fd_error`` / ``fd_hangup``). The callback must not block. Returns a
-        watch id to pass to :meth:`unwatch_fd`; keep a reference to it. The
-        same fd must not be watched twice concurrently.
+        non-zero watch id to pass to :meth:`unwatch_fd`; keep a reference to
+        it. Watching the same descriptor twice is allowed and each watch fires
+        independently, per the C header contract.
         """
+        if int(fd) < 0:
+            raise ValueError("fd must be non-negative")
+        if int(events) == 0:
+            raise ValueError("events must name at least one pt.fd_* mask")
+
         def dispatch(_app: int, mask: int, _data: int) -> None:
             callback(int(mask))
 
@@ -4686,6 +4709,8 @@ class App:
         watch_id = int(
             _pt_app_watch_fd(self._ptr, int(fd), int(events), trampoline, None)
         )
+        if watch_id == 0:
+            raise RuntimeError(_error_message() or "could not watch fd")
         self._callbacks.append(trampoline)
         self._watch_fds[watch_id] = trampoline
         return watch_id
