@@ -11,6 +11,7 @@ on the thread that created the app.
 from __future__ import annotations
 
 import ctypes as _ctypes
+import math as _math
 import os as _os
 import pathlib as _pathlib
 from typing import Any, Callable, Optional
@@ -32,7 +33,9 @@ __all__ = [
     "Transition",
     "PaintContext",
     "PointerEvent",
+    "PaintPixelsDesc",
     "paint_window_pixels",
+    "paint_window_pixels_ex",
     "pt_color_transparent",
     "pointer_phase_enter",
     "pointer_phase_leave",
@@ -618,6 +621,11 @@ def color_alpha(color: int, alpha: int) -> int:
     return (color & 0xFFFFFF00) | (alpha & 0xFF)
 
 
+# Offscreen pixel layout. Only premultiplied 0xAARRGGBB is supported. Defined
+# before the paint helpers so it can be a default argument.
+pixel_format_argb8888_premultiplied = 0
+
+
 def paint_window_pixels(window: "Window", width: int, height: int) -> list[int]:
     """Paints one full frame of ``window`` offscreen at scale 1.0.
 
@@ -631,6 +639,20 @@ def paint_window_pixels(window: "Window", width: int, height: int) -> list[int]:
     if not _pt_window_paint_pixels(window._ptr, buffer, int(width), int(height)):
         raise RuntimeError(_error_message())
     return list(buffer)
+
+
+def paint_window_pixels_ex(window: "Window", width: int, height: int,
+                           stride: int = 0, scale: float = 0.0,
+                           format: int = pixel_format_argb8888_premultiplied
+                           ) -> list[int]:
+    """Paints one offscreen snapshot with an explicit stride and scale.
+
+    ``width`` and ``height`` are device pixels, so a scale of 2.0 needs twice
+    the logical size. ``stride`` is in pixels per row and 0 means ``width``.
+    Returns a row-major list of ``0xAARRGGBB`` values, one row per logical row
+    (padding columns are dropped)."""
+    desc = PaintPixelsDesc(stride, scale, format)
+    return window.paint_pixels_ex(width, height, desc)
 
 
 def _locate_library() -> str:
@@ -754,6 +776,34 @@ fd_read = 1
 fd_write = 2
 fd_error = 4
 fd_hangup = 8
+
+# Decoration preferences. auto prefers client-side and accepts a compositor
+# forced server-side mode; server asks the compositor to decorate. The effective
+# mode always follows the compositor's configure.
+decoration_auto = 0
+decoration_client = 1
+decoration_server = 2
+
+
+class PaintPixelsDesc(_ctypes.Structure):
+    """Layout of an extended offscreen snapshot.
+
+    ``stride`` is in pixels per row and 0 means ``width``; ``scale`` is the
+    device-pixel ratio and 0 means 1.0. ``reserved`` must stay all zero.
+    """
+
+    _fields_ = [
+        ("stride", _ctypes.c_int),
+        ("scale", _ctypes.c_float),
+        ("format", _ctypes.c_int),
+        ("reserved", _ctypes.c_uint32 * 3),
+    ]
+
+    def __init__(self, stride: int = 0, scale: float = 0.0,
+                 format: int = pixel_format_argb8888_premultiplied,
+                 reserved: tuple[int, int, int] = (0, 0, 0)) -> None:
+        super().__init__(int(stride), float(scale), int(format),
+                         (reserved[0], reserved[1], reserved[2]))
 
 
 class PaintContext:
@@ -1137,6 +1187,16 @@ _pt_window_set_size = _proto("pt_window_set_size", None, _c_void_p, _c_int, _c_i
 _pt_window_set_min_size = _proto("pt_window_set_min_size", None, _c_void_p, _c_int, _c_int)
 _pt_window_set_resizable = _proto("pt_window_set_resizable", None, _c_void_p, _c_bool)
 _pt_window_set_decorated = _proto("pt_window_set_decorated", None, _c_void_p, _c_bool)
+_pt_window_set_decoration_mode = _proto(
+    "pt_window_set_decoration_mode", None, _c_void_p, _c_int
+)
+_pt_window_get_decoration_mode = _proto(
+    "pt_window_get_decoration_mode", _c_int, _c_void_p
+)
+_pt_window_get_effective_decoration_mode = _proto(
+    "pt_window_get_effective_decoration_mode", _c_int, _c_void_p
+)
+_pt_window_maximize = _proto("pt_window_maximize", _c_bool, _c_void_p)
 _pt_window_request_redraw = _proto("pt_window_request_redraw", None, _c_void_p)
 _pt_window_focus = _proto("pt_window_focus", None, _c_void_p, _c_void_p)
 _pt_window_set_theme_color = _proto(
@@ -1330,6 +1390,9 @@ _pt_window_set_ime_cursor_rect = _proto(
 # Primary selection (pt/window.h). The getter returns malloc'd UTF-8 memory
 # owned by the caller; release it with pt_free.
 _pt_window_primary_set = _proto("pt_window_primary_set", _c_bool, _c_void_p, _c_char_p)
+_pt_window_primary_set_serial = _proto(
+    "pt_window_primary_set_serial", _c_bool, _c_void_p, _c_char_p, _c_uint32
+)
 _pt_window_primary_get = _proto("pt_window_primary_get", _c_void_p, _c_void_p)
 
 # Offscreen painting (pt/custom.h).
@@ -1341,10 +1404,22 @@ _pt_window_paint_pixels = _proto(
     _c_int,
     _c_int,
 )
+_pt_window_paint_pixels_ex = _proto(
+    "pt_window_paint_pixels_ex",
+    _c_bool,
+    _c_void_p,
+    _ctypes.POINTER(_c_uint32),
+    _c_int,
+    _c_int,
+    _ctypes.POINTER(PaintPixelsDesc),
+)
 
 # File descriptor watches (pt/app.h).
 _pt_app_watch_fd = _proto(
     "pt_app_watch_fd", _c_uint64, _c_void_p, _c_int, _c_uint32, _FD, _c_void_p
+)
+_pt_app_watch_fd_owned = _proto(
+    "pt_app_watch_fd_owned", _c_uint64, _c_void_p, _c_int, _c_uint32, _FD, _c_void_p
 )
 _pt_app_unwatch_fd = _proto("pt_app_unwatch_fd", None, _c_void_p, _c_uint64)
 
@@ -4108,6 +4183,33 @@ class Window:
         return self
 
     @property
+    def decoration_mode(self) -> int:
+        """The requested decoration preference (``decoration_auto`` etc.)."""
+        return int(_pt_window_get_decoration_mode(self._ptr))
+
+    @decoration_mode.setter
+    def decoration_mode(self, mode: int) -> None:
+        _pt_window_set_decoration_mode(self._ptr, int(mode))
+
+    def set_decoration_mode(self, mode: int) -> "Window":
+        """Requests a decoration preference.
+
+        The compositor's configure stays authoritative, so
+        :attr:`effective_decoration_mode` can differ from this request.
+        """
+        self.decoration_mode = mode
+        return self
+
+    @property
+    def effective_decoration_mode(self) -> int:
+        """The mode the compositor configured, or the headless fallback."""
+        return int(_pt_window_get_effective_decoration_mode(self._ptr))
+
+    def maximize(self) -> bool:
+        """Requests maximize; False without the capability or if not resizable."""
+        return bool(_pt_window_maximize(self._ptr))
+
+    @property
     def popup_policy(self) -> int:
         return int(_pt_window_get_popup_policy(self._ptr))
 
@@ -4325,11 +4427,56 @@ class Window:
 
     @primary.setter
     def primary(self, text: str) -> None:
+        # Programmatic publishes have no triggering event serial, so the C
+        # contract rejects them; use set_primary_serial from a callback.
         _pt_window_primary_set(self._ptr, _string(text))
 
     def set_primary(self, text: str) -> "Window":
+        """Sets the primary selection when a trigger serial is available.
+
+        After pointer/key input the most recent event serial is used; a purely
+        programmatic set publishes nothing. Inside a pointer-release or
+        key-press callback use :meth:`set_primary_serial` instead.
+        """
         self.primary = text
         return self
+
+    def set_primary_serial(self, text: str, serial: int) -> bool:
+        """Publishes the selection with an explicit event serial.
+
+        Returns False for a zero serial, a null window or a rejecting backend.
+        """
+        return bool(_pt_window_primary_set_serial(self._ptr, _string(text),
+                                                  int(serial)))
+
+    def paint_pixels_ex(self, width: int, height: int,
+                        desc: Optional[PaintPixelsDesc] = None) -> list[int]:
+        """Paints one offscreen snapshot with stride/scale/format options.
+
+        ``desc`` defaults to a zeroed descriptor (stride = width, scale 1.0,
+        premultiplied ARGB). Reserved words, an invalid stride/scale/format or
+        a non-positive size raise ``ValueError``; a rejected C call raises
+        ``RuntimeError``.
+        """
+        if width <= 0 or height <= 0:
+            raise ValueError("paint size must be positive")
+        values = PaintPixelsDesc() if desc is None else desc
+        if any(int(word) for word in values.reserved):
+            raise ValueError("paint descriptor reserved words must be zero")
+        if int(values.format) != pixel_format_argb8888_premultiplied:
+            raise ValueError("unsupported paint pixel format")
+        stride = width if int(values.stride) == 0 else int(values.stride)
+        if stride < width:
+            raise ValueError("paint stride must not be smaller than width")
+        scale = float(values.scale)
+        if scale != 0.0 and not (_math.isfinite(scale) and scale > 0.0):
+            raise ValueError("paint scale must be finite and positive")
+        buffer = (_c_uint32 * (int(stride) * int(height)))()
+        if not _pt_window_paint_pixels_ex(self._ptr, buffer, int(width),
+                                          int(height), _ctypes.byref(values)):
+            raise RuntimeError(_error_message())
+        return [buffer[row * stride + column]
+                for row in range(int(height)) for column in range(int(width))]
 
     def set_long_press_delay(self, milliseconds: int) -> "Window":
         _pt_window_set_long_press_delay(self._ptr, int(milliseconds))
@@ -4689,14 +4836,30 @@ class App:
 
     def watch_fd(self, fd: int, callback: Callable[[int], Any],
                  events: int = fd_read) -> int:
-        """Watches a file descriptor on the app's event loop.
+        """Watches a borrowed file descriptor on the app's event loop.
 
         ``callback`` receives the event mask (``fd_read`` / ``fd_write`` /
         ``fd_error`` / ``fd_hangup``). The callback must not block. Returns a
         non-zero watch id to pass to :meth:`unwatch_fd`; keep a reference to
-        it. Watching the same descriptor twice is allowed and each watch fires
-        independently, per the C header contract.
+        it. Pt never closes a borrowed descriptor. Watching the same
+        descriptor twice is rejected (the C call returns 0, which raises
+        ``RuntimeError`` here); use :meth:`watch_fd_owned` to hand ownership to
+        Pt.
         """
+        return self._watch_fd(fd, callback, events, owned=False)
+
+    def watch_fd_owned(self, fd: int, callback: Callable[[int], Any],
+                       events: int = fd_read) -> int:
+        """Watches ``fd`` and transfers ownership to Pt.
+
+        Pt closes the descriptor on :meth:`unwatch_fd` and when the app is
+        destroyed, including a self-unwatch from inside the callback. The
+        duplicate-descriptor and error rules match :meth:`watch_fd`.
+        """
+        return self._watch_fd(fd, callback, events, owned=True)
+
+    def _watch_fd(self, fd: int, callback: Callable[[int], Any], events: int,
+                  *, owned: bool) -> int:
         if int(fd) < 0:
             raise ValueError("fd must be non-negative")
         if int(events) == 0:
@@ -4706,9 +4869,8 @@ class App:
             callback(int(mask))
 
         trampoline = _FD(dispatch)
-        watch_id = int(
-            _pt_app_watch_fd(self._ptr, int(fd), int(events), trampoline, None)
-        )
+        watch = _pt_app_watch_fd_owned if owned else _pt_app_watch_fd
+        watch_id = int(watch(self._ptr, int(fd), int(events), trampoline, None))
         if watch_id == 0:
             raise RuntimeError(_error_message() or "could not watch fd")
         self._callbacks.append(trampoline)

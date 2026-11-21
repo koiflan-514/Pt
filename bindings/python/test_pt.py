@@ -1062,10 +1062,17 @@ class ExtensionApiTests(unittest.TestCase):
             os.close(write_fd)
 
     def test_primary_selection_roundtrip(self) -> None:
-        # Headless keeps an in-process buffer so both sides stay testable.
-        self.assertTrue(self.window.set_primary("primary payload"))
+        # Headless keeps an in-process buffer so both sides stay testable, but
+        # a programmatic set has no triggering event serial and is rejected.
+        self.window.set_primary("primary payload")
+        self.assertEqual(self.window.primary, "")
+        self.assertFalse(self.window.set_primary_serial("primary payload", 0))
+        self.assertEqual(self.window.primary, "")
+        self.assertTrue(self.window.set_primary_serial("primary payload", 7))
         self.assertEqual(self.window.primary, "primary payload")
         self.window.primary = "second"
+        self.assertEqual(self.window.primary, "primary payload")
+        self.assertTrue(self.window.set_primary_serial("second", 9))
         self.assertEqual(self.window.primary, "second")
 
     def test_extension_binding_signatures(self) -> None:
@@ -1102,6 +1109,12 @@ class ExtensionApiTests(unittest.TestCase):
             "pt_paint_font_metrics": (b, [v, ctypes.c_char_p, f, i, i,
                                            pf, pf, pf, pf]),
             "pt_window_paint_pixels": (b, [v, pu32, i, i]),
+            "pt_window_paint_pixels_ex": (b, [v, pu32, i, i,
+                                               ("ptr", pt.PaintPixelsDesc)]),
+            "pt_window_set_decoration_mode": (None, [v, i]),
+            "pt_window_get_decoration_mode": (i, [v]),
+            "pt_window_get_effective_decoration_mode": (i, [v]),
+            "pt_window_maximize": (b, [v]),
             "pt_window_set_focus_callback": (None, [v, pt._FOCUS, v]),
             "pt_window_set_key_event_callback": (None, [v, pt._KEY_EVENT, v]),
             "pt_window_set_pointer_callback": (None, [v, pt._POINTER, v]),
@@ -1110,8 +1123,10 @@ class ExtensionApiTests(unittest.TestCase):
             "pt_window_set_ime_enabled": (None, [v, b]),
             "pt_window_set_ime_cursor_rect": (None, [v, i, i, i, i]),
             "pt_window_primary_set": (b, [v, ctypes.c_char_p]),
+            "pt_window_primary_set_serial": (b, [v, ctypes.c_char_p, u32]),
             "pt_window_primary_get": (v, [v]),
             "pt_app_watch_fd": (u64, [v, i, u32, pt._FD, v]),
+            "pt_app_watch_fd_owned": (u64, [v, i, u32, pt._FD, v]),
             "pt_app_unwatch_fd": (None, [v, u64]),
         }
 
@@ -1120,7 +1135,7 @@ class ExtensionApiTests(unittest.TestCase):
                 return getattr(actual, "_type_", None) is expected[1]
             return actual is expected
 
-        self.assertEqual(len(signatures), 29)
+        self.assertEqual(len(signatures), 36)
         for name, (restype, argtypes) in signatures.items():
             function = getattr(pt, f"_{name}")
             self.assertIs(function.restype, restype, name)
@@ -1144,6 +1159,134 @@ class ExtensionApiTests(unittest.TestCase):
             self.assertEqual(len(callback_type._argtypes_), len(argtypes))
             for index, expected in enumerate(argtypes):
                 self.assertTrue(matches(callback_type._argtypes_[index], expected))
+
+    def test_decoration_modes_and_maximize(self) -> None:
+        self.assertEqual(self.window.decoration_mode, pt.decoration_client)
+        self.assertEqual(self.window.effective_decoration_mode, pt.decoration_client)
+        # set_decorated only controls the header; it never requests SSD.
+        self.window.set_decorated(False)
+        self.assertEqual(self.window.decoration_mode, pt.decoration_client)
+        self.assertEqual(self.window.effective_decoration_mode, pt.decoration_client)
+        self.window.set_decorated(True)
+        self.window.set_decoration_mode(pt.decoration_server)
+        self.assertEqual(self.window.decoration_mode, pt.decoration_server)
+        # Headless has no configure event; the effective mode follows.
+        self.assertEqual(self.window.effective_decoration_mode, pt.decoration_server)
+        self.window.set_decoration_mode(pt.decoration_auto)
+        self.assertEqual(self.window.decoration_mode, pt.decoration_auto)
+        self.assertEqual(self.window.effective_decoration_mode, pt.decoration_client)
+        self.window.decoration_mode = 99  # rejected by the C entry point
+        self.assertEqual(self.window.decoration_mode, pt.decoration_auto)
+        self.assertEqual(self.window.effective_decoration_mode, pt.decoration_client)
+
+        self.assertTrue(self.window.maximize())
+        self.window.set_resizable(False)
+        self.assertFalse(self.window.maximize())  # not resizable
+        self.window.set_resizable(True)
+        self.assertTrue(self.window.maximize())
+        self.assertFalse(pt._pt_window_maximize(None))
+        self.assertEqual(pt._pt_window_get_decoration_mode(None), pt.decoration_auto)
+        self.assertEqual(pt._pt_window_get_effective_decoration_mode(None),
+                         pt.decoration_auto)
+
+    def test_paint_pixels_ex_stride_and_scale(self) -> None:
+        width = self.window.width
+        height = self.window.height
+        tight = pt.paint_window_pixels(self.window, width, height)
+        padded = pt.paint_window_pixels_ex(self.window, width, height,
+                                           stride=width + 8)
+        self.assertEqual(len(padded), width * height)
+        self.assertEqual(padded, tight)
+        self.assertEqual(self.window.paint_pixels_ex(width, height), tight)
+
+        scaled = pt.paint_window_pixels_ex(self.window, width * 2, height * 2,
+                                           scale=2.0)
+        self.assertEqual(len(scaled), width * 2 * height * 2)
+        self.assertEqual(pt.paint_window_pixels_ex(self.window, width, height,
+                                                   scale=0.0), tight)
+
+        desc = pt.PaintPixelsDesc(width, 1.0)
+        self.assertEqual(desc.stride, width)
+        self.assertAlmostEqual(desc.scale, 1.0)
+        self.assertEqual(desc.format, pt.pixel_format_argb8888_premultiplied)
+        self.assertEqual(list(desc.reserved), [0, 0, 0])
+
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, height,
+                                        pt.PaintPixelsDesc(reserved=(1, 0, 0)))
+        bad_format = pt.PaintPixelsDesc()
+        bad_format.format = 1
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, height, bad_format)
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, height,
+                                        pt.PaintPixelsDesc(stride=width - 1))
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, height, pt.PaintPixelsDesc(scale=-1.0))
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, height,
+                                        pt.PaintPixelsDesc(scale=float("nan")))
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, height,
+                                        pt.PaintPixelsDesc(scale=float("inf")))
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(0, height)
+        with self.assertRaises(ValueError):
+            self.window.paint_pixels_ex(width, -1)
+
+        buffer = (ctypes.c_uint32 * 4)()
+        good_desc = pt.PaintPixelsDesc()
+        self.assertFalse(pt._pt_window_paint_pixels_ex(
+            None, buffer, 2, 2, ctypes.byref(good_desc)))
+        self.assertFalse(pt._pt_window_paint_pixels_ex(
+            self.window.raw, None, 2, 2, ctypes.byref(good_desc)))
+        self.assertFalse(pt._pt_window_paint_pixels_ex(
+            self.window.raw, buffer, 0, 2, ctypes.byref(good_desc)))
+
+    def test_fd_watch_owned_closes_descriptor(self) -> None:
+        read_fd, write_fd = os.pipe()
+        events: list[int] = []
+        try:
+            watch = self.app.watch_fd_owned(read_fd, events.append)
+            self.assertGreater(watch, 0)
+            self.assertIn(watch, self.app._watch_fds)
+            # The duplicate check covers owned descriptors too and must not
+            # close the descriptor the first watch owns.
+            with self.assertRaises(RuntimeError):
+                self.app.watch_fd(read_fd, events.append)
+            os.fstat(read_fd)
+            os.write(write_fd, b"x")
+            self.assertEqual(self.app.run_for(60), 0)
+            self.assertTrue(events)
+            self.assertTrue(events[0] & pt.fd_read)
+
+            self.app.unwatch_fd(watch)
+            self.assertNotIn(watch, self.app._watch_fds)
+            with self.assertRaises(OSError):
+                os.fstat(read_fd)  # Pt closed the owned descriptor
+        finally:
+            os.close(write_fd)
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
+
+        # Destroying the app also closes every owned descriptor.
+        other = pt.App("pt.tests.python.owned")
+        read_fd, write_fd = os.pipe()
+        try:
+            self.assertGreater(other.watch_fd_owned(read_fd, lambda _events: None), 0)
+            os.fstat(read_fd)
+            other.destroy()
+            with self.assertRaises(OSError):
+                os.fstat(read_fd)
+        finally:
+            other.destroy()
+            os.close(write_fd)
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
 
     def test_paint_context_null_paths(self) -> None:
         context = pt.PaintContext(0)
@@ -1264,10 +1407,11 @@ class ExtensionApiTests(unittest.TestCase):
 
     def test_primary_selection_ownership_and_utf8(self) -> None:
         self.assertIs(self.window.set_primary("primary payload"), self.window)
-        self.assertEqual(self.window.primary, "primary payload")
-        self.window.primary = "第一行 naïve ✓"
+        # A programmatic publish has no trigger serial: nothing is set.
+        self.assertEqual(self.window.primary, "")
+        self.assertTrue(self.window.set_primary_serial("第一行 naïve ✓", 3))
         self.assertEqual(self.window.primary, "第一行 naïve ✓")
-        self.assertEqual(self.window.set_primary("").primary, "")
+        self.assertTrue(self.window.set_primary_serial("", 4))
         self.assertEqual(self.window.primary, "")
 
         # The getter hands malloc'd memory to the wrapper; the wrapper must
@@ -1282,7 +1426,7 @@ class ExtensionApiTests(unittest.TestCase):
         pt._pt_free = tracked_free
         try:
             self.assertEqual(self.window.primary, "")
-            self.window.primary = "release me"
+            self.assertTrue(self.window.set_primary_serial("release me", 5))
             self.assertEqual(self.window.primary, "release me")
         finally:
             pt._pt_free = original_free
@@ -1310,17 +1454,16 @@ class ExtensionApiTests(unittest.TestCase):
             self.assertEqual(self.app.run_for(40), 0)
             self.assertEqual(read_events, [])
 
-            # The header allows two independent watches on the same fd.
+            # One watch per descriptor: a second watch is rejected with id 0, which
+            # the wrapper surfaces as RuntimeError.
             first: list[int] = []
-            second: list[int] = []
             first_id = self.app.watch_fd(read_fd, first.append)
-            second_id = self.app.watch_fd(read_fd, second.append)
-            self.assertNotEqual(first_id, second_id)
+            with self.assertRaises(RuntimeError):
+                self.app.watch_fd(read_fd, first.append)
             os.write(write_fd, b"z")
             self.assertEqual(self.app.run_for(60), 0)
-            self.assertTrue(first and second)
+            self.assertTrue(first)
             self.app.unwatch_fd(first_id)
-            self.app.unwatch_fd(second_id)
 
             # A writable descriptor is reported immediately.
             writable: list[int] = []
