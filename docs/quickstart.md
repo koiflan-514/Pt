@@ -556,8 +556,9 @@ in window logical pixels; it is remembered while IME is disabled and pushed when
 it activates. Callbacks run on the UI thread and the text is borrowed for the
 call. Pt re-sends the full surrounding state on every change instead of relying
 on incremental acknowledgement, which is what keeps KWin/fcitx5 and sway focus
-desyncs from dropping a commit. A `pt_window_set_ime_enabled(window, false)`
-call hands input back to the focused entry, if any.
+desyncs from dropping a commit. Call `pt_window_set_ime_enabled(window,
+false)` to turn the custom path off again; entry focus then enables text input
+on its own.
 
 ## Primary selection
 
