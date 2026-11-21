@@ -92,6 +92,8 @@ CPP_EXAMPLES := $(patsubst examples/cpp/%.cpp,$(EXAMPLES)/cpp/%,$(wildcard examp
 	run-cpp-custom-paint run-cpp-primary-selection \
 	run-python-custom-paint run-python-primary-selection \
 	run-java-custom-paint run-java-primary-selection run-java-fd-watch \
+	run-popup-demo run-pickers run-icon-button run-clipboard-image \
+	run-font-fallback run-column-persist \
 	api-check api-update api-docs
 
 all: lib examples
@@ -408,3 +410,21 @@ dist:
 	@echo "wrote $(BUILD)/dist/pt-$(VERSION).tar.gz.sha256"
 
 -include $(LIB_DEPS) $(TEST_DEPS)
+
+run-popup-demo: $(EXAMPLES)/c/popup_demo
+	$(EXAMPLES)/c/popup_demo
+
+run-pickers: $(EXAMPLES)/c/pickers
+	$(EXAMPLES)/c/pickers
+
+run-icon-button: $(EXAMPLES)/c/icon_button
+	$(EXAMPLES)/c/icon_button
+
+run-clipboard-image: $(EXAMPLES)/c/clipboard_image
+	$(EXAMPLES)/c/clipboard_image
+
+run-font-fallback: $(EXAMPLES)/c/font_fallback
+	$(EXAMPLES)/c/font_fallback
+
+run-column-persist: $(EXAMPLES)/c/column_persist
+	$(EXAMPLES)/c/column_persist
