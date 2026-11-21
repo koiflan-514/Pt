@@ -294,6 +294,50 @@ pt_api const char *pt_number_picker_get_placeholder(const pt_widget *picker);
 pt_api void pt_number_picker_set_on_change(pt_widget *picker, pt_number_callback callback,
                                            void *user_data);
 
+/* ---------- colour picker ---------- */
+
+/* Fires after the committed colour changes through user input. The callback may
+ * destroy the picker. Since 1.2. */
+typedef void (*pt_color_callback)(pt_widget *picker, pt_color color, void *user_data);
+
+/* Creates a colour picker: an entry holding a hex value, a preview swatch and a
+ * popup preset palette. The initial colour is opaque black. The field accepts
+ * #RRGGBB and #RRGGBBAA (the # is optional); an invalid text is rejected with
+ * the previous colour and text kept. F4 or Alt+Down opens the palette; Left/
+ * Right move one preset, Up/Down one row (six columns), Home/End the edges and
+ * Enter commits the highlighted preset. Enter with edited text commits the hex
+ * value instead, Escape restores the committed text, and a press on a preset
+ * commits it. The accessible value is the RGB part normalised to [0, 1].
+ * Since 1.2. */
+pt_api pt_widget *pt_color_picker_create(pt_widget *parent);
+
+/* Sets the colour silently. Since 1.2. */
+pt_api void pt_color_picker_set_color(pt_widget *picker, pt_color color);
+pt_api pt_color pt_color_picker_get_color(const pt_widget *picker);
+
+/* Parses and commits #RRGGBB / #RRGGBBAA. Returns false and records
+ * pt_get_last_error for an invalid text, leaving the colour and field text
+ * unchanged. Silent on success. Since 1.2. */
+pt_api bool pt_color_picker_set_hex(pt_widget *picker, const char *hex);
+/* Borrowed committed hex text: #RRGGBB for opaque colours, #RRGGBBAA otherwise.
+ * Since 1.2. */
+pt_api const char *pt_color_picker_get_hex(const pt_widget *picker);
+
+/* The preset palette starts with 24 common colours. add appends (rejected past
+ * PT_COLOR_MAX_PRESETS with pt_get_last_error); clear removes every preset.
+ * Since 1.2. */
+pt_api void pt_color_picker_add_preset(pt_widget *picker, pt_color color);
+pt_api void pt_color_picker_clear_presets(pt_widget *picker);
+pt_api uint32_t pt_color_picker_get_preset_count(const pt_widget *picker);
+pt_api pt_color pt_color_picker_get_preset(const pt_widget *picker, uint32_t index);
+
+pt_api void pt_color_picker_open(pt_widget *picker);
+pt_api void pt_color_picker_close(pt_widget *picker);
+pt_api bool pt_color_picker_is_open(const pt_widget *picker);
+
+pt_api void pt_color_picker_set_on_change(pt_widget *picker, pt_color_callback callback,
+                                          void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

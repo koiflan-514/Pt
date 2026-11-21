@@ -494,8 +494,8 @@ static void test_select_teardown(pt_app *app) {
 }
 
 static void test_select_null(void) {
-    pt_check(pt_select_create(NULL) != NULL); /* detached is legal */
     pt_widget *detached = pt_select_create(NULL);
+    pt_check(detached != NULL); /* detached is legal */
     pt_select_add_item(detached, "A");
     pt_select_set_selected(detached, 0u);
     pt_check(pt_select_get_selected(detached) == 0u);
@@ -1122,6 +1122,264 @@ static void test_number_callbacks_and_null(pt_app *app) {
     pt_check(pt_number_picker_get_placeholder(NULL)[0] == '\0');
 }
 
+/* ---------- colour picker ---------- */
+
+typedef struct color_log {
+    int changes;
+    pt_color last;
+    bool destroy;
+} color_log;
+
+static void on_color_change(pt_widget *picker, pt_color color, void *user_data) {
+    (void)picker;
+    color_log *log = user_data;
+    ++log->changes;
+    log->last = color;
+    if (log->destroy) {
+        pt_widget_destroy(picker);
+    }
+}
+
+static void test_color_values(void) {
+    pt_widget *picker = pt_color_picker_create(NULL);
+    pt_check(picker != NULL);
+    pt_check(picker_of(picker)->kind == pt_picker_kind_color);
+    pt_check(pt_color_picker_get_color(picker) == 0x000000FFu);
+    pt_check(strcmp(pt_color_picker_get_hex(picker), "#000000") == 0);
+    pt_check(strcmp(pt_widget_get_text(field_of(picker)), "#000000") == 0);
+    pt_check(pt_color_picker_get_preset_count(picker) == 24u);
+    pt_check(pt_color_picker_get_preset(picker, 0u) == 0xEF4444FFu);
+    pt_check(pt_color_picker_get_preset(picker, 99u) == 0x00000000u);
+    pt_check(pt_widget_get_a11y_role(picker) == pt_a11y_role_combo_box);
+    pt_check(strcmp(pt_widget_get_a11y_name(picker), "Colour") == 0);
+    pt_check(pt_widget_get_a11y_state(picker) & pt_a11y_state_expandable);
+    float a11y_value = 0.0f;
+    pt_check(pt_widget_get_a11y_value(picker, &a11y_value));
+    pt_check_near(a11y_value, 0.0, 0.001);
+
+    /* Hex round trips, 6 and 8 digits, with or without '#'. */
+    pt_color_picker_set_color(picker, 0xFF0000FFu);
+    pt_check(pt_color_picker_get_color(picker) == 0xFF0000FFu);
+    pt_check(strcmp(pt_color_picker_get_hex(picker), "#FF0000") == 0);
+    pt_check(pt_widget_get_a11y_value(picker, &a11y_value));
+    pt_check_near(a11y_value, (double)0xFF0000 / 16777215.0, 0.001);
+    pt_check(pt_color_picker_set_hex(picker, "#00FF00"));
+    pt_check(pt_color_picker_get_color(picker) == 0x00FF00FFu);
+    pt_check(pt_color_picker_set_hex(picker, "11223344"));
+    pt_check(pt_color_picker_get_color(picker) == 0x11223344u);
+    pt_check(strcmp(pt_color_picker_get_hex(picker), "#11223344") == 0);
+    pt_check(pt_color_picker_set_hex(picker, "  #abcdef  "));
+    pt_check(pt_color_picker_get_color(picker) == 0xABCDEFFFu);
+    pt_check(strcmp(pt_color_picker_get_hex(picker), "#ABCDEF") == 0);
+
+    /* Invalid texts keep the colour and the committed text. */
+    pt_check(!pt_color_picker_set_hex(picker, "#12345"));
+    pt_check(!pt_color_picker_set_hex(picker, "#GGGGGG"));
+    pt_check(!pt_color_picker_set_hex(picker, "#12"));
+    pt_check(!pt_color_picker_set_hex(picker, "1234567"));
+    pt_check(!pt_color_picker_set_hex(picker, NULL));
+    pt_check(pt_color_picker_get_color(picker) == 0xABCDEFFFu);
+    pt_check(strcmp(pt_color_picker_get_hex(picker), "#ABCDEF") == 0);
+    pt_check(strcmp(pt_widget_get_text(field_of(picker)), "#ABCDEF") == 0);
+    pt_check(pt_get_last_error()[0] != '\0');
+
+    /* The preset model is bounded and clearable. */
+    pt_color_picker_clear_presets(picker);
+    pt_check(pt_color_picker_get_preset_count(picker) == 0u);
+    pt_color_picker_add_preset(picker, 0x123456FFu);
+    pt_check(pt_color_picker_get_preset_count(picker) == 1u);
+    pt_check(pt_color_picker_get_preset(picker, 0u) == 0x123456FFu);
+    for (uint32_t i = 0; i < PT_COLOR_MAX_PRESETS + 2u; ++i) {
+        pt_color_picker_add_preset(picker, 0x010203FFu);
+    }
+    pt_check(pt_color_picker_get_preset_count(picker) == PT_COLOR_MAX_PRESETS);
+
+    pt_widget_destroy(picker);
+}
+
+static void test_color_keyboard_and_pointer(pt_app *app) {
+    picker_fixture fx;
+    fixture_open(&fx, app);
+    pt_widget *picker = pt_color_picker_create(pt_window_root(fx.window));
+    pt_widget_set_width(picker, 240.0f);
+    pt_widget_destroy(fx.select);
+    fx.select = picker;
+    color_log log = {0};
+    pt_color_picker_set_on_change(picker, on_color_change, &log);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+
+    pt_widget *field = field_of(picker);
+    pt_check(pt_widget_focus(field));
+    type(fx.window, XKB_KEY_F4, NULL);
+    pt_check(pt_color_picker_is_open(picker));
+    pt_picker *state = picker_of(picker);
+    pt_check(state && state->popup->overlay.kind == pt_overlay_kind_popup);
+    pt_check(state && state->popup->overlay.owner == picker);
+    pt_check(state && count_kind(state->content, pt_widget_list_row) == 24u);
+    pt_check(state && state->highlighted < state->preset_count);
+    pt_check(state && state->presets[state->highlighted] == picker_of(picker)->color);
+    pt_check(state && find_named(state->content, "#EF4444") != NULL);
+
+    /* Arrow navigation wraps; Home/End reach the edges. */
+    uint32_t start = state->highlighted;
+    type(fx.window, XKB_KEY_Right, NULL);
+    pt_check(state->highlighted == (start + 1u) % state->preset_count);
+    type(fx.window, XKB_KEY_Left, NULL);
+    pt_check(state->highlighted == start);
+    type(fx.window, XKB_KEY_Home, NULL);
+    pt_check(state->highlighted == 0u);
+    type(fx.window, XKB_KEY_End, NULL);
+    pt_check(state->highlighted == state->preset_count - 1u);
+    type(fx.window, XKB_KEY_Left, NULL);
+    pt_check(state->highlighted == state->preset_count - 2u);
+    type(fx.window, XKB_KEY_Up, NULL);
+    pt_check(state->highlighted == state->preset_count - 8u);
+
+    /* The highlighted cell carries the selected state and a name. */
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_widget *cell = find_named(state->content, "#EF4444");
+    pt_check(cell != NULL);
+    if (cell) {
+        uint32_t cell_state = pt_widget_get_a11y_state(cell);
+        pt_check(cell_state & pt_a11y_state_selectable);
+        pt_check(pt_widget_get_a11y_role(cell) == pt_a11y_role_list_item);
+    }
+
+    /* Enter commits the highlighted preset and closes. */
+    type(fx.window, XKB_KEY_Home, NULL);
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check(!pt_color_picker_is_open(picker));
+    pt_check(pt_color_picker_get_color(picker) == 0xEF4444FFu);
+    pt_check(log.changes == 1);
+    pt_check(log.last == 0xEF4444FFu);
+    pt_check(strcmp(pt_color_picker_get_hex(picker), "#EF4444") == 0);
+    pt_check(fx.window->focused == field);
+
+    /* Escape cancels a palette move without touching the colour. */
+    type(fx.window, XKB_KEY_F4, NULL);
+    pt_check(pt_color_picker_is_open(picker));
+    type(fx.window, XKB_KEY_Right, NULL);
+    type(fx.window, XKB_KEY_Escape, NULL);
+    pt_check(!pt_color_picker_is_open(picker));
+    pt_check(pt_color_picker_get_color(picker) == 0xEF4444FFu);
+
+    /* Typed hex commits on Enter; invalid text is rejected and restored. */
+    pt_widget_set_text(field, "#00FF00");
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check(pt_color_picker_get_color(picker) == 0x00FF00FFu);
+    pt_check(log.changes == 2);
+    pt_widget_set_text(field, "#ZZZZZZ");
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check(pt_color_picker_get_color(picker) == 0x00FF00FFu);
+    pt_check(strcmp(pt_widget_get_text(field), "#00FF00") == 0);
+    pt_widget_set_text(field, "oops");
+    type(fx.window, XKB_KEY_Escape, NULL);
+    pt_check(strcmp(pt_widget_get_text(field), "#00FF00") == 0);
+
+    /* Typing while the palette is open commits gated text and closes. */
+    type(fx.window, XKB_KEY_F4, NULL);
+    pt_check(pt_color_picker_is_open(picker));
+    pt_widget_set_text(field, "#0000FF");
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check(pt_color_picker_get_color(picker) == 0x0000FFFFu);
+    pt_check(!pt_color_picker_is_open(picker));
+    pt_check(log.changes == 3);
+
+    /* A press on a palette cell commits it. */
+    pt_color_picker_open(picker);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_widget *green = find_named(picker_of(picker)->content, "#22C55E");
+    pt_check(green != NULL);
+    if (green) {
+        pt_rect green_bounds = bounds_of(green);
+        click_at(fx.window, green_bounds.x + green_bounds.w * 0.5f,
+                 green_bounds.y + green_bounds.h * 0.5f);
+        pt_check(pt_color_picker_get_color(picker) == 0x22C55EFFu);
+        pt_check(log.changes == 4);
+        pt_check(!pt_color_picker_is_open(picker));
+        pt_check(fx.window->focused == field);
+    }
+
+    /* Outside press dismisses and restores focus. */
+    pt_color_picker_open(picker);
+    click_at(fx.window, 5.0f, 5.0f);
+    pt_check(!pt_color_picker_is_open(picker));
+    pt_check(fx.window->focused == field);
+
+    /* Tab closes and continues focus order. */
+    pt_color_picker_open(picker);
+    pt_check(pt_color_picker_is_open(picker));
+    type(fx.window, XKB_KEY_Tab, NULL);
+    pt_check(!pt_color_picker_is_open(picker));
+    pt_check(fx.window->focused != field);
+
+    fixture_close(&fx);
+}
+
+static void test_color_limits_and_teardown(pt_app *app) {
+    picker_fixture fx;
+    fixture_open(&fx, app);
+    pt_widget *picker = pt_color_picker_create(pt_window_root(fx.window));
+    pt_widget_destroy(fx.select);
+    fx.select = picker;
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+
+    /* Clearing every preset while open keeps a stable, small popup. */
+    pt_check(pt_widget_focus(field_of(picker)));
+    pt_color_picker_open(picker);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_color_picker_clear_presets(picker);
+    pt_check(pt_color_picker_get_preset_count(picker) == 0u);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_check(find_named(picker_of(picker)->content, "No presets") != NULL);
+    /* Enter with no preset and unedited text simply closes. */
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check(!pt_color_picker_is_open(picker));
+
+    /* A callback that destroys the picker runs last. */
+    color_log log = {0};
+    log.destroy = true;
+    pt_color_picker_set_on_change(picker, on_color_change, &log);
+    pt_color_picker_add_preset(picker, 0x0EA5E9FFu);
+    pt_color_picker_open(picker);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_widget *cell = find_named(picker_of(picker)->content, "#0EA5E9");
+    pt_check(cell != NULL);
+    if (cell) {
+        pt_check(pt_widget_activate(cell));
+    }
+    pt_check(log.changes == 1);
+    pt_check(!pt_widget_attached(fx.window, picker));
+    pt_check(!pt_window_overlays_active(fx.window));
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    fixture_close(&fx);
+
+    /* Destroy while open, with the default palette present. */
+    fixture_open(&fx, app);
+    pt_widget *second = pt_color_picker_create(pt_window_root(fx.window));
+    pt_widget_destroy(fx.select);
+    fx.select = second;
+    pt_color_picker_open(second);
+    pt_check(pt_window_overlays_active(fx.window));
+    pt_widget_destroy(second);
+    pt_check(!pt_window_overlays_active(fx.window));
+    fixture_close(&fx);
+
+    /* NULL API. */
+    pt_color_picker_set_color(NULL, 0xFF0000FFu);
+    pt_color_picker_add_preset(NULL, 0xFF0000FFu);
+    pt_color_picker_clear_presets(NULL);
+    pt_color_picker_open(NULL);
+    pt_color_picker_close(NULL);
+    pt_color_picker_set_on_change(NULL, NULL, NULL);
+    pt_check(!pt_color_picker_set_hex(NULL, "#FFFFFF"));
+    pt_check(pt_color_picker_get_color(NULL) == 0x000000FFu);
+    pt_check(pt_color_picker_get_hex(NULL)[0] == '\0');
+    pt_check(pt_color_picker_get_preset_count(NULL) == 0u);
+    pt_check(pt_color_picker_get_preset(NULL, 0u) == 0x00000000u);
+    pt_check(!pt_color_picker_is_open(NULL));
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.picker");
@@ -1142,6 +1400,9 @@ int main(void) {
     test_number_values();
     test_number_keyboard_and_pointer(app);
     test_number_callbacks_and_null(app);
+    test_color_values();
+    test_color_keyboard_and_pointer(app);
+    test_color_limits_and_teardown(app);
     pt_app_destroy(app);
     return pt_test_finish("picker");
 }

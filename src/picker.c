@@ -46,6 +46,7 @@ static void pt_date_next_click(pt_widget *button, void *user_data);
 static void pt_date_today_click(pt_widget *button, void *user_data);
 static void pt_number_up_click(pt_widget *button, void *user_data);
 static void pt_number_down_click(pt_widget *button, void *user_data);
+static void color_rebuild_popup(pt_widget *host, pt_picker *picker);
 
 pt_picker *pt_picker_of(const pt_widget *widget) {
     if (!widget || widget->kind != pt_widget_combobox) {
@@ -472,6 +473,13 @@ static pt_widget *picker_content_create(pt_picker *picker, pt_widget *host) {
         content->align_items = pt_align_stretch;
         content->a11y_role = pt_a11y_role_group;
         pt_widget_set_a11y_name(content, "Calendar");
+        picker->content = content;
+    } else if (picker->kind == pt_picker_kind_color) {
+        content = pt_column_create(NULL);
+        content->gap = 4.0f;
+        content->align_items = pt_align_stretch;
+        content->a11y_role = pt_a11y_role_group;
+        pt_widget_set_a11y_name(content, "Colours");
         picker->content = content;
     }
     return content;
@@ -1020,6 +1028,343 @@ static bool number_key(pt_widget *host, pt_picker *picker, uint32_t keysym,
     return false;
 }
 
+/* ---------- colour picker internals ---------- */
+
+static int color_hex_digit(char value) {
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'a' && value <= 'f') {
+        return value - 'a' + 10;
+    }
+    if (value >= 'A' && value <= 'F') {
+        return value - 'A' + 10;
+    }
+    return -1;
+}
+
+static void color_hex_into(char *buffer, size_t size, pt_color color) {
+    unsigned r = (unsigned)((color >> 24) & 0xFFu);
+    unsigned g = (unsigned)((color >> 16) & 0xFFu);
+    unsigned b = (unsigned)((color >> 8) & 0xFFu);
+    unsigned a = (unsigned)(color & 0xFFu);
+    if (a == 0xFFu) {
+        snprintf(buffer, size, "#%02X%02X%02X", r, g, b);
+    } else {
+        snprintf(buffer, size, "#%02X%02X%02X%02X", r, g, b, a);
+    }
+}
+
+static bool color_parse_hex(const char *text, pt_color *out) {
+    if (!text || !out) {
+        return false;
+    }
+    while (*text && isspace((unsigned char)*text)) {
+        ++text;
+    }
+    if (*text == '#') {
+        ++text;
+    }
+    const char *end = text;
+    while (*end && !isspace((unsigned char)*end)) {
+        ++end;
+    }
+    size_t length = (size_t)(end - text);
+    while (*end && isspace((unsigned char)*end)) {
+        ++end;
+    }
+    if (*end != '\0' || (length != 6u && length != 8u)) {
+        return false;
+    }
+    uint8_t rgba[4] = {0, 0, 0, 0xFFu};
+    for (size_t i = 0; i < length; ++i) {
+        int digit = color_hex_digit(text[i]);
+        if (digit < 0) {
+            return false;
+        }
+        rgba[i / 2u] = (uint8_t)(rgba[i / 2u] * 16u + (uint8_t)digit);
+    }
+    *out = ((pt_color)rgba[0] << 24) | ((pt_color)rgba[1] << 16) |
+           ((pt_color)rgba[2] << 8) | (pt_color)rgba[3];
+    return true;
+}
+
+static uint32_t color_preset_position(pt_picker *picker, pt_color color) {
+    if (!picker) {
+        return pt_list_index_none;
+    }
+    for (uint32_t i = 0; i < picker->preset_count; ++i) {
+        if (picker->presets[i] == color) {
+            return i;
+        }
+    }
+    return pt_list_index_none;
+}
+
+static void color_presets_reserve(pt_picker *picker, uint32_t count) {
+    if (count <= picker->preset_capacity) {
+        return;
+    }
+    uint32_t capacity = picker->preset_capacity ? picker->preset_capacity * 2u : 16u;
+    while (capacity < count) {
+        capacity *= 2u;
+    }
+    picker->presets = pt_realloc_mem(picker->presets,
+                                     (size_t)capacity * sizeof(*picker->presets));
+    picker->preset_capacity = capacity;
+}
+
+static void color_refresh_text(pt_widget *host, pt_picker *picker) {
+    color_hex_into(picker->hex, sizeof(picker->hex), picker->color);
+    picker_set_field_text(host, picker, picker->hex);
+}
+
+static void color_commit(pt_widget *host, pt_picker *picker, pt_color color, bool notify) {
+    bool changed = picker->color != color;
+    picker->color = color;
+    color_refresh_text(host, picker);
+    uint32_t match = color_preset_position(picker, color);
+    if (match != pt_list_index_none) {
+        picker->highlighted = match;
+    }
+    if (picker->popup && pt_popup_is_open(picker->popup)) {
+        color_rebuild_popup(host, picker);
+    }
+    pt_widget_a11y_emit(host, pt_a11y_event_value_changed);
+    pt_widget_mark_dirty(host, false);
+    if (changed && notify && picker->on_color) {
+        picker->on_color(host, color, picker->color_data);
+    }
+}
+
+/* The host swatch sits in the leading padding, before the entry child. */
+static void color_host_paint(pt_widget *host, pt_paint_context *context, void *user_data) {
+    pt_picker *picker = user_data;
+    if (!picker || picker->kind != pt_picker_kind_color) {
+        return;
+    }
+    float height = pt_paint_height(context);
+    float size = 18.0f;
+    float x = host->padding_left;
+    float y = (height - size) * 0.5f;
+    if (size <= 0.0f || x + size > pt_paint_width(context)) {
+        return;
+    }
+    pt_paint_fill_rounded_rect(context, x, y, size, size, 5.0f, picker->color);
+    pt_paint_stroke_rect(context, x, y, size, size, 1.0f, 0x00000060u);
+}
+
+/* Each palette cell draws its swatch over the row surface; the row itself
+ * carries the name and the selected/current state. */
+static void color_cell_paint(pt_widget *cell, pt_paint_context *context, void *user_data) {
+    pt_widget *host = user_data;
+    pt_picker *picker = pt_picker_of_kind(host, pt_picker_kind_color);
+    if (!picker || cell->list_index >= picker->preset_count) {
+        return;
+    }
+    pt_color color = picker->presets[cell->list_index];
+    float width = pt_paint_width(context);
+    float height = pt_paint_height(context);
+    float inset = 3.0f;
+    if (width <= inset * 2.0f || height <= inset * 2.0f) {
+        return;
+    }
+    pt_paint_fill_rounded_rect(context, inset, inset, width - inset * 2.0f,
+                               height - inset * 2.0f, 5.0f, color);
+    unsigned luminance = (((color >> 24) & 0xFFu) * 299u + ((color >> 16) & 0xFFu) * 587u +
+                          ((color >> 8) & 0xFFu) * 114u) /
+                         1000u;
+    pt_color ring = luminance > 140u ? 0x00000090u : 0xFFFFFFA0u;
+    if (cell->row_selected) {
+        pt_paint_stroke_rect(context, 1.0f, 1.0f, width - 2.0f, height - 2.0f, 2.0f, ring);
+    }
+    if (cell->row_current) {
+        pt_paint_fill_rounded_rect(context, width * 0.5f - 2.0f, height * 0.5f - 2.0f, 4.0f,
+                                   4.0f, 2.0f, ring);
+    }
+}
+
+static void color_mark_cells(pt_widget *widget, pt_widget *host, pt_picker *picker) {
+    if (!widget) {
+        return;
+    }
+    if (widget->kind == pt_widget_list_row && widget->popup_owner == host) {
+        widget->row_selected =
+            widget->list_index != pt_list_index_none &&
+            widget->list_index == picker->highlighted;
+        widget->row_current = widget->list_index != pt_list_index_none &&
+                              widget->list_index < picker->preset_count &&
+                              picker->presets[widget->list_index] == picker->color;
+    }
+    for (pt_widget *child = widget->first_child; child; child = child->next_sibling) {
+        color_mark_cells(child, host, picker);
+    }
+}
+
+static void color_rebuild_popup(pt_widget *host, pt_picker *picker) {
+    if (!picker || !picker->content) {
+        return;
+    }
+    pt_widget_clear_children(picker->content);
+    if (picker->preset_count == 0) {
+        pt_widget *label = pt_label_create(picker->content, "No presets");
+        label->a11y_role = pt_a11y_role_label;
+        pt_widget_set_font_size(label, 12.0f);
+        picker->content->requested_width = 160.0f;
+        picker->content->requested_height = 28.0f;
+        return;
+    }
+    pt_widget *grid = pt_grid_create(picker->content, 6u);
+    pt_grid_set_gap(grid, 4.0f, 4.0f);
+    grid->a11y_role = pt_a11y_role_list;
+    pt_widget_set_a11y_name(grid, "Colour presets");
+    for (uint32_t i = 0; i < picker->preset_count; ++i) {
+        pt_widget *cell = pt_widget_new(NULL, pt_widget_list_row);
+        cell->list_index = i;
+        cell->popup_owner = host;
+        cell->enabled = true;
+        cell->row_selected = i == picker->highlighted;
+        cell->row_current = picker->presets[i] == picker->color;
+        cell->radius = 7.0f;
+        cell->a11y_role = pt_a11y_role_list_item;
+        char name[16];
+        color_hex_into(name, sizeof(name), picker->presets[i]);
+        cell->a11y_name = pt_strdup(name);
+        pt_widget_set_height(cell, 30.0f);
+        pt_widget_set_padding(cell, 0.0f, 0.0f, 0.0f, 0.0f);
+        pt_widget_set_paint_callback(cell, color_cell_paint, host);
+        pt_widget_append(grid, cell);
+    }
+    uint32_t rows = (picker->preset_count + 5u) / 6u;
+    picker->content->requested_width = 6.0f * 30.0f + 5.0f * 4.0f;
+    picker->content->requested_height = (float)rows * 30.0f + (float)(rows - 1u) * 4.0f;
+}
+
+static void color_move_highlight(pt_widget *host, pt_picker *picker, int delta) {
+    if (picker->preset_count == 0) {
+        return;
+    }
+    uint32_t index = picker->highlighted;
+    if (index >= picker->preset_count) {
+        uint32_t match = color_preset_position(picker, picker->color);
+        index = match == pt_list_index_none ? 0u : match;
+    } else {
+        int next = (int)index + delta;
+        if (next < 0) {
+            next = (int)picker->preset_count - 1;
+        } else if ((uint32_t)next >= picker->preset_count) {
+            next = 0;
+        }
+        index = (uint32_t)next;
+    }
+    picker->highlighted = index;
+    color_mark_cells(picker->content, host, picker);
+    pt_widget_mark_dirty(host, false);
+    pt_widget_a11y_emit(host, pt_a11y_event_state_changed);
+}
+
+static bool color_key(pt_widget *host, pt_picker *picker, uint32_t keysym,
+                      uint32_t modifiers, const char *utf8) {
+    pt_unused(utf8);
+    bool open = picker->popup && pt_popup_is_open(picker->popup);
+    bool alt = (modifiers & (uint32_t)pt_key_modifier_alt) != 0;
+    const char *field_text = picker->field ? pt_widget_get_text(picker->field) : "";
+    bool dirty = strcmp(field_text, picker->hex) != 0;
+
+    if (keysym == XKB_KEY_Escape) {
+        if (open) {
+            pt_picker_close(host);
+            return true;
+        }
+        if (dirty) {
+            picker_set_field_text(host, picker, picker->hex);
+            return true;
+        }
+        return false;
+    }
+    if (keysym == XKB_KEY_Tab || keysym == XKB_KEY_ISO_Left_Tab) {
+        if (open) {
+            pt_picker_close(host);
+        }
+        return false;
+    }
+    if (keysym == XKB_KEY_F4 || (alt && (keysym == XKB_KEY_Down || keysym == XKB_KEY_Up))) {
+        if (open) {
+            pt_picker_close(host);
+        } else {
+            pt_picker_open(host);
+        }
+        return true;
+    }
+    if (!open) {
+        if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
+            if (dirty) {
+                pt_color committed = picker->color;
+                if (color_parse_hex(field_text, &committed)) {
+                    color_commit(host, picker, committed, true);
+                } else {
+                    pt_set_error("pt_color_picker: '%s' is not a colour", field_text);
+                    picker_set_field_text(host, picker, picker->hex);
+                }
+                return true;
+            }
+            pt_picker_open(host);
+            return pt_picker_is_open(host);
+        }
+        return false;
+    }
+
+    if (keysym == XKB_KEY_Left) {
+        color_move_highlight(host, picker, -1);
+        return true;
+    }
+    if (keysym == XKB_KEY_Right) {
+        color_move_highlight(host, picker, 1);
+        return true;
+    }
+    if (keysym == XKB_KEY_Up) {
+        color_move_highlight(host, picker, -6);
+        return true;
+    }
+    if (keysym == XKB_KEY_Down) {
+        color_move_highlight(host, picker, 6);
+        return true;
+    }
+    if (keysym == XKB_KEY_Home) {
+        picker->highlighted = 0;
+        color_mark_cells(picker->content, host, picker);
+        pt_widget_mark_dirty(host, false);
+        return true;
+    }
+    if (keysym == XKB_KEY_End) {
+        if (picker->preset_count > 0) {
+            picker->highlighted = picker->preset_count - 1u;
+            color_mark_cells(picker->content, host, picker);
+            pt_widget_mark_dirty(host, false);
+        }
+        return true;
+    }
+    if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
+        pt_window *window = pt_widget_window(host);
+        if (dirty) {
+            pt_color committed = picker->color;
+            if (color_parse_hex(field_text, &committed)) {
+                color_commit(host, picker, committed, true);
+            } else {
+                pt_set_error("pt_color_picker: '%s' is not a colour", field_text);
+                picker_set_field_text(host, picker, picker->hex);
+            }
+        } else if (picker->highlighted < picker->preset_count) {
+            color_commit(host, picker, picker->presets[picker->highlighted], true);
+        }
+        if (pt_widget_attached(window, host)) {
+            pt_picker_close(host);
+        }
+        return true;
+    }
+    return false;
+}
+
 /* ---------- popup lifecycle ---------- */
 
 static void picker_restore_display(pt_widget *host, pt_picker *picker) {
@@ -1035,6 +1380,8 @@ static void picker_restore_display(pt_widget *host, pt_picker *picker) {
         picker_set_field_text(host, picker, picker->display);
     } else if (picker->kind == pt_picker_kind_number) {
         picker_set_field_text(host, picker, picker->number_display);
+    } else if (picker->kind == pt_picker_kind_color) {
+        picker_set_field_text(host, picker, picker->hex);
     }
 }
 
@@ -1045,7 +1392,16 @@ static void picker_on_dismiss(pt_popup *popup, void *user_data) {
         return;
     }
     pt_widget *host = picker->host;
+    /* A closed picker keeps no popup surface: the next open builds a fresh
+     * content tree. That makes the handle lifetime exactly the open interval,
+     * so a window that destroys its popups before its widgets can never leave
+     * a stale handle behind (a closed popup is not in the overlay list). */
+    picker->popup = NULL;
+    picker->content = NULL;
     picker_restore_display(host, picker);
+    if (popup) {
+        pt_popup_destroy(popup);
+    }
     pt_widget_a11y_emit(host, pt_a11y_event_state_changed);
     pt_widget_mark_dirty(host, false);
     pt_window *window = pt_widget_window(host);
@@ -1063,6 +1419,8 @@ static void picker_rebuild_popup(pt_widget *host, pt_picker *picker) {
         select_rebuild_popup(host, picker);
     } else if (picker->kind == pt_picker_kind_date) {
         date_rebuild_popup(host, picker);
+    } else if (picker->kind == pt_picker_kind_color) {
+        color_rebuild_popup(host, picker);
     }
     pt_window *window = pt_widget_window(host);
     if (window) {
@@ -1091,6 +1449,10 @@ static void picker_popup_show(pt_widget *host, pt_picker *picker) {
     if (!pt_popup_show(picker->popup,
                        (pt_popup_anchor){anchor.x, anchor.y + anchor.h + picker_popup_gap,
                                          anchor.w, anchor.h})) {
+        pt_popup *failed = picker->popup;
+        picker->popup = NULL;
+        picker->content = NULL;
+        pt_popup_destroy(failed);
         return;
     }
     /* pt_window_popup_show installs a NULL owner; the picker needs its own so
@@ -1119,6 +1481,9 @@ void pt_picker_open(pt_widget *host) {
         }
         picker->focus_date = focus;
         date_sync_view(picker);
+    } else if (picker->kind == pt_picker_kind_color) {
+        uint32_t match = color_preset_position(picker, picker->color);
+        picker->highlighted = match == pt_list_index_none ? 0u : match;
     }
     picker_popup_show(host, picker);
 }
@@ -1243,6 +1608,17 @@ void pt_picker_choose(pt_widget *host, uint32_t position) {
         }
         pt_window *window = pt_widget_window(host);
         date_commit(host, picker, day, true);
+        if (pt_widget_attached(window, host)) {
+            pt_picker_close(host);
+        }
+        return;
+    }
+    if (picker->kind == pt_picker_kind_color) {
+        if (position >= picker->preset_count) {
+            return;
+        }
+        pt_window *window = pt_widget_window(host);
+        color_commit(host, picker, picker->presets[position], true);
         if (pt_widget_attached(window, host)) {
             pt_picker_close(host);
         }
@@ -1509,6 +1885,9 @@ bool pt_picker_key(pt_widget *host, uint32_t keysym, uint32_t modifiers, const c
     if (picker->kind == pt_picker_kind_number) {
         return number_key(host, picker, keysym, modifiers, utf8);
     }
+    if (picker->kind == pt_picker_kind_color) {
+        return color_key(host, picker, keysym, modifiers, utf8);
+    }
     return false;
 }
 
@@ -1553,8 +1932,9 @@ void pt_picker_layout(pt_widget *host, const pt_layout_ctx *ctx, pt_rect inner) 
         }
         return;
     }
-    float width = pt_max_float(0.0f, inner.w - pt_combobox_chevron_reserve);
-    pt_widget_layout_child(picker->field, inner.x, inner.y, width, inner.h, ctx);
+    float lead = picker->kind == pt_picker_kind_color ? 24.0f : 0.0f;
+    float width = pt_max_float(0.0f, inner.w - lead - pt_combobox_chevron_reserve);
+    pt_widget_layout_child(picker->field, inner.x + lead, inner.y, width, inner.h, ctx);
 }
 
 void pt_picker_preferred(pt_widget *host, const pt_layout_ctx *ctx, float *width,
@@ -1577,6 +1957,8 @@ void pt_picker_preferred(pt_widget *host, const pt_layout_ctx *ctx, float *width
     float reserve = pt_combobox_chevron_reserve;
     if (picker && picker->kind == pt_picker_kind_number) {
         reserve = 44.0f;
+    } else if (picker && picker->kind == pt_picker_kind_color) {
+        reserve = 50.0f;
     }
     *width = pt_max_float(picker_min_width, natural + padding_w + reserve);
     *height = pt_widget_theme_metric_value(host, pt_theme_metric_control_height) + padding_h;
@@ -1620,6 +2002,7 @@ void pt_picker_free(pt_widget *host) {
     free(picker->options);
     free(picker->visible);
     free(picker->query);
+    free(picker->presets);
     free(picker);
 }
 
@@ -2208,6 +2591,153 @@ void pt_number_picker_set_on_change(pt_widget *picker_widget, pt_number_callback
     picker->number_data = user_data;
 }
 
+/* ---------- public API: colour picker ---------- */
+
+static const pt_color picker_default_presets[] = {
+    0xEF4444FFu, 0xF97316FFu, 0xF59E0BFFu, 0xEAB308FFu, 0x84CC16FFu, 0x22C55EFFu,
+    0x10B981FFu, 0x14B8A6FFu, 0x06B6D4FFu, 0x0EA5E9FFu, 0x3B82F6FFu, 0x6366F1FFu,
+    0x8B5CF6FFu, 0xA855F7FFu, 0xD946EFFFu, 0xEC4899FFu, 0xF43F5EFFu, 0x64748BFFu,
+    0x000000FFu, 0x334155FFu, 0x94A3B8FFu, 0xE2E8F0FFu, 0xFFFFFFFFu, 0x00000000u,
+};
+
+pt_widget *pt_color_picker_create(pt_widget *parent) {
+    pt_widget *host = pt_combobox_create(parent);
+    if (!host) {
+        return NULL;
+    }
+    pt_combobox_state *state = host->extra;
+    pt_picker *picker = pt_alloc_zeroed(1, sizeof(*picker));
+    picker->kind = pt_picker_kind_color;
+    picker->host = host;
+    picker->color = 0x000000FFu;
+    picker->highlighted = 0u;
+    state->picker = picker;
+    state->mode = pt_combobox_filterable;
+    host->focusable = false;
+    picker_field_create(host, picker, "#RRGGBB");
+    state->field = picker->field;
+    color_presets_reserve(picker, (uint32_t)pt_len(picker_default_presets));
+    for (size_t i = 0; i < pt_len(picker_default_presets); ++i) {
+        picker->presets[picker->preset_count++] = picker_default_presets[i];
+    }
+    color_refresh_text(host, picker);
+    pt_widget_set_paint_callback(host, color_host_paint, picker);
+    pt_widget_set_a11y_role(host, pt_a11y_role_combo_box);
+    pt_widget_set_a11y_name(host, "Colour");
+    return host;
+}
+
+void pt_color_picker_set_color(pt_widget *picker_widget, pt_color color) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    if (picker) {
+        color_commit(picker_widget, picker, color, false);
+    }
+}
+
+pt_color pt_color_picker_get_color(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    return picker ? picker->color : 0x000000FFu;
+}
+
+bool pt_color_picker_set_hex(pt_widget *picker_widget, const char *hex) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    if (!picker) {
+        return false;
+    }
+    pt_color parsed = picker->color;
+    if (!color_parse_hex(hex, &parsed)) {
+        pt_set_error("pt_color_picker: '%s' is not a colour", hex ? hex : "");
+        picker_set_field_text(picker_widget, picker, picker->hex);
+        return false;
+    }
+    color_commit(picker_widget, picker, parsed, false);
+    return true;
+}
+
+const char *pt_color_picker_get_hex(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    return picker ? picker->hex : "";
+}
+
+void pt_color_picker_add_preset(pt_widget *picker_widget, pt_color color) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    if (!picker) {
+        return;
+    }
+    if (picker->preset_count >= PT_COLOR_MAX_PRESETS) {
+        pt_set_error("pt_color_picker: the preset limit (%u) is reached",
+                     PT_COLOR_MAX_PRESETS);
+        return;
+    }
+    color_presets_reserve(picker, picker->preset_count + 1u);
+    picker->presets[picker->preset_count++] = color;
+    if (color == picker->color) {
+        picker->highlighted = picker->preset_count - 1u;
+    }
+    if (pt_picker_is_open(picker_widget)) {
+        color_rebuild_popup(picker_widget, picker);
+        pt_rect anchor = picker_anchor(picker_widget);
+        pt_popup_reposition(picker->popup,
+                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+        pt_window *window = pt_widget_window(picker_widget);
+        if (window) {
+            pt_window_invalidate_layout(window, NULL);
+        }
+    }
+    pt_widget_mark_dirty(picker_widget, false);
+}
+
+void pt_color_picker_clear_presets(pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    if (!picker) {
+        return;
+    }
+    picker->preset_count = 0;
+    picker->highlighted = 0u;
+    if (pt_picker_is_open(picker_widget)) {
+        color_rebuild_popup(picker_widget, picker);
+        pt_rect anchor = picker_anchor(picker_widget);
+        pt_popup_reposition(picker->popup,
+                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+    }
+    pt_widget_mark_dirty(picker_widget, false);
+}
+
+uint32_t pt_color_picker_get_preset_count(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    return picker ? picker->preset_count : 0u;
+}
+
+pt_color pt_color_picker_get_preset(const pt_widget *picker_widget, uint32_t index) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    if (!picker || index >= picker->preset_count) {
+        return 0x00000000u;
+    }
+    return picker->presets[index];
+}
+
+void pt_color_picker_open(pt_widget *picker_widget) {
+    pt_picker_open(picker_widget);
+}
+
+void pt_color_picker_close(pt_widget *picker_widget) {
+    pt_picker_close(picker_widget);
+}
+
+bool pt_color_picker_is_open(const pt_widget *picker_widget) {
+    return pt_picker_is_open(picker_widget);
+}
+
+void pt_color_picker_set_on_change(pt_widget *picker_widget, pt_color_callback callback,
+                                   void *user_data) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_color);
+    if (!picker) {
+        return;
+    }
+    picker->on_color = callback;
+    picker->color_data = user_data;
+}
+
 /* ---------- accessibility hooks ---------- */
 
 bool pt_picker_a11y_value(const pt_widget *widget, float *value) {
@@ -2233,6 +2763,13 @@ bool pt_picker_a11y_value(const pt_widget *widget, float *value) {
             return false;
         }
         *value = (float)picker->value;
+        return true;
+    }
+    if (picker->kind == pt_picker_kind_color) {
+        /* The accessible scalar is the RGB part normalised to [0, 1]; alpha is
+         * not representable in the float value interface. */
+        uint32_t rgb = ((uint32_t)picker->color >> 8) & 0xFFFFFFu;
+        *value = (float)((double)rgb / 16777215.0);
         return true;
     }
     return false;

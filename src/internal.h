@@ -723,6 +723,15 @@ typedef struct pt_picker {
     pt_widget *down;
     pt_number_callback on_number;
     void *number_data;
+
+    /* Colour picker. */
+    pt_color color;
+    char hex[16];
+    pt_color *presets;
+    uint32_t preset_count;
+    uint32_t preset_capacity;
+    pt_color_callback on_color;
+    void *color_data;
 } pt_picker;
 
 /* The picker behind a widget, or NULL for anything else (including a plain
