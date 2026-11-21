@@ -73,6 +73,13 @@ typedef struct pt_overlay_garbage {
     struct pt_overlay_garbage *next;
 } pt_overlay_garbage;
 
+/* A widget destroyed from inside a paint callback. The free is deferred until
+ * the current paint pass returns so the traversal never touches freed memory. */
+typedef struct pt_paint_garbage {
+    pt_widget *widget;
+    struct pt_paint_garbage *next;
+} pt_paint_garbage;
+
 typedef struct pt_menu_item {
     char *label;
     char *shortcut;
@@ -991,6 +998,7 @@ typedef struct pt_fd_watch {
     uint32_t events;
     pt_fd_callback callback;
     void *user_data;
+    bool owned;
     struct pt_fd_watch *next;
 } pt_fd_watch;
 
@@ -1000,6 +1008,10 @@ struct pt_app {
     pt_window *first_window;
     pt_timer *timers;
     pt_fd_watch *fd_watches;
+    /* Watches removed during dispatch. Freeing (and closing an owned fd) waits
+     * until the callback returns (standards section 11). */
+    pt_fd_watch *fd_garbage;
+    int fd_dispatch_depth;
     uint64_t next_timer_id;
     uint64_t next_fd_watch_id;
     bool running;
@@ -1046,12 +1058,24 @@ struct pt_window {
     bool needs_layout;
     bool needs_draw;
     bool decorated;
+    pt_decoration_mode decoration_mode;
+    pt_decoration_mode effective_decoration;
     bool csd;
     bool resizable;
     bool keyboard_focused;
     uint32_t modifiers;
     bool maximized;
     bool fullscreen;
+    bool tiled_left;
+    bool tiled_right;
+    bool tiled_top;
+    bool tiled_bottom;
+    bool wm_capabilities_known;
+    bool maximize_enabled;
+    bool minimize_enabled;
+    bool fullscreen_enabled;
+    int bounds_max_width;
+    int bounds_max_height;
     bool animating;
     bool redraw_scheduled;
     bool pointer_inside;
@@ -1065,11 +1089,17 @@ struct pt_window {
     float pointer_x;
     float pointer_y;
     double last_paint_time;
-    uint32_t last_click_time;
-    float last_click_x;
-    float last_click_y;
-    uint32_t click_count;
+    /* Double-click tracking is per button: a right-click between two left
+     * clicks must not reset the left click count (standards section 9). */
+    uint32_t last_click_time[32];
+    float last_click_x[32];
+    float last_click_y[32];
+    uint32_t click_count[32];
     uint32_t pointer_serial;
+    uint32_t key_serial;
+    /* Serial of the last pointer release or key press that can legally trigger
+     * a primary-selection set. Programmatic sets without one return false. */
+    uint32_t primary_serial;
     uint32_t pointer_buttons;
     int32_t touch_id;
     bool touch_active;
@@ -1166,6 +1196,7 @@ struct pt_window {
 
     pt_overlay *overlays;
     pt_overlay_garbage *overlay_garbage;
+    pt_paint_garbage *paint_garbage;
     pt_toast *first_toast;
     pt_widget *tooltip_target;
     uint64_t tooltip_timer;
@@ -1188,6 +1219,9 @@ struct pt_window {
     pt_widget *layout_root;
     bool last_layout_partial;
     uint32_t paint_visits;
+    /* True while the window paint pass is running. Used to reject a re-entrant
+     * pt_window_paint_pixels and to defer widget destruction (see paint.c). */
+    bool in_paint;
 
     struct pt_wayland_window *platform_window;
 };
@@ -1196,6 +1230,12 @@ pt_window *pt_window_alloc(pt_app *app, const char *title, int width, int height
 void pt_window_free(pt_window *window);
 void pt_window_apply_configure(pt_window *window, int width, int height);
 bool pt_window_paint(pt_window *window, pt_canvas *canvas);
+/* Pure full-frame snapshot: paints without touching damage, needs_draw,
+ * redraw_scheduled, last_paint_time or deferred overlay garbage. */
+bool pt_window_paint_snapshot(pt_window *window, pt_canvas *canvas);
+/* Frees widgets whose destruction was deferred by a paint callback. Runs at the
+ * end of a paint pass and when the window is freed. */
+void pt_window_paint_collect(pt_window *window);
 void pt_window_input_pointer_enter(pt_window *window, float x, float y);
 void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_t time);
 void pt_window_input_pointer_leave(pt_window *window);
@@ -1203,6 +1243,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
                                     float y, uint32_t serial, uint32_t time);
 void pt_window_input_axis(pt_window *window, float x, float y, float delta);
 void pt_window_input_keyboard_focus(pt_window *window, bool focused, uint32_t serial);
+/* Records the serial of a key press before raw/focused dispatch, so a consumed
+ * key still updates the serial a primary-selection set can use. */
+void pt_window_input_key_serial(pt_window *window, uint32_t serial);
 void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
                          const char *utf8, bool pressed);
 void pt_window_set_input_modifiers(pt_window *window, uint32_t modifiers);
@@ -1226,6 +1269,9 @@ void pt_window_input_ime_preedit(pt_window *window, const char *text);
 void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
                                  int32_t cursor_begin, int32_t cursor_end,
                                  uint32_t delete_before, uint32_t delete_after);
+/* Applies a text-input-v3 v2 action. Submit activates the focused entry through
+ * its submit callback; it never synthesizes an Enter key or inserts "\n". */
+void pt_window_input_ime_action(pt_window *window, uint32_t action);
 void pt_window_gesture_input(pt_window *window, pt_gesture_kind kind, pt_gesture_phase phase,
                              uint32_t fingers, float dx, float dy, float scale,
                              float rotation);
@@ -1306,6 +1352,15 @@ void pt_window_tick(pt_window *window);
 void pt_window_set_fullscreen(pt_window *window, bool fullscreen);
 void pt_window_set_maximized(pt_window *window, bool maximized);
 void pt_window_set_csd_enabled(pt_window *window, bool enabled);
+/* Applies a decoration mode from the compositor's configure. Never changes the
+ * requested mode; the effective mode and header follow the answer. */
+void pt_window_apply_decoration_mode(pt_window *window, pt_decoration_mode mode);
+void pt_window_apply_toplevel_state(pt_window *window, bool maximized, bool fullscreen,
+                                    bool tiled_left, bool tiled_right, bool tiled_top,
+                                    bool tiled_bottom);
+void pt_window_apply_configure_bounds(pt_window *window, int width, int height);
+void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
+                                     bool fullscreen);
 void pt_window_update_caret_timer(pt_window *window);
 bool pt_window_has_editable_focus(const pt_window *window);
 bool pt_window_wants_ime(const pt_window *window);
@@ -1374,6 +1429,7 @@ void pt_platform_window_set_title(pt_window *window);
 void pt_platform_window_set_min_size(pt_window *window);
 void pt_platform_window_set_resizable(pt_window *window);
 void pt_platform_window_set_decorated(pt_window *window);
+void pt_platform_window_set_decoration_mode(pt_window *window);
 void pt_platform_window_schedule_draw(pt_window *window);
 void pt_platform_window_begin_move(pt_window *window, uint32_t serial);
 void pt_platform_window_begin_resize(pt_window *window, uint32_t serial, uint32_t edges);
@@ -1384,7 +1440,7 @@ void pt_platform_window_set_cursor(pt_window *window, pt_cursor cursor);
 void pt_platform_window_set_size_hint(pt_window *window);
 void pt_platform_clipboard_set(pt_window *window, const char *text);
 char *pt_platform_clipboard_get(pt_window *window);
-void pt_platform_primary_set(pt_window *window, const char *text);
+void pt_platform_primary_set(pt_window *window, const char *text, uint32_t serial);
 char *pt_platform_primary_get(pt_window *window);
 bool pt_platform_begin_drag_types(pt_window *window, const pt_drag_data *types,
                                   uint32_t count);

@@ -178,7 +178,7 @@ static void keyboard_enter(void *data, struct wl_keyboard *keyboard, uint32_t se
     (void)keyboard;
     (void)keys;
     pt_platform *platform = data;
-    platform->serial = serial;
+    platform->enter_serial = serial;
     pt_wl_surface_ref ref = {0};
     pt_window *window =
         pt_wl_resolve_surface(platform, surface, &ref) ? ref.window : NULL;
@@ -216,7 +216,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t seri
     if (!window) {
         return;
     }
-    platform->serial = serial;
+    platform->key_serial = serial;
     uint32_t keycode = key + 8u;
     bool pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED;
     if (!pressed) {
@@ -228,6 +228,9 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t seri
     if (!platform->xkb_state) {
         return;
     }
+    /* Record the key-press serial before dispatch. A raw callback that consumes
+     * the key must not hide the serial from a later primary-selection set. */
+    pt_window_input_key_serial(window, serial);
     uint32_t keysym = (uint32_t)xkb_state_key_get_one_sym(platform->xkb_state, keycode);
     uint32_t modifiers = keyboard_modifiers(platform);
     char utf8[32] = {0};
@@ -362,7 +365,7 @@ static void pointer_enter(void *data, struct wl_pointer *pointer, uint32_t seria
     (void)pointer;
     pt_platform *platform = data;
     platform->pointer_serial = serial;
-    platform->serial = serial;
+    platform->enter_serial = serial;
     pt_wl_surface_ref ref = {0};
     bool found = pt_wl_resolve_surface(platform, surface, &ref);
     pt_window *window = found ? ref.window : NULL;
@@ -415,7 +418,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
                            uint32_t time, uint32_t button, uint32_t state) {
     (void)pointer;
     pt_platform *platform = data;
-    platform->serial = serial;
+    platform->button_serial = serial;
     if (!platform->pointer_focus) {
         return;
     }
@@ -1114,7 +1117,7 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
     pt_wl_surface_ref ref = {0};
     bool found = pt_wl_resolve_surface(platform, surface, &ref);
     pt_window *window = found ? ref.window : NULL;
-    platform->serial = serial;
+    platform->touch_serial = serial;
     platform->touch_focus = window;
     platform->touch_offset_x = found ? ref.offset_x : 0.0f;
     platform->touch_offset_y = found ? ref.offset_y : 0.0f;
@@ -1207,6 +1210,8 @@ static void text_input_leave(void *data, struct zwp_text_input_v3 *text_input,
     platform->pending_preedit_end = -1;
     platform->pending_delete_before = 0;
     platform->pending_delete_after = 0;
+    platform->pending_action = 0;
+    platform->pending_action_serial = 0;
     if (window) {
         pt_window_input_ime_preedit(window, "");
     }
@@ -1241,11 +1246,41 @@ static void text_input_delete_surrounding_text(void *data,
     platform->pending_delete_after = after_length;
 }
 
+/* v2 action is double-buffered like the text events: record it and apply it on
+ * the next done, after the commit/delete/preedit state has been evaluated. */
+static void text_input_action(void *data, struct zwp_text_input_v3 *text_input,
+                              uint32_t action, uint32_t serial) {
+    (void)text_input;
+    pt_platform *platform = data;
+    if (action == ZWP_TEXT_INPUT_V3_ACTION_SUBMIT) {
+        platform->pending_action = action;
+        platform->pending_action_serial = serial;
+    }
+}
+
+/* Preedit hints describe presentation, not text. Pt keeps its composition
+ * buffer unchanged and never turns a hint into a key or commit. */
+static void text_input_preedit_hint(void *data, struct zwp_text_input_v3 *text_input,
+                                    uint32_t start, uint32_t end, uint32_t hint) {
+    (void)data;
+    (void)text_input;
+    (void)start;
+    (void)end;
+    (void)hint;
+}
+
+static void text_input_language(void *data, struct zwp_text_input_v3 *text_input,
+                                const char *language) {
+    (void)data;
+    (void)text_input;
+    (void)language;
+}
+
 static void text_input_done(void *data, struct zwp_text_input_v3 *text_input,
                             uint32_t serial) {
     (void)text_input;
     pt_platform *platform = data;
-    platform->serial = serial;
+    platform->ime_serial = serial;
     pt_window *window = platform->text_input_window;
     char *preedit = platform->pending_preedit;
     char *commit = platform->pending_commit;
@@ -1253,15 +1288,21 @@ static void text_input_done(void *data, struct zwp_text_input_v3 *text_input,
     int32_t preedit_end = platform->pending_preedit_end;
     uint32_t delete_before = platform->pending_delete_before;
     uint32_t delete_after = platform->pending_delete_after;
+    uint32_t action = platform->pending_action;
     platform->pending_preedit = NULL;
     platform->pending_commit = NULL;
     platform->pending_preedit_begin = -1;
     platform->pending_preedit_end = -1;
     platform->pending_delete_before = 0;
     platform->pending_delete_after = 0;
+    platform->pending_action = 0;
+    platform->pending_action_serial = 0;
     if (window) {
         pt_window_input_ime_compose(window, commit, preedit ? preedit : "", preedit_begin,
                                     preedit_end, delete_before, delete_after);
+        if (action) {
+            pt_window_input_ime_action(window, action);
+        }
     }
     free(preedit);
     free(commit);
@@ -1274,6 +1315,9 @@ static const struct zwp_text_input_v3_listener text_input_listener = {
     .commit_string = text_input_commit_string,
     .delete_surrounding_text = text_input_delete_surrounding_text,
     .done = text_input_done,
+    .action = text_input_action,
+    .preedit_hint = text_input_preedit_hint,
+    .language = text_input_language,
 };
 
 #define ime_surrounding_max 4000u
@@ -1363,6 +1407,23 @@ static void ime_request_surrounding_text(pt_platform *platform, pt_window *windo
     free(text);
 }
 
+static void ime_set_available_actions(pt_platform *platform, bool submit) {
+    if (!platform || !platform->text_input ||
+        wl_proxy_get_version((struct wl_proxy *)platform->text_input) < 2) {
+        return;
+    }
+    struct wl_array actions;
+    wl_array_init(&actions);
+    if (submit) {
+        uint32_t *action = wl_array_add(&actions, sizeof(*action));
+        if (action) {
+            *action = ZWP_TEXT_INPUT_V3_ACTION_SUBMIT;
+        }
+    }
+    zwp_text_input_v3_set_available_actions(platform->text_input, &actions);
+    wl_array_release(&actions);
+}
+
 static void ime_request_state(pt_platform *platform, pt_window *window) {
     if (!platform || !platform->text_input || !window) {
         return;
@@ -1371,11 +1432,19 @@ static void ime_request_state(pt_platform *platform, pt_window *window) {
         zwp_text_input_v3_set_content_type(platform->text_input,
                                            ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
                                            ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_TERMINAL);
+        /* A terminal accepts text, not activation. Clear any submit action a
+         * previous entry focus advertised. */
+        ime_set_available_actions(platform, false);
         return;
     }
     zwp_text_input_v3_set_content_type(platform->text_input, ime_content_hint(window->focused),
                                        ime_content_purpose(window->focused));
     ime_request_surrounding_text(platform, window);
+    /* Advertise the v2 submit action for a single-line entry when the compositor
+     * bound text-input v2 or later. Without this request an IME never sends the
+     * action event, and an action is never emulated from an Enter key. */
+    ime_set_available_actions(platform, window->focused &&
+                                           window->focused->kind == pt_widget_entry);
 }
 
 void pt_platform_ime_set_enabled(pt_window *window, bool enabled) {
@@ -1415,7 +1484,10 @@ void pt_platform_ime_set_cursor_rect(pt_window *window, int x, int y, int width,
         !platform->text_input_enabled || platform->text_input_window != window) {
         return;
     }
-    ime_request_surrounding_text(platform, window);
+    /* Resend the complete state (content type, surrounding text, available
+     * actions) with every cursor update, not just the rectangle. A focus
+     * desync in the compositor/IME must not be able to leave stale state. */
+    ime_request_state(platform, window);
     zwp_text_input_v3_set_cursor_rectangle(platform->text_input, x, y, width, height);
     zwp_text_input_v3_commit(platform->text_input);
 }
@@ -2054,6 +2126,13 @@ static const struct wl_data_source_listener data_source_listener = {
     .action = data_source_action,
 };
 
+static uint32_t platform_latest_trigger_serial(const pt_platform *platform) {
+    /* Clipboard has no single protocol-mandated source; prefer the most recent
+     * pointer-button serial and fall back to the most recent key press. Primary
+     * selection never uses this helper: it carries its own explicit serial. */
+    return platform->button_serial ? platform->button_serial : platform->key_serial;
+}
+
 void pt_platform_clipboard_set(pt_window *window, const char *text) {
     pt_platform *platform = pt_platform_for(window);
     if (!platform) {
@@ -2069,8 +2148,9 @@ void pt_platform_clipboard_set(pt_window *window, const char *text) {
     }
     struct wl_data_source *old_source = platform->data_source;
     platform->data_source = NULL;
+    uint32_t serial = platform_latest_trigger_serial(platform);
     if (!platform->clipboard_text) {
-        wl_data_device_set_selection(platform->data_device, NULL, platform->serial);
+        wl_data_device_set_selection(platform->data_device, NULL, serial);
     } else {
         struct wl_data_source *source =
             wl_data_device_manager_create_data_source(platform->data_device_manager);
@@ -2078,7 +2158,7 @@ void pt_platform_clipboard_set(pt_window *window, const char *text) {
             platform->data_source = source;
             wl_data_source_add_listener(source, &data_source_listener, platform);
             platform_offers_text(source);
-            wl_data_device_set_selection(platform->data_device, source, platform->serial);
+            wl_data_device_set_selection(platform->data_device, source, serial);
         }
     }
     if (old_source) {
@@ -2281,9 +2361,12 @@ static const struct zwp_primary_selection_device_v1_listener primary_device_list
     .selection = primary_device_selection,
 };
 
-void pt_platform_primary_set(pt_window *window, const char *text) {
+void pt_platform_primary_set(pt_window *window, const char *text, uint32_t serial) {
     pt_platform *platform = pt_platform_for(window);
     if (!platform) {
+        return;
+    }
+    if (serial == 0) {
         return;
     }
     free(platform->primary_text);
@@ -2297,7 +2380,7 @@ void pt_platform_primary_set(pt_window *window, const char *text) {
     }
     if (!platform->primary_text) {
         zwp_primary_selection_device_v1_set_selection(platform->primary_device, NULL,
-                                                      platform->serial);
+                                                      serial);
         return;
     }
     struct zwp_primary_selection_source_v1 *source =
@@ -2311,8 +2394,7 @@ void pt_platform_primary_set(pt_window *window, const char *text) {
     zwp_primary_selection_source_v1_offer(source, "text/plain");
     zwp_primary_selection_source_v1_offer(source, "UTF8_STRING");
     zwp_primary_selection_source_v1_offer(source, "STRING");
-    zwp_primary_selection_device_v1_set_selection(platform->primary_device, source,
-                                                  platform->serial);
+    zwp_primary_selection_device_v1_set_selection(platform->primary_device, source, serial);
 }
 
 char *pt_platform_primary_get(pt_window *window) {
@@ -2698,8 +2780,11 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
     } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
         platform->viewporter = wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
     } else if (strcmp(interface, zwp_text_input_manager_v3_interface.name) == 0) {
+        /* v2 adds the action and preedit_hint events. Bind it when available so
+         * submit is delivered as an action, never as a synthetic Enter key. */
+        uint32_t bound = version < 2 ? version : 2;
         platform->text_input_manager = wl_registry_bind(
-            registry, name, &zwp_text_input_manager_v3_interface, 1);
+            registry, name, &zwp_text_input_manager_v3_interface, bound);
         ensure_seat_devices(platform);
     } else if (strcmp(interface, zwp_pointer_gestures_v1_interface.name) == 0) {
         uint32_t bound = version < 3 ? version : 3;

@@ -142,7 +142,10 @@ static void unlink_window(pt_window *window) {
 }
 
 static void update_window_header(pt_window *window) {
-    window->header_height = (window->csd && window->decorated) ? pt_header_height : 0.0f;
+    /* Fullscreen always hides the header; the effective decoration mode decides
+     * whether Pt is allowed to own one at all (standards section 8). */
+    window->header_height =
+        (window->csd && window->decorated && !window->fullscreen) ? pt_header_height : 0.0f;
     pt_window_invalidate_layout(window, NULL);
     window->needs_draw = true;
     pt_window_damage_all(window);
@@ -161,7 +164,12 @@ pt_window *pt_window_alloc(pt_app *app, const char *title, int width, int height
     window->render_scale = 1.0f;
     window->open = true;
     window->decorated = true;
+    window->decoration_mode = pt_decoration_client;
+    window->effective_decoration = pt_decoration_client;
     window->csd = true;
+    window->maximize_enabled = true;
+    window->minimize_enabled = true;
+    window->fullscreen_enabled = true;
     window->resizable = true;
     pt_window_invalidate_layout(window, NULL);
     window->needs_draw = true;
@@ -212,6 +220,7 @@ void pt_window_free(pt_window *window) {
         pt_platform_window_destroy(window);
     }
     pt_window_overlays_free(window);
+    pt_window_paint_collect(window);
     if (window->root) {
         window->root->window = NULL;
         pt_widget_free_tree(window->root);
@@ -304,10 +313,18 @@ char *pt_window_clipboard_get(pt_window *window) {
 }
 
 bool pt_window_primary_set(pt_window *window, const char *text) {
-    if (!window) {
+    if (!window || window->primary_serial == 0) {
         return false;
     }
-    pt_platform_primary_set(window, text);
+    pt_platform_primary_set(window, text, window->primary_serial);
+    return true;
+}
+
+bool pt_window_primary_set_serial(pt_window *window, const char *text, uint32_t serial) {
+    if (!window || serial == 0) {
+        return false;
+    }
+    pt_platform_primary_set(window, text, serial);
     return true;
 }
 
@@ -323,10 +340,22 @@ void pt_window_set_size(pt_window *window, int width, int height) {
         return;
     }
     if (width > 0) {
+        if (window->bounds_max_width > 0 && width > window->bounds_max_width) {
+            width = window->bounds_max_width;
+        }
+        if (width < window->min_width) {
+            width = window->min_width;
+        }
         window->width = width;
         window->requested_width = width;
     }
     if (height > 0) {
+        if (window->bounds_max_height > 0 && height > window->bounds_max_height) {
+            height = window->bounds_max_height;
+        }
+        if (height < window->min_height) {
+            height = window->min_height;
+        }
         window->height = height;
         window->requested_height = height;
     }
@@ -374,9 +403,48 @@ void pt_window_set_decorated(pt_window *window, bool decorated) {
         return;
     }
     window->decorated = decorated;
+    /* Header ownership only. This deliberately does not request a decoration
+     * mode: false means "Pt draws nothing" on every compositor. */
     pt_platform_window_set_decorated(window);
     update_window_header(window);
     pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_set_decoration_mode(pt_window *window, pt_decoration_mode mode) {
+    if (!window) {
+        return;
+    }
+    if (mode != pt_decoration_auto && mode != pt_decoration_client &&
+        mode != pt_decoration_server) {
+        return;
+    }
+    if (window->decoration_mode == mode) {
+        return;
+    }
+    window->decoration_mode = mode;
+    pt_platform_window_set_decoration_mode(window);
+}
+
+pt_decoration_mode pt_window_get_decoration_mode(const pt_window *window) {
+    return window ? window->decoration_mode : pt_decoration_auto;
+}
+
+pt_decoration_mode pt_window_get_effective_decoration_mode(const pt_window *window) {
+    if (!window) {
+        return pt_decoration_auto;
+    }
+    return window->effective_decoration;
+}
+
+bool pt_window_maximize(pt_window *window) {
+    if (!window || !window->resizable || !window->maximize_enabled) {
+        return false;
+    }
+    if (!window->maximized) {
+        window->maximized = true;
+        pt_platform_window_toggle_maximize(window);
+    }
+    return true;
 }
 
 void pt_window_set_csd_enabled(pt_window *window, bool enabled) {
@@ -385,6 +453,68 @@ void pt_window_set_csd_enabled(pt_window *window, bool enabled) {
     }
     window->csd = enabled;
     update_window_header(window);
+    pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_apply_decoration_mode(pt_window *window, pt_decoration_mode mode) {
+    if (!window) {
+        return;
+    }
+    if (mode != pt_decoration_client && mode != pt_decoration_server) {
+        mode = pt_decoration_client;
+    }
+    window->effective_decoration = mode;
+    bool client_side = mode == pt_decoration_client;
+    if (window->csd == client_side) {
+        return;
+    }
+    pt_window_set_csd_enabled(window, client_side);
+    if (!client_side) {
+        pt_platform_window_set_min_size(window);
+    }
+}
+
+void pt_window_apply_toplevel_state(pt_window *window, bool maximized, bool fullscreen,
+                                    bool tiled_left, bool tiled_right, bool tiled_top,
+                                    bool tiled_bottom) {
+    if (!window) {
+        return;
+    }
+    bool header_changed = window->fullscreen != fullscreen;
+    window->maximized = maximized;
+    window->fullscreen = fullscreen;
+    window->tiled_left = tiled_left;
+    window->tiled_right = tiled_right;
+    window->tiled_top = tiled_top;
+    window->tiled_bottom = tiled_bottom;
+    if (header_changed) {
+        update_window_header(window);
+    }
+    /* Pt paints a square, shadowless window surface, so "drop radius/shadow when
+     * tiled" costs nothing here; tiling additionally disables edge-resize
+     * affordances because the compositor owns the tile geometry. */
+    window->needs_draw = true;
+    pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_apply_configure_bounds(pt_window *window, int width, int height) {
+    if (!window) {
+        return;
+    }
+    window->bounds_max_width = width > 0 ? width : 0;
+    window->bounds_max_height = height > 0 ? height : 0;
+}
+
+void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
+                                     bool fullscreen) {
+    if (!window) {
+        return;
+    }
+    window->wm_capabilities_known = true;
+    window->maximize_enabled = maximize;
+    window->minimize_enabled = minimize;
+    window->fullscreen_enabled = fullscreen;
+    window->needs_draw = true;
     pt_platform_window_schedule_draw(window);
 }
 
@@ -536,6 +666,9 @@ void pt_window_set_maximized(pt_window *window, bool maximized) {
     if (!window || window->maximized == maximized) {
         return;
     }
+    if (maximized && (!window->resizable || !window->maximize_enabled)) {
+        return;
+    }
     window->maximized = maximized;
     pt_platform_window_toggle_maximize(window);
 }
@@ -672,14 +805,19 @@ static pt_csd_part csd_button_at(const pt_window *window, float x, float y) {
         return pt_csd_part_close;
     }
     pt_rect maximize = csd_maximize_rect(window);
-    if (pt_rect_contains(maximize, x, y)) {
+    if (window->maximize_enabled && pt_rect_contains(maximize, x, y)) {
         return pt_csd_part_maximize;
     }
     pt_rect minimize = csd_minimize_rect(window);
-    if (pt_rect_contains(minimize, x, y)) {
+    if (window->minimize_enabled && pt_rect_contains(minimize, x, y)) {
         return pt_csd_part_minimize;
     }
     return pt_csd_part_none;
+}
+
+static bool window_is_tiled(const pt_window *window) {
+    return window->tiled_left || window->tiled_right || window->tiled_top ||
+           window->tiled_bottom;
 }
 
 static pt_csd_part csd_part_at(const pt_window *window, float x, float y) {
@@ -690,7 +828,8 @@ static pt_csd_part csd_part_at(const pt_window *window, float x, float y) {
      * with header_height == 0) still need their edges to be resizable; only
      * the titlebar and buttons require an actual header. */
     float margin = pt_resize_margin;
-    if (window->resizable && !window->maximized && !window->fullscreen) {
+    if (window->resizable && !window->maximized && !window->fullscreen &&
+        !window_is_tiled(window)) {
         bool left = x < margin;
         bool right = x >= (float)window->width - margin;
         bool top = y < margin;
@@ -773,10 +912,10 @@ static pt_cursor csd_cursor(pt_csd_part part) {
 }
 
 static void paint_csd_button(pt_canvas *canvas, pt_window *window, pt_csd_part part,
-                             pt_rect rect, bool hovered, bool pressed) {
+                             pt_rect rect, bool hovered, bool pressed, bool enabled) {
     pt_color background = pt_color_transparent;
     bool close = part == pt_csd_part_close;
-    if (hovered || pressed) {
+    if (enabled && (hovered || pressed)) {
         background = close ? window_theme_color(window, pt_theme_danger, 0xE5484DFFu)
                            : window_theme_color(window, pt_theme_surface_hover,
                                                 0x232C3AFFu);
@@ -788,9 +927,12 @@ static void paint_csd_button(pt_canvas *canvas, pt_window *window, pt_csd_part p
         pt_canvas_fill_rounded_rect(canvas, rect.x + 2.0f, rect.y + 3.0f, rect.w - 4.0f,
                                     rect.h - 6.0f, 7.0f, background);
     }
-    pt_color color = close && (hovered || pressed)
+    pt_color color = close && enabled && (hovered || pressed)
                          ? window_theme_color(window, pt_theme_accent_text, 0xFFFFFFFFu)
                          : window_theme_color(window, pt_theme_text_muted, 0x8B98A9FFu);
+    if (!enabled) {
+        color = pt_color_alpha(color, 90);
+    }
     float cx = rect.x + rect.w * 0.5f;
     float cy = rect.y + rect.h * 0.5f;
     switch (part) {
@@ -833,13 +975,13 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
     pt_rect close = csd_close_rect(window);
     paint_csd_button(canvas, window, pt_csd_part_minimize, minimize,
                      window->hovered_csd == pt_csd_part_minimize,
-                     window->active_csd == pt_csd_part_minimize);
+                     window->active_csd == pt_csd_part_minimize, window->minimize_enabled);
     paint_csd_button(canvas, window, pt_csd_part_maximize, maximize,
                      window->hovered_csd == pt_csd_part_maximize,
-                     window->active_csd == pt_csd_part_maximize);
+                     window->active_csd == pt_csd_part_maximize, window->maximize_enabled);
     paint_csd_button(canvas, window, pt_csd_part_close, close,
                      window->hovered_csd == pt_csd_part_close,
-                     window->active_csd == pt_csd_part_close);
+                     window->active_csd == pt_csd_part_close, true);
 
     const char *title = window->title ? window->title : "";
     if (*title) {
@@ -867,16 +1009,87 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
     }
 }
 
-static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force_full) {
+typedef struct paint_snapshot_state {
+    pt_rect damage;
+    pt_rect damage_tiles[pt_damage_tile_capacity];
+    uint8_t damage_tile_count;
+    bool damage_valid;
+    bool damage_full;
+    pt_rect last_damage;
+    pt_rect last_damage_tiles[pt_damage_tile_capacity];
+    uint8_t last_damage_tile_count;
+    bool last_damage_full;
+    pt_widget *layout_root;
+    bool last_layout_partial;
+    bool needs_layout;
+    bool needs_draw;
+    bool redraw_scheduled;
+    double last_paint_time;
+    uint32_t paint_visits;
+} paint_snapshot_state;
+
+static void paint_state_save(const pt_window *window, paint_snapshot_state *state) {
+    state->damage = window->damage;
+    memcpy(state->damage_tiles, window->damage_tiles, sizeof(state->damage_tiles));
+    state->damage_tile_count = window->damage_tile_count;
+    state->damage_valid = window->damage_valid;
+    state->damage_full = window->damage_full;
+    state->last_damage = window->last_damage;
+    memcpy(state->last_damage_tiles, window->last_damage_tiles,
+           sizeof(state->last_damage_tiles));
+    state->last_damage_tile_count = window->last_damage_tile_count;
+    state->last_damage_full = window->last_damage_full;
+    state->layout_root = window->layout_root;
+    state->last_layout_partial = window->last_layout_partial;
+    state->needs_layout = window->needs_layout;
+    state->needs_draw = window->needs_draw;
+    state->redraw_scheduled = window->redraw_scheduled;
+    state->last_paint_time = window->last_paint_time;
+    state->paint_visits = window->paint_visits;
+}
+
+static void paint_state_restore(pt_window *window, const paint_snapshot_state *state) {
+    window->damage = state->damage;
+    memcpy(window->damage_tiles, state->damage_tiles, sizeof(state->damage_tiles));
+    window->damage_tile_count = state->damage_tile_count;
+    window->damage_valid = state->damage_valid;
+    window->damage_full = state->damage_full;
+    window->last_damage = state->last_damage;
+    memcpy(window->last_damage_tiles, state->last_damage_tiles,
+           sizeof(state->last_damage_tiles));
+    window->last_damage_tile_count = state->last_damage_tile_count;
+    window->last_damage_full = state->last_damage_full;
+    window->layout_root = state->layout_root;
+    window->last_layout_partial = state->last_layout_partial;
+    window->needs_layout = state->needs_layout;
+    window->needs_draw = state->needs_draw;
+    window->redraw_scheduled = state->redraw_scheduled;
+    window->last_paint_time = state->last_paint_time;
+    window->paint_visits = state->paint_visits;
+}
+
+static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force_full,
+                                bool snapshot) {
     if (!window || !canvas || !window->root) {
         return false;
     }
-    if (!force_full && !window->needs_draw && !window->needs_layout &&
+    if (window->in_paint) {
+        pt_log_warn("pt_window_paint_pixels called during a paint pass");
+        pt_set_error("paint callbacks must not paint re-entrantly");
+        return false;
+    }
+    if (!snapshot && !force_full && !window->needs_draw && !window->needs_layout &&
         !window->damage_valid && !window->damage_full) {
         window->last_damage = (pt_rect){0.0f, 0.0f, 0.0f, 0.0f};
         window->last_damage_full = false;
         return true;
     }
+    paint_snapshot_state saved;
+    if (snapshot) {
+        paint_state_save(window, &saved);
+        force_full = true;
+    }
+    window->in_paint = true;
     pt_layout_ctx ctx = pt_layout_context_for(window->root);
     if (!window->app) {
         ctx = (pt_layout_ctx){canvas->scale > 0.0f ? canvas->scale : 1.0f, "sans-serif"};
@@ -936,6 +1149,16 @@ static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force
         }
     }
 
+    window->in_paint = false;
+    if (snapshot) {
+        /* A snapshot is a pure observation: the next live frame must still see
+         * its damage, scheduled redraw, paint timestamp and deferred overlays. */
+        paint_state_restore(window, &saved);
+        /* A widget destroyed by the callback itself is still freed: deferral
+         * protects the traversal, not the snapshot's overlay bookkeeping. */
+        pt_window_paint_collect(window);
+        return true;
+    }
     window->damage_valid = false;
     window->damage_full = false;
     window->damage_tile_count = 0;
@@ -944,7 +1167,22 @@ static bool window_paint_common(pt_window *window, pt_canvas *canvas, bool force
     window->redraw_scheduled = false;
     window->last_paint_time = pt_now_seconds();
     pt_window_overlays_collect(window);
+    pt_window_paint_collect(window);
     return true;
+}
+
+void pt_window_paint_collect(pt_window *window) {
+    if (!window) {
+        return;
+    }
+    pt_paint_garbage *item = window->paint_garbage;
+    window->paint_garbage = NULL;
+    while (item) {
+        pt_paint_garbage *next = item->next;
+        pt_widget_free_tree(item->widget);
+        free(item);
+        item = next;
+    }
 }
 
 bool pt_window_paint(pt_window *window, pt_canvas *canvas) {
@@ -952,11 +1190,15 @@ bool pt_window_paint(pt_window *window, pt_canvas *canvas) {
         return false;
     }
     pt_window_damage_all(window);
-    return window_paint_common(window, canvas, true);
+    return window_paint_common(window, canvas, true, false);
+}
+
+bool pt_window_paint_snapshot(pt_window *window, pt_canvas *canvas) {
+    return window_paint_common(window, canvas, true, true);
 }
 
 bool pt_window_paint_damage(pt_window *window, pt_canvas *canvas) {
-    return window_paint_common(window, canvas, false);
+    return window_paint_common(window, canvas, false, false);
 }
 
 /* ---------- input ---------- */
@@ -1062,6 +1304,15 @@ static bool emit_pointer_event(pt_window *window, pt_pointer_phase phase, float 
     if (!window || !window->pointer_callback) {
         return false;
     }
+    uint32_t click_count = 0;
+    bool button_pressed = window->pointer_buttons != 0;
+    if (phase == pt_pointer_phase_down || phase == pt_pointer_phase_up) {
+        uint32_t slot = button & 31u;
+        click_count = window->click_count[slot];
+        button_pressed = phase == pt_pointer_phase_down;
+    } else {
+        click_count = window->click_count[0x110u & 31u];
+    }
     pt_pointer_event event = {
         .phase = phase,
         .x = x,
@@ -1070,8 +1321,8 @@ static bool emit_pointer_event(pt_window *window, pt_pointer_phase phase, float 
         .delta_y = delta_y,
         .button = button,
         .modifiers = window->modifiers,
-        .click_count = window->click_count,
-        .pressed = window->pointer_buttons != 0,
+        .click_count = click_count,
+        .pressed = button_pressed,
     };
     return window->pointer_callback(window, &event, window->pointer_data);
 }
@@ -1098,12 +1349,10 @@ void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_
     window->pointer_x = x;
     window->pointer_y = y;
     pt_window_press_motion(window, x, y);
-    bool custom = emit_pointer_event(window, pt_pointer_phase_motion, x, y, delta_x, delta_y,
-                                     0);
-    if (custom) {
-        update_hover(window, x, y);
-        return;
-    }
+    /* Motion is advisory (window.h): the return value is ignored so hover,
+     * drag tracking and long-press cancellation keep working. Only down/up and
+     * axis callbacks can consume an event. */
+    (void)emit_pointer_event(window, pt_pointer_phase_motion, x, y, delta_x, delta_y, 0);
     if (window->drag_pending && window->drag_widget) {
         float dx = x - window->drag_start_x;
         float dy = y - window->drag_start_y;
@@ -1216,23 +1465,34 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
         window->pointer_serial = serial;
     }
     if (pressed) {
-        window->pointer_buttons |= 1u << (button & 31u);
+        uint32_t slot = button & 31u;
+        window->pointer_buttons |= 1u << slot;
         uint32_t event_time = time ? time : (uint32_t)pt_now_ms();
-        bool same_spot = fabsf(x - window->last_click_x) <= 6.0f &&
-                         fabsf(y - window->last_click_y) <= 6.0f;
-        bool repeat = window->click_count > 0 && same_spot &&
-                      event_time >= window->last_click_time &&
-                      event_time - window->last_click_time <= 400u;
-        window->click_count = repeat ? window->click_count + 1u : 1u;
-        if (window->click_count > 3u) {
-            window->click_count = 1u;
+        bool same_spot = fabsf(x - window->last_click_x[slot]) <= 6.0f &&
+                         fabsf(y - window->last_click_y[slot]) <= 6.0f;
+        bool repeat = window->click_count[slot] > 0 && same_spot &&
+                      event_time >= window->last_click_time[slot] &&
+                      event_time - window->last_click_time[slot] <= 400u;
+        window->click_count[slot] = repeat ? window->click_count[slot] + 1u : 1u;
+        if (window->click_count[slot] > 3u) {
+            window->click_count[slot] = 1u;
         }
-        window->last_click_time = event_time;
-        window->last_click_x = x;
-        window->last_click_y = y;
+        window->last_click_time[slot] = event_time;
+        window->last_click_x[slot] = x;
+        window->last_click_y[slot] = y;
     } else {
-        window->pointer_buttons &= ~(1u << (button & 31u));
-        pt_window_press_end(window, x, y);
+        uint32_t slot = button & 31u;
+        window->pointer_buttons &= ~(1u << slot);
+        /* Only the primary button owns widget press state, text selection and
+         * the long-press machinery; a right or middle release must leave a
+         * held left button undisturbed. A completed left release is also the
+         * legal trigger for a primary-selection publish. */
+        if (button == 0x110u) {
+            if (serial != 0) {
+                window->primary_serial = serial;
+            }
+            pt_window_press_end(window, x, y);
+        }
     }
     if (pressed) {
         pt_window_momentum_stop(window);
@@ -1265,6 +1525,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
         }
         if (part == pt_csd_part_minimize || part == pt_csd_part_maximize ||
             part == pt_csd_part_close) {
+            if (part == pt_csd_part_maximize && !window->maximize_enabled) {
+                return;
+            }
             window->active_csd = part;
             window->needs_draw = true;
             pt_window_damage_rect(window, (pt_rect){0.0f, 0.0f, (float)window->width,
@@ -1297,8 +1560,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
                     pt_widget_kind_is_text_input(hit->kind) ||
                     hit->kind == pt_widget_table_cell || hit->kind == pt_widget_table_row ||
                     hit->kind == pt_widget_tree_row;
-                if (multi_clickable && window->click_count > 1) {
-                    pt_widget_pointer_multi_click(hit, x, y, window->click_count);
+                uint32_t left_clicks = window->click_count[0x110u & 31u];
+                if (multi_clickable && left_clicks > 1) {
+                    pt_widget_pointer_multi_click(hit, x, y, left_clicks);
                 }
             }
             window->needs_draw = true;
@@ -1335,8 +1599,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
                                                  active->height}, x, y);
         if (click_selection) {
             pt_widget_pointer_down(active, x, y);
-            if (pt_widget_kind_is_text_input(active->kind) && window->click_count > 1) {
-                pt_widget_pointer_multi_click(active, x, y, window->click_count);
+            uint32_t left_clicks = window->click_count[0x110u & 31u];
+            if (pt_widget_kind_is_text_input(active->kind) && left_clicks > 1) {
+                pt_widget_pointer_multi_click(active, x, y, left_clicks);
             }
             pt_widget_pointer_up(active, inside);
         } else {
@@ -1603,6 +1868,14 @@ void pt_window_set_input_modifiers(pt_window *window, uint32_t modifiers) {
     }
 }
 
+void pt_window_input_key_serial(pt_window *window, uint32_t serial) {
+    if (!window || serial == 0) {
+        return;
+    }
+    window->key_serial = serial;
+    window->primary_serial = serial;
+}
+
 void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
                          const char *utf8, bool pressed) {
     if (!window) {
@@ -1719,6 +1992,19 @@ void pt_window_input_ime_compose(pt_window *window, const char *commit, const ch
     update_ime_rect(window);
     window->needs_draw = true;
     pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_input_ime_action(pt_window *window, uint32_t action) {
+    if (!window || action != 1u /* ZWP_TEXT_INPUT_V3_ACTION_SUBMIT */) {
+        return;
+    }
+    /* An IME submit is an activation request, not a key press. Route it to the
+     * focused entry's submit callback so no "\n" is inserted and no raw/legacy
+     * key callback observes a fabricated Enter. */
+    if (window->focused && window->focused->enabled &&
+        window->focused->kind == pt_widget_entry) {
+        pt_widget_activate(window->focused);
+    }
 }
 
 void pt_window_set_ime_callbacks(pt_window *window, pt_ime_commit_callback commit_callback,

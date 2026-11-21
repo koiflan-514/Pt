@@ -340,10 +340,31 @@ bool pt_paint_font_metrics(pt_paint_context *context, const char *family, float 
 
 bool pt_window_paint_pixels(pt_window *window, uint32_t *pixels, int width,
                             int height) {
+    return pt_window_paint_pixels_ex(window, pixels, width, height, NULL);
+}
+
+bool pt_window_paint_pixels_ex(pt_window *window, uint32_t *pixels, int width,
+                               int height, const pt_paint_pixels_desc *desc) {
     if (!window || !pixels || width <= 0 || height <= 0) {
         return false;
     }
+    int stride = width;
+    float scale = 1.0f;
+    if (desc) {
+        if (desc->stride != 0) {
+            stride = desc->stride;
+        }
+        if (desc->scale != 0.0f) {
+            scale = desc->scale;
+        }
+        if (desc->format != pt_pixel_format_argb8888_premultiplied) {
+            return false;
+        }
+    }
+    if (stride < width || !isfinite(scale) || scale <= 0.0f) {
+        return false;
+    }
     pt_canvas canvas;
-    pt_canvas_init(&canvas, pixels, width, height, width, 1.0f);
-    return pt_window_paint(window, &canvas);
+    pt_canvas_init(&canvas, pixels, width, height, stride, scale);
+    return pt_window_paint_snapshot(window, &canvas);
 }

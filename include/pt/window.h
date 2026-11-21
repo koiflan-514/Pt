@@ -32,6 +32,9 @@
  * the window's last pointer serial, or the seat's most recent serial when no
  * pointer event has landed on the window. Menus, tooltips and select-only
  * combobox popups inherit this contract (see overlay.h).
+ * Decoration. set_mode is a preference; the compositor's configure is
+ * authoritative. Requested and effective modes are tracked separately.
+ * pt_window_set_decorated controls only whether Pt paints its header.
  */
 
 #ifdef __cplusplus
@@ -60,9 +63,35 @@ pt_api void pt_window_set_size(pt_window *window, int width, int height);
 pt_api void pt_window_set_min_size(pt_window *window, int width, int height);
 pt_api void pt_window_set_resizable(pt_window *window, bool resizable);
 
-/* A decorated window gets a Pt-drawn title bar when the compositor permits
- * client-side decorations. Defaults to true. */
+/* Decoration negotiation. set_mode is a preference and the compositor's
+ * configure is authoritative: a client request may be answered with the other
+ * mode (Sway tiles force server-side, Q-DEC-001). The default is an explicit
+ * client-side request; Pt draws the header itself when it is also decorated.
+ * pt_decoration_auto means "prefer client-side, accept a forced server-side",
+ * and pt_decoration_server asks the compositor to decorate. Since 1.1. */
+typedef enum pt_decoration_mode {
+    pt_decoration_auto = 0,
+    pt_decoration_client = 1,
+    pt_decoration_server = 2
+} pt_decoration_mode;
+
+/* A decorated window lets Pt draw its own header (default true). This never
+ * requests server-side decoration: false means Pt draws nothing and no
+ * server-side mode is asked for. Requesting compositor decoration is a
+ * separate pt_window_set_decoration_mode(pt_decoration_server) choice. */
 pt_api void pt_window_set_decorated(pt_window *window, bool decorated);
+
+/* Requests a decoration preference. Sends a preference only when the request
+ * changes; the effective mode always follows the compositor's configure. The
+ * getters return the requested and effective modes. Since 1.1. */
+pt_api void pt_window_set_decoration_mode(pt_window *window, pt_decoration_mode mode);
+pt_api pt_decoration_mode pt_window_get_decoration_mode(const pt_window *window);
+pt_api pt_decoration_mode pt_window_get_effective_decoration_mode(const pt_window *window);
+
+/* Requests maximize. Returns false when the window is not resizable, the
+ * compositor did not advertise the maximize capability, or the window is NULL.
+ * The header's maximize button is disabled in the same case. Since 1.1. */
+pt_api bool pt_window_maximize(pt_window *window);
 pt_api void pt_window_request_redraw(pt_window *window);
 pt_api void pt_window_focus(pt_window *window, pt_widget *widget);
 
@@ -94,10 +123,13 @@ typedef void (*pt_focus_callback)(pt_window *window, bool focused, void *user_da
 pt_api void pt_window_set_focus_callback(pt_window *window, pt_focus_callback callback,
                                          void *user_data);
 
-/* Extended key callback. It runs after overlay key handling and before the
- * legacy key callback and focused-widget handling. Returning true consumes the
- * key. `utf8` is the xkb UTF-8 text for the key (may be NULL or empty for
- * non-text keys) and is valid only during the call. */
+/* Extended ("raw") key callback. Dispatch order is overlay key handling, this
+ * callback, the legacy key callback, then the focused widget. Returning true
+ * consumes the key for the remaining widget dispatch only: the window's
+ * modifier and latest-key-serial accounting still completes, so popup grabs and
+ * primary-selection serials cannot go stale. A consumed key never reaches
+ * text-input as an inserted commit. `utf8` is the xkb UTF-8 text for the key
+ * (may be NULL or empty for non-text keys) and is valid only during the call. */
 typedef bool (*pt_key_event_callback)(pt_window *window, uint32_t key, uint32_t modifiers,
                                       const char *utf8, void *user_data);
 pt_api void pt_window_set_key_event_callback(pt_window *window,
@@ -118,7 +150,10 @@ typedef enum pt_pointer_phase {
 /* A normalized pointer event in logical window coordinates. For axis events,
  * delta_y is positive downward and is expressed in the compositor's axis units
  * (typically 15 per wheel notch). `button` is a Linux BTN_* code for down/up and
- * 0 otherwise. `pressed` reports whether any pointer button is held. */
+ * 0 otherwise. For down and up, `pressed` reports the state of that button and
+ * `click_count` its own multi-click count; for the other phases `pressed`
+ * reports whether any pointer button is held. Non-left buttons never alter the
+ * left button's press state or click count. */
 typedef struct pt_pointer_event {
     pt_pointer_phase phase;
     float x;
@@ -131,9 +166,13 @@ typedef struct pt_pointer_event {
     bool pressed;
 } pt_pointer_event;
 
-/* Runs before overlay/widget pointer dispatch. Returning true consumes the
- * event. Enter, leave and motion callbacks are advisory: the return value is
- * ignored for them so hover tracking keeps working. */
+/* Runs before overlay/widget pointer dispatch. Returning true consumes down,
+ * up and axis events for the remaining widget dispatch of that event only;
+ * button state, click counts, focus and serials are updated before the callback
+ * and are never rolled back, and the next event is dispatched normally. Enter,
+ * leave and motion callbacks are advisory: the return value is ignored for them
+ * so hover tracking keeps working. The pointer event is borrowed for the call
+ * and becomes invalid when the callback returns. */
 typedef bool (*pt_pointer_callback)(pt_window *window, const pt_pointer_event *event,
                                     void *user_data);
 pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callback callback,
@@ -150,8 +189,18 @@ pt_api char *pt_window_clipboard_get(pt_window *window);
  * protocol, or headless, both sides fall back to an in-process buffer so the
  * API stays usable everywhere. Ownership and error contract match the
  * clipboard pair: the setter copies, the getter returns malloc'd UTF-8 owned
- * by the caller (release with pt_free()), NULL when empty or unavailable. */
+ * by the caller (release with pt_free()), NULL when empty or unavailable.
+ *
+ * Serial sourcing (standards section 9, Q-PRI-001). pt_window_primary_set
+ * publishes only when a pointer release or key press has supplied a legal
+ * trigger serial; after any run of input events it uses the most recent one.
+ * A programmatic selection with no triggering event returns false and sends
+ * nothing. Inside a callback that knows the trigger serial, call
+ * pt_window_primary_set_serial instead. Call the setter once when a drag
+ * selection completes, not on every motion event. Since 1.1. */
 pt_api bool pt_window_primary_set(pt_window *window, const char *text);
+pt_api bool pt_window_primary_set_serial(pt_window *window, const char *text,
+                                         uint32_t serial);
 pt_api char *pt_window_primary_get(pt_window *window);
 
 #ifdef __cplusplus

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static uint64_t pt_timer_add(pt_app *app, uint32_t milliseconds, pt_timer_callback callback,
                              void *user_data) {
@@ -54,9 +55,54 @@ void pt_app_cancel_timeout(pt_app *app, uint64_t timer_id) {
     }
 }
 
-uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events, pt_fd_callback callback,
-                         void *user_data) {
+static bool fd_watch_exists(const pt_app *app, int fd) {
+    for (const pt_fd_watch *watch = app ? app->fd_watches : NULL; watch;
+         watch = watch->next) {
+        if (watch->fd == fd) {
+            return true;
+        }
+    }
+    for (const pt_fd_watch *watch = app ? app->fd_garbage : NULL; watch;
+         watch = watch->next) {
+        if (watch->fd == fd) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void fd_watch_free(pt_fd_watch *watch) {
+    if (!watch) {
+        return;
+    }
+    if (watch->owned && watch->fd >= 0) {
+        close(watch->fd);
+    }
+    free(watch);
+}
+
+static void fd_garbage_collect(pt_app *app) {
+    if (!app || app->fd_dispatch_depth > 0) {
+        return;
+    }
+    pt_fd_watch *watch = app->fd_garbage;
+    app->fd_garbage = NULL;
+    while (watch) {
+        pt_fd_watch *next = watch->next;
+        fd_watch_free(watch);
+        watch = next;
+    }
+}
+
+static uint64_t fd_watch_add(pt_app *app, int fd, uint32_t events, pt_fd_callback callback,
+                             void *user_data, bool owned) {
     if (!app || fd < 0 || !callback || events == 0) {
+        return 0;
+    }
+    /* One watch per descriptor. A second watch would make poll results ambiguous
+     * and an owned fd would be closed twice. */
+    if (fd_watch_exists(app, fd)) {
+        pt_set_error("fd is already watched");
         return 0;
     }
     pt_fd_watch *watch = pt_alloc_zeroed(1, sizeof(*watch));
@@ -68,9 +114,20 @@ uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events, pt_fd_callback ca
     watch->events = events;
     watch->callback = callback;
     watch->user_data = user_data;
+    watch->owned = owned;
     watch->next = app->fd_watches;
     app->fd_watches = watch;
     return watch->id;
+}
+
+uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events, pt_fd_callback callback,
+                         void *user_data) {
+    return fd_watch_add(app, fd, events, callback, user_data, false);
+}
+
+uint64_t pt_app_watch_fd_owned(pt_app *app, int fd, uint32_t events,
+                               pt_fd_callback callback, void *user_data) {
+    return fd_watch_add(app, fd, events, callback, user_data, true);
 }
 
 void pt_app_unwatch_fd(pt_app *app, uint64_t watch_id) {
@@ -82,7 +139,15 @@ void pt_app_unwatch_fd(pt_app *app, uint64_t watch_id) {
         pt_fd_watch *watch = *link;
         if (watch->id == watch_id) {
             *link = watch->next;
-            free(watch);
+            watch->next = NULL;
+            if (app->fd_dispatch_depth > 0) {
+                /* The callback that just unwatched itself is still running. Keep
+                 * the record (and an owned fd) until dispatch returns. */
+                watch->next = app->fd_garbage;
+                app->fd_garbage = watch;
+            } else {
+                fd_watch_free(watch);
+            }
             return;
         }
         link = &watch->next;
@@ -116,10 +181,12 @@ static uint32_t fd_event_mask(short revents) {
     if (revents & POLLOUT) {
         mask |= pt_fd_event_write;
     }
-    if (revents & POLLERR) {
+    if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        /* Error, hangup and invalid-descriptor all take the error path so a
+         * callback always runs at least once for a dead watch. */
         mask |= pt_fd_event_error;
     }
-    if (revents & (POLLHUP | POLLNVAL)) {
+    if (revents & POLLHUP) {
         mask |= pt_fd_event_hangup;
     }
     return mask;
@@ -142,12 +209,15 @@ void pt_app_fd_watch_dispatch(pt_app *app, const struct pollfd *fds, size_t offs
     if (!app || !fds || !app->fd_watches) {
         return;
     }
+    /* Snapshot poll results by id: a callback may unwatch itself or another
+     * watch, and the list is not stable across callbacks. */
     size_t count = pt_app_fd_watch_count(app);
     uint64_t *ids = pt_alloc(count * sizeof(*ids));
     size_t index = 0;
     for (const pt_fd_watch *watch = app->fd_watches; watch; watch = watch->next) {
         ids[index++] = watch->id;
     }
+    app->fd_dispatch_depth++;
     for (size_t i = 0; i < count; ++i) {
         short revents = fds[offset + i].revents;
         if (revents == 0) {
@@ -161,6 +231,8 @@ void pt_app_fd_watch_dispatch(pt_app *app, const struct pollfd *fds, size_t offs
             watch->callback(app, fd_event_mask(revents), watch->user_data);
         }
     }
+    app->fd_dispatch_depth--;
+    fd_garbage_collect(app);
     free(ids);
 }
 
@@ -390,9 +462,11 @@ void pt_app_destroy(pt_app *app) {
     }
     while (app->fd_watches) {
         pt_fd_watch *next = app->fd_watches->next;
-        free(app->fd_watches);
+        fd_watch_free(app->fd_watches);
         app->fd_watches = next;
     }
+    app->fd_dispatch_depth = 0;
+    fd_garbage_collect(app);
     pt_a11y_bridge_stop(app);
     while (app->first_window) {
         pt_window_free(app->first_window);
