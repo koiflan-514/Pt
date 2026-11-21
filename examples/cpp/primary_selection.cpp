@@ -5,9 +5,9 @@
  *
  * Drag-select the left pane with the raw pointer callback, publish the range
  * from the button-release callback (where the event's serial is current), then
- * middle-click the right pane to read it back. Native strings returned by
- * pt_window_primary_get() are wrapped in std::unique_ptr with pt_free, and all
- * clip pushes are paired by an RAII guard.
+ * middle-click the right pane to read it back. The C++ wrapper returns the
+ * selection as a std::string (the C string is copied and released with
+ * pt_free), and all clip pushes are paired by an RAII guard.
  */
 
 #include <pt/pt.hpp>
@@ -202,8 +202,8 @@ std::string selection_text(const selection_state &state) {
 }
 
 std::string read_primary(const pt::window &window) {
-    std::unique_ptr<char, decltype(&pt_free)> owned(window.primary(), &pt_free);
-    return owned ? std::string(owned.get()) : std::string();
+    /* The C++ wrapper copies the C string and releases it with pt_free. */
+    return window.primary();
 }
 
 void set_status(selection_state &state, std::string_view text) {
