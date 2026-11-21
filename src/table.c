@@ -14,6 +14,7 @@
 
 #define pt_table_default_width 160.0f
 #define pt_table_min_width 48.0f
+#define pt_table_max_columns 1024u
 
 static pt_table_state *table_state(pt_widget *table) {
     if (!table || table->kind != pt_widget_table) {
@@ -326,6 +327,16 @@ void pt_table_set_column_count(pt_widget *table, uint32_t count) {
     if (!state) {
         return;
     }
+    /* Every column owns five state arrays and a header widget; an unbounded
+     * count from application data would abort in the allocator. */
+    if (count > pt_table_max_columns) {
+        pt_log_warn("table column count %u exceeds the %u column limit", count,
+                    pt_table_max_columns);
+        count = pt_table_max_columns;
+    }
+    /* Rebuilding the rows below destroys the inline editor, so commit is not
+     * possible and the editor must be detached first. */
+    pt_table_cancel_edit(table);
     uint32_t old_count = state->column_count;
     float *widths = pt_alloc_zeroed(count ? count : 1, sizeof(*widths));
     char **titles = pt_alloc_zeroed(count ? count : 1, sizeof(*titles));
@@ -1003,10 +1014,14 @@ bool pt_table_commit_edit(pt_widget *table) {
         cell->text = pt_strdup(text);
     }
     pt_widget_mark_dirty(table, true);
-    if (state->on_cell_edited) {
-        state->on_cell_edited(table, row, column, text, state->cell_edited_data);
-    }
+    pt_table_cell_edited_callback callback = state->on_cell_edited;
+    void *callback_data = state->cell_edited_data;
+    /* Emit before running user code: the callback is allowed to destroy the
+     * table, and nothing may touch it afterwards. */
     pt_widget_a11y_emit(table, pt_a11y_event_value_changed);
+    if (callback) {
+        callback(table, row, column, text, callback_data);
+    }
     free(text);
     return true;
 }

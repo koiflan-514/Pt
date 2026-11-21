@@ -29,6 +29,8 @@ typedef struct pt_edit_history {
 } pt_edit_history;
 
 #define pt_edit_history_cap 32
+/* Bounds the per-layout column arrays (and column_widths allocation). */
+#define pt_grid_max_columns 1024u
 
 static void entry_after_edit(pt_widget *entry);
 static bool kind_is_checked_control(pt_widget_kind kind);
@@ -80,6 +82,40 @@ bool pt_widget_is_descendant(const pt_widget *widget, const pt_widget *root) {
 
 static bool widget_is_descendant(const pt_widget *widget, const pt_widget *root) {
     return pt_widget_is_descendant(widget, root);
+}
+
+/* Callbacks may destroy their own widget, so compound operations cannot touch
+ * the widget after a notification and cannot safely read widget->parent. The
+ * window outlives callbacks (close is deferred), so a downward scan from its
+ * live trees is the authoritative liveness check. */
+static bool widget_tree_contains(const pt_widget *root, const pt_widget *widget) {
+    if (!root) {
+        return false;
+    }
+    if (root == widget) {
+        return true;
+    }
+    for (const pt_widget *child = root->first_child; child; child = child->next_sibling) {
+        if (widget_tree_contains(child, widget)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pt_widget_attached(const pt_window *window, const pt_widget *widget) {
+    if (!window || !widget) {
+        return false;
+    }
+    if (widget_tree_contains(window->root, widget)) {
+        return true;
+    }
+    for (const pt_overlay *overlay = window->overlays; overlay; overlay = overlay->next) {
+        if (widget_tree_contains(overlay->panel, widget)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void window_forget_subtree(pt_window *window, pt_widget *root) {
@@ -168,10 +204,11 @@ static pt_widget *layout_boundary_for(pt_widget *widget) {
 }
 
 static void entry_notify_text(pt_widget *entry) {
+    pt_widget_a11y_emit(entry, pt_a11y_event_text_changed);
+    /* Last touch: on_text may destroy the entry. */
     if (entry->on_text) {
         entry->on_text(entry, entry->text ? entry->text : "", entry->on_text_data);
     }
-    pt_widget_a11y_emit(entry, pt_a11y_event_text_changed);
 }
 
 static void entry_reset_caret(pt_widget *entry) {
@@ -278,9 +315,9 @@ static void entry_ime_history_push(pt_widget *entry) {
 }
 
 static void entry_notify_restored(pt_widget *entry) {
-    entry_notify_text(entry);
     entry_reset_caret(entry);
     pt_widget_mark_dirty(entry, true);
+    entry_notify_text(entry);
 }
 
 static bool entry_history_step(pt_widget *entry, bool redo) {
@@ -537,9 +574,9 @@ static void entry_after_edit(pt_widget *entry) {
     entry->cursor = entry_cursor_clamped(entry, entry->cursor);
     entry->selection_anchor = entry->cursor;
     entry->caret_goal_x = -1.0f;
-    entry_notify_text(entry);
     entry_reset_caret(entry);
     pt_widget_mark_dirty(entry, true);
+    entry_notify_text(entry);
 }
 
 static void entry_delete_range(pt_widget *entry, size_t start, size_t end) {
@@ -706,7 +743,7 @@ static bool entry_ime_delete_selection(pt_widget *widget) {
     memmove(widget->text + start, widget->text + end, len - end + 1);
     widget->cursor = start;
     widget->selection_anchor = start;
-    entry_after_edit(widget);
+    /* Quiet: composition callers notify once they finished touching the widget. */
     return true;
 }
 
@@ -717,9 +754,10 @@ bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_be
     }
     size_t length = 0;
     char *clean = entry_sanitize_preedit(widget, text, &length);
+    bool deleted_selection = false;
     if (length > 0) {
         widget->ime_composing = true;
-        entry_ime_delete_selection(widget);
+        deleted_selection = entry_ime_delete_selection(widget);
     } else {
         entry_ime_end_composition(widget);
     }
@@ -752,6 +790,9 @@ bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_be
     }
     entry_reset_caret(widget);
     pt_widget_mark_dirty(widget, false);
+    if (deleted_selection) {
+        entry_notify_text(widget);
+    }
     return true;
 }
 
@@ -803,6 +844,9 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
         return false;
     }
     bool submit = widget->kind == pt_widget_entry && commit && strchr(commit, '\n');
+    pt_window *window = pt_widget_window(widget);
+    pt_click_callback submit_cb = submit ? widget->on_submit : NULL;
+    void *submit_data = widget->on_submit_data;
     size_t insert_len = 0;
     char *insert = entry_sanitize_insert(widget, commit ? commit : "", &insert_len);
 
@@ -901,8 +945,8 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
         entry_ime_end_composition(widget);
     }
     entry_after_edit(widget);
-    if (submit && widget->on_submit) {
-        widget->on_submit(widget, widget->on_submit_data);
+    if (submit_cb && pt_widget_attached(window, widget)) {
+        submit_cb(widget, submit_data);
     }
     return true;
 }
@@ -1376,6 +1420,7 @@ void pt_widget_clear_children(pt_widget *widget) {
     while (widget->first_child) {
         pt_widget *child = widget->first_child;
         widget_forget_owner_state(child);
+        pt_window_overlays_forget_widget(window, child);
         widget->first_child = child->next_sibling;
         child->parent = NULL;
         child->next_sibling = NULL;
@@ -1676,6 +1721,11 @@ void pt_wrap_set_gap(pt_widget *wrap, float row_gap, float column_gap) {
 void pt_grid_set_columns(pt_widget *grid, uint32_t columns) {
     if (!grid || grid->kind != pt_widget_grid) {
         return;
+    }
+    if (columns > pt_grid_max_columns) {
+        pt_log_warn("grid column count %u exceeds the %u column limit", columns,
+                    pt_grid_max_columns);
+        columns = pt_grid_max_columns;
     }
     grid->grid_columns = columns > 0 ? columns : 1;
     pt_widget_mark_dirty(grid, true);
@@ -3381,6 +3431,7 @@ static bool entry_key(pt_widget *entry, uint32_t keysym, uint32_t modifiers) {
     bool alt = (modifiers & ((uint32_t)pt_key_modifier_alt |
                              (uint32_t)pt_key_modifier_logo)) != 0;
     bool handled = false;
+    bool dirty_done = false;
     if (edit_shortcut(entry, keysym, modifiers)) {
         return true;
     }
@@ -3436,42 +3487,54 @@ static bool entry_key(pt_widget *entry, uint32_t keysym, uint32_t modifiers) {
         entry_reset_caret(entry);
         handled = true;
         break;
-    case XKB_KEY_BackSpace:
+    case XKB_KEY_BackSpace: {
+        size_t start = entry->cursor;
+        size_t end = entry->cursor;
         if (entry_has_selection(entry)) {
-            size_t start = 0;
-            size_t end = 0;
             entry_selection_range(entry, &start, &end);
-            entry_delete_range(entry, start, end);
         } else if (entry->cursor > 0) {
-            size_t start = pt_utf8_prev_boundary(entry->text, len, entry->cursor);
-            entry_delete_range(entry, start, entry->cursor);
+            start = pt_utf8_prev_boundary(entry->text, len, entry->cursor);
         }
-        handled = true;
-        break;
-    case XKB_KEY_Delete:
-        if (entry_has_selection(entry)) {
-            size_t start = 0;
-            size_t end = 0;
-            entry_selection_range(entry, &start, &end);
+        if (start < end) {
+            /* Dirty before the change callback (driven by entry_delete_range)
+             * may destroy the entry. */
+            pt_widget_mark_dirty(entry, false);
+            dirty_done = true;
             entry_delete_range(entry, start, end);
-        } else if (entry->cursor < len) {
-            size_t end = pt_utf8_next_boundary(entry->text, len, entry->cursor);
-            entry_delete_range(entry, entry->cursor, end);
         }
         handled = true;
         break;
+    }
+    case XKB_KEY_Delete: {
+        size_t start = entry->cursor;
+        size_t end = entry->cursor;
+        if (entry_has_selection(entry)) {
+            entry_selection_range(entry, &start, &end);
+        } else if (entry->cursor < len) {
+            end = pt_utf8_next_boundary(entry->text, len, entry->cursor);
+        }
+        if (start < end) {
+            pt_widget_mark_dirty(entry, false);
+            dirty_done = true;
+            entry_delete_range(entry, start, end);
+        }
+        handled = true;
+        break;
+    }
     case XKB_KEY_Return:
     case XKB_KEY_KP_Enter:
+        entry_reset_caret(entry);
+        pt_widget_mark_dirty(entry, false);
+        dirty_done = true;
         if (entry->on_submit) {
             entry->on_submit(entry, entry->on_submit_data);
         }
-        entry_reset_caret(entry);
         handled = true;
         break;
     default:
         break;
     }
-    if (handled) {
+    if (handled && !dirty_done) {
         pt_widget_mark_dirty(entry, false);
     }
     return handled;
@@ -3887,9 +3950,12 @@ bool pt_widget_text_input(pt_widget *widget, const char *text) {
     widget->preedit_cursor_end = -1;
     bool single_line = widget->kind == pt_widget_entry;
     bool submit = single_line && strchr(text, '\n') != NULL;
+    pt_window *window = pt_widget_window(widget);
+    pt_click_callback submit_cb = submit ? widget->on_submit : NULL;
+    void *submit_data = widget->on_submit_data;
     entry_insert_text(widget, text);
-    if (submit && widget->on_submit) {
-        widget->on_submit(widget, widget->on_submit_data);
+    if (submit_cb && pt_widget_attached(window, widget)) {
+        submit_cb(widget, submit_data);
     }
     return true;
 }

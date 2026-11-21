@@ -78,6 +78,35 @@ static void begin_repeat(pt_platform *platform, pt_window *window, uint32_t key,
         pt_app_add_timeout_internal(platform->app, (uint32_t)delay, repeat_fire, platform);
 }
 
+void pt_platform_window_forget_focus(pt_window *window) {
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform) {
+        return;
+    }
+    if (platform->pointer_focus == window) {
+        platform->pointer_focus = NULL;
+        platform->pointer_overlay = NULL;
+        platform->pointer_offset_x = 0.0f;
+        platform->pointer_offset_y = 0.0f;
+    }
+    if (platform->keyboard_focus == window) {
+        platform->keyboard_focus = NULL;
+        cancel_repeat(platform);
+    }
+    if (platform->gesture_window == window) {
+        platform->gesture_window = NULL;
+    }
+    if (platform->drag_window == window) {
+        platform->drag_window = NULL;
+    }
+    if (platform->touch_focus == window) {
+        platform->touch_focus = NULL;
+    }
+    if (platform->text_input_window == window) {
+        platform->text_input_window = NULL;
+    }
+}
+
 /* ---------- keyboard ---------- */
 
 static uint32_t keyboard_modifiers(pt_platform *platform) {
@@ -119,7 +148,7 @@ static void keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t f
         return;
     }
     struct xkb_keymap *keymap =
-        xkb_keymap_new_from_string(platform->xkb_context, mapped,
+        xkb_keymap_new_from_buffer(platform->xkb_context, mapped, (size_t)size,
                                    XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
     munmap(mapped, size);
     close(fd);
@@ -1485,6 +1514,17 @@ static void data_device_data_offer(void *data, struct wl_data_device *device,
                                    struct wl_data_offer *wl_offer) {
     (void)device;
     pt_platform *platform = data;
+    /* A compositor normally sends one offer per selection or drag; cap the
+     * list so a flood of offers cannot grow memory without bound. */
+    size_t count = 0;
+    for (struct pt_wl_offer *existing = platform->offers; existing;
+         existing = existing->next) {
+        ++count;
+    }
+    if (count >= 64) {
+        wl_data_offer_destroy(wl_offer);
+        return;
+    }
     struct pt_wl_offer *offer = pt_alloc_zeroed(1, sizeof(*offer));
     offer->offer = wl_offer;
     offer->platform = platform;

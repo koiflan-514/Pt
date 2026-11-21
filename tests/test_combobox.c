@@ -599,6 +599,51 @@ static void test_theme_sizing(pt_app *app) {
     pt_window_free(window);
 }
 
+static void destroy_on_change(pt_widget *widget, uint32_t index, void *user_data) {
+    (void)index;
+    ++((combo_state *)user_data)->changes;
+    pt_widget_destroy(widget);
+}
+
+static void test_callback_destroys_combobox(pt_app *app) {
+    /* Choosing an option runs on_change last; destroying the box there must not
+     * let the popup close path touch freed state. */
+    fixture fx;
+    fixture_open(&fx, app, 360.0f, 0.0f);
+    combo_state state = {0};
+    state.last_index = pt_list_index_none;
+    pt_combobox_add_item(fx.combobox, "Red");
+    pt_combobox_add_item(fx.combobox, "Green");
+    pt_combobox_set_on_change(fx.combobox, destroy_on_change, &state);
+    pt_combobox_open(fx.combobox);
+    fixture_paint(&fx);
+    pt_widget *option = option_at(fx.combobox, 0u);
+    pt_check(option != NULL);
+    if (option) {
+        pt_check(pt_widget_activate(option));
+    }
+    pt_check(state.changes == 1);
+    pt_check(!pt_widget_attached(fx.window, fx.combobox));
+    pt_check(!pt_window_overlays_active(fx.window));
+    fixture_close(&fx);
+
+    /* Enter on the popup commits through the same callback. */
+    combo_state second = {0};
+    second.last_index = pt_list_index_none;
+    fixture_open(&fx, app, 360.0f, 0.0f);
+    pt_combobox_add_item(fx.combobox, "Red");
+    pt_combobox_set_on_change(fx.combobox, destroy_on_change, &second);
+    pt_check(pt_widget_focus(fx.combobox));
+    pt_combobox_open(fx.combobox);
+    fixture_paint(&fx);
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check(second.changes == 1);
+    pt_check(!pt_widget_attached(fx.window, fx.combobox));
+    pt_check(fx.window->focused == NULL);
+    fixture_paint(&fx);
+    fixture_close(&fx);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.combobox");
@@ -613,6 +658,7 @@ int main(void) {
     test_filterable(app);
     test_a11y(app);
     test_destroy_while_open(app);
+    test_callback_destroys_combobox(app);
     test_theme_sizing(app);
     pt_app_destroy(app);
     return pt_test_finish("combobox");

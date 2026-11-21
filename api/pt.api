@@ -723,6 +723,7 @@ func pt_window_get_theme_metric floatpt_window_get_theme_metric(constpt_window*w
 func pt_window_get_width intpt_window_get_width(constpt_window*window)
 func pt_window_hide voidpt_window_hide(pt_window*window)
 func pt_window_is_open boolpt_window_is_open(constpt_window*window)
+func pt_window_paint_pixels boolpt_window_paint_pixels(pt_window*window,uint32_t*pixels,intwidth,intheight)
 func pt_window_primary_get char*pt_window_primary_get(pt_window*window)
 func pt_window_primary_set boolpt_window_primary_set(pt_window*window,constchar*text)
 func pt_window_request_redraw voidpt_window_request_redraw(pt_window*window)

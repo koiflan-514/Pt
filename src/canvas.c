@@ -56,6 +56,60 @@ static inline uint32_t blend_pixel_scaled(uint32_t dst, uint32_t src, uint32_t c
     return (out_alpha << 24) | (out_r << 16) | (out_g << 8) | out_b;
 }
 
+/* Source-over with full coverage: the source channels are already premultiplied,
+ * so no source scaling is needed. */
+static inline uint32_t blend_pixel_opaque(uint32_t dst, uint32_t src) {
+    uint32_t alpha = src >> 24;
+    if (alpha == 255u) {
+        return src;
+    }
+    if (alpha == 0u) {
+        return dst;
+    }
+    uint32_t inv = 255u - alpha;
+    uint32_t out_alpha = alpha + (((dst >> 24) & 0xFFu) * inv + 127u) / 255u;
+    uint32_t out_r = ((src >> 16) & 0xFFu) + ((((dst >> 16) & 0xFFu) * inv + 127u) / 255u);
+    uint32_t out_g = ((src >> 8) & 0xFFu) + ((((dst >> 8) & 0xFFu) * inv + 127u) / 255u);
+    uint32_t out_b = (src & 0xFFu) + (((dst & 0xFFu) * inv + 127u) / 255u);
+    out_alpha = out_alpha > 255u ? 255u : out_alpha;
+    out_r = out_r > 255u ? 255u : out_r;
+    out_g = out_g > 255u ? 255u : out_g;
+    out_b = out_b > 255u ? 255u : out_b;
+    return (out_alpha << 24) | (out_r << 16) | (out_g << 8) | out_b;
+}
+
+/* Fills [from, to) with one premultiplied color and one coverage value. Span
+ * fills let the rasterizers skip per-pixel coverage math on pixels whose
+ * coverage is provably 1, which is most of a large rounded surface. */
+static void blend_span(uint32_t *dst, int from, int to, uint32_t src, uint32_t coverage) {
+    if (from >= to || coverage == 0) {
+        return;
+    }
+    if (coverage >= 255u) {
+        uint32_t alpha = src >> 24;
+        if (alpha == 255u) {
+            for (int i = from; i < to; ++i) {
+                dst[i] = src;
+            }
+            return;
+        }
+        if (alpha == 0u) {
+            return;
+        }
+        for (int i = from; i < to; ++i) {
+            dst[i] = blend_pixel_opaque(dst[i], src);
+        }
+        return;
+    }
+    for (int i = from; i < to; ++i) {
+        dst[i] = blend_pixel_scaled(dst[i], src, coverage);
+    }
+}
+
+static inline uint32_t coverage_u8(float coverage) {
+    return (uint32_t)(coverage * 255.0f + 0.5f);
+}
+
 static inline float edge_coverage(float pixel_start, float pixel_end, float min_value,
                                   float max_value) {
     float lo = pixel_start > min_value ? pixel_start : min_value;
@@ -100,6 +154,17 @@ void pt_canvas_destroy(pt_canvas *canvas) {
 
 void pt_canvas_clear(pt_canvas *canvas, pt_color color) {
     uint32_t src = pack_premultiplied(color);
+    size_t count = (size_t)canvas->width * (size_t)canvas->height;
+    if (canvas->stride == canvas->width) {
+        if (src == 0) {
+            memset(canvas->pixels, 0, count * sizeof(uint32_t));
+        } else {
+            for (size_t i = 0; i < count; ++i) {
+                canvas->pixels[i] = src;
+            }
+        }
+        return;
+    }
     for (int row = 0; row < canvas->height; ++row) {
         uint32_t *dst = canvas->pixels + (size_t)row * (size_t)canvas->stride;
         for (int column = 0; column < canvas->width; ++column) {
@@ -354,6 +419,10 @@ static void fill_rounded_rect_impl(pt_canvas *canvas, float x, float y, float w,
     float cy = dy + dh * 0.5f;
     float half_w = dw * 0.5f;
     float half_h = dh * 0.5f;
+    /* Interior coverage is exactly 1 only once the radius is at least half a
+     * pixel, so tiny radii keep the per-pixel path. */
+    bool span_ok = dr >= 1.0f;
+    int corner_band = (int)ceilf(dr) + 2;
 
     for (int row = y0; row < y1; ++row) {
         float py = (float)row + 0.5f;
@@ -368,15 +437,50 @@ static void fill_rounded_rect_impl(pt_canvas *canvas, float x, float y, float w,
             continue;
         }
         uint32_t premul = pack_premultiplied(base);
-        for (int column = x0; column < x1; ++column) {
+
+        int left_end = x0;
+        int right_start = x0;
+        if (span_ok) {
+            bool corner_row = py < dy + dr || py > dy + dh - dr;
+            int band = corner_row ? corner_band : 2;
+            left_end = (int)floorf(dx) + band;
+            right_start = (int)ceilf(dx + dw) - band;
+            if (left_end < x0) {
+                left_end = x0;
+            } else if (left_end > x1) {
+                left_end = x1;
+            }
+            if (right_start > x1) {
+                right_start = x1;
+            } else if (right_start < x0) {
+                right_start = x0;
+            }
+            if (left_end >= right_start) {
+                left_end = x0;
+                right_start = x0;
+            }
+        }
+        for (int column = x0; column < left_end; ++column) {
             float px = (float)column + 0.5f;
             float cov = rounded_box_coverage(px, py, cx, cy, half_w, half_h, dr);
             if (cov <= 0.0f) {
                 continue;
             }
-            uint32_t coverage = (uint32_t)lroundf(cov * 255.0f);
-            dst[column] = blend_pixel_scaled(dst[column], premul, coverage);
+            dst[column] = blend_pixel_scaled(dst[column], premul, coverage_u8(cov));
         }
+        for (int column = right_start; column < x1; ++column) {
+            float px = (float)column + 0.5f;
+            float cov = rounded_box_coverage(px, py, cx, cy, half_w, half_h, dr);
+            if (cov <= 0.0f) {
+                continue;
+            }
+            dst[column] = blend_pixel_scaled(dst[column], premul, coverage_u8(cov));
+        }
+        /* Middle columns share one coverage value; it only depends on py and
+         * equals 1 except on the single AA row at the top and bottom edges. */
+        float qy = fabsf(py - cy) - half_h + dr;
+        float mid = pt_clamp_float(0.5f + dr - (qy > 0.0f ? qy : 0.0f), 0.0f, 1.0f);
+        blend_span(dst, left_end, right_start, premul, coverage_u8(mid));
     }
 }
 
@@ -446,27 +550,62 @@ void pt_canvas_stroke_rounded_rect(pt_canvas *canvas, float x, float y, float w,
     float icx = ix + iw * 0.5f;
     float icy = iy + ih * 0.5f;
     bool has_inner = iw > 0.0f && ih > 0.0f;
+    /* Only the ring carries coverage: the horizontal edge bands span every
+     * column, and everywhere else the two curved sides form a band no wider
+     * than max(radius, border width). Iterating those bands instead of the
+     * whole rectangle keeps a one-pixel border proportional to its perimeter. */
+    int edge_band = (int)ceilf(bw) + 3;
+    int corner_band = (int)ceilf(pt_max_float(bw, dr)) + 3;
 
     for (int row = y0; row < y1; ++row) {
         float py = (float)row + 0.5f;
         uint32_t *dst = canvas->pixels + (size_t)row * (size_t)canvas->stride;
-        for (int column = x0; column < x1; ++column) {
-            float px = (float)column + 0.5f;
-            float out_cov = rounded_box_coverage(px, py, cx, cy, half_w, half_h, dr);
-            if (out_cov <= 0.0f) {
-                continue;
+        /* Rows whose horizontal border edge is within half a pixel can still
+         * bleed into the middle columns, so they stay on the full-row path. */
+        bool horizontal_edge = py < dy + bw + 0.5f || py > dy + dh - bw - 0.5f;
+        int left_end = x0;
+        int right_start = x0;
+        if (!horizontal_edge) {
+            bool corner_row = py < dy + dr || py > dy + dh - dr;
+            int band = corner_row ? corner_band : edge_band;
+            left_end = (int)floorf(dx) + band;
+            right_start = (int)ceilf(dx + dw) - band;
+            if (left_end < x0) {
+                left_end = x0;
+            } else if (left_end > x1) {
+                left_end = x1;
             }
-            float in_cov = 0.0f;
-            if (has_inner && iw > 0.0f && ih > 0.0f) {
-                in_cov = rounded_box_coverage(px, py, icx, icy, iw * 0.5f, ih * 0.5f, ir);
+            if (right_start > x1) {
+                right_start = x1;
+            } else if (right_start < x0) {
+                right_start = x0;
             }
-            float band = out_cov - in_cov;
-            if (band <= 0.0f) {
-                continue;
+            if (left_end >= right_start) {
+                left_end = x0;
+                right_start = x0;
             }
-            uint32_t coverage =
-                (uint32_t)lroundf(pt_clamp_float(band, 0.0f, 1.0f) * 255.0f);
-            dst[column] = blend_pixel_scaled(dst[column], premul, coverage);
+        }
+        for (int side = 0; side < 2; ++side) {
+            int from = side == 0 ? x0 : right_start;
+            int to = side == 0 ? left_end : x1;
+            for (int column = from; column < to; ++column) {
+                float px = (float)column + 0.5f;
+                float out_cov = rounded_box_coverage(px, py, cx, cy, half_w, half_h, dr);
+                if (out_cov <= 0.0f) {
+                    continue;
+                }
+                float in_cov = 0.0f;
+                if (has_inner) {
+                    in_cov = rounded_box_coverage(px, py, icx, icy, iw * 0.5f, ih * 0.5f, ir);
+                }
+                float band = out_cov - in_cov;
+                if (band <= 0.0f) {
+                    continue;
+                }
+                dst[column] = blend_pixel_scaled(dst[column], premul,
+                                                 coverage_u8(pt_clamp_float(band, 0.0f,
+                                                                            1.0f)));
+            }
         }
     }
 }
@@ -535,6 +674,15 @@ void pt_canvas_draw_line(pt_canvas *canvas, float x0, float y0, float x1, float 
     }
 }
 
+static inline uint32_t shadow_coverage(float d, float reach) {
+    if (d <= 0.0f) {
+        return 255u;
+    }
+    float t = pt_clamp_float(1.0f - d / reach, 0.0f, 1.0f);
+    t = t * t * (3.0f - 2.0f * t);
+    return (uint32_t)lroundf(t * 255.0f);
+}
+
 void pt_canvas_draw_shadow(pt_canvas *canvas, float x, float y, float w, float h, float radius,
                            float blur, pt_color color) {
     if (blur <= 0.0f || (color & 0xFFu) == 0 || w <= 0.0f || h <= 0.0f) {
@@ -576,24 +724,62 @@ void pt_canvas_draw_shadow(pt_canvas *canvas, float x, float y, float w, float h
     }
 
     uint32_t premul = pack_premultiplied(color);
+    /* In the flat horizontal stretch of a row the SDF only depends on py, so
+       the middle span shares one coverage value and only the rounded side
+       bands need the per-pixel distance field. */
+    bool span_ok = half_w > dr;
+    int left_end = x0;
+    int right_start = x0;
+    if (span_ok) {
+        left_end = (int)ceilf(cx - half_w + dr);
+        right_start = (int)floorf(cx + half_w - dr);
+        if (left_end < x0) {
+            left_end = x0;
+        }
+        if (right_start > x1) {
+            right_start = x1;
+        }
+        if (left_end > right_start) {
+            left_end = x0;
+            right_start = x0;
+        }
+    }
+    float reach = dblur * 2.0f;
     for (int row = y0; row < y1; ++row) {
         float py = (float)row + 0.5f;
+        float qy = fabsf(py - cy) - half_h + dr;
+        float dmid = qy > 0.0f ? qy - dr : -dr;
+        if (dmid > reach) {
+            continue;
+        }
         uint32_t *dst = canvas->pixels + (size_t)row * (size_t)canvas->stride;
-        for (int column = x0; column < x1; ++column) {
-            float px = (float)column + 0.5f;
-            float d = rounded_box_sdf(px, py, cx, cy, half_w, half_h, dr);
-            float alpha = 0.0f;
-            if (d <= 0.0f) {
-                alpha = 1.0f;
-            } else {
-                float t = pt_clamp_float(1.0f - d / (dblur * 2.0f), 0.0f, 1.0f);
-                alpha = t * t * (3.0f - 2.0f * t);
+        if (!span_ok) {
+            left_end = x0;
+            right_start = x0;
+        }
+        uint32_t mid_coverage = shadow_coverage(dmid, reach);
+        if (left_end > x0) {
+            for (int column = x0; column < left_end; ++column) {
+                float px = (float)column + 0.5f;
+                float d = rounded_box_sdf(px, py, cx, cy, half_w, half_h, dr);
+                uint32_t coverage = shadow_coverage(d, reach);
+                if (coverage == 0) {
+                    continue;
+                }
+                dst[column] = blend_pixel_scaled(dst[column], premul, coverage);
             }
-            if (alpha <= 0.0f) {
-                continue;
+        }
+        blend_span(dst, left_end, right_start, premul, mid_coverage);
+        if (right_start < x1) {
+            for (int column = right_start; column < x1; ++column) {
+                float px = (float)column + 0.5f;
+                float d = rounded_box_sdf(px, py, cx, cy, half_w, half_h, dr);
+                uint32_t coverage = shadow_coverage(d, reach);
+                if (coverage == 0) {
+                    continue;
+                }
+                dst[column] = blend_pixel_scaled(dst[column], premul, coverage);
             }
-            uint32_t coverage = (uint32_t)lroundf(alpha * 255.0f);
-            dst[column] = blend_pixel_scaled(dst[column], premul, coverage);
         }
     }
 }
@@ -607,25 +793,48 @@ void pt_canvas_blend_mask(pt_canvas *canvas, int x, int y, const uint8_t *covera
     int clip_y0 = (int)canvas->clip.y;
     int clip_x1 = (int)ceilf(canvas->clip.x + canvas->clip.w);
     int clip_y1 = (int)ceilf(canvas->clip.y + canvas->clip.h);
+    int x0 = 0;
+    int x1 = width;
+    if (x < clip_x0) {
+        x0 = clip_x0 - x;
+    }
+    if (x + width > clip_x1) {
+        x1 = clip_x1 - x;
+    }
+    int y0 = 0;
+    int y1 = height;
+    if (y < clip_y0) {
+        y0 = clip_y0 - y;
+    }
+    if (y + height > clip_y1) {
+        y1 = clip_y1 - y;
+    }
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
     uint32_t premul = pack_premultiplied(color);
+    if (premul == 0) {
+        return;
+    }
     opacity = pt_clamp_float(opacity, 0.0f, 1.0f);
-    for (int row = 0; row < height; ++row) {
-        int py = y + row;
-        if (py < clip_y0 || py >= clip_y1) {
-            continue;
+    uint8_t table[256];
+    bool scaled = opacity < 1.0f;
+    if (scaled) {
+        for (int i = 0; i < 256; ++i) {
+            table[i] = (uint8_t)lroundf((float)i * opacity);
         }
-        uint32_t *dst = canvas->pixels + (size_t)py * (size_t)canvas->stride;
+    }
+    for (int row = y0; row < y1; ++row) {
+        uint32_t *dst =
+            canvas->pixels + (size_t)(y + row) * (size_t)canvas->stride + (size_t)x;
         const uint8_t *src = coverage + (size_t)row * (size_t)stride;
-        for (int column = 0; column < width; ++column) {
-            int px = x + column;
-            if (px < clip_x0 || px >= clip_x1) {
-                continue;
-            }
-            uint32_t mask = (uint32_t)lroundf((float)src[column] * opacity);
+        for (int column = x0; column < x1; ++column) {
+            uint32_t mask = scaled ? (uint32_t)table[src[column]] : (uint32_t)src[column];
             if (mask == 0) {
                 continue;
             }
-            dst[px] = blend_pixel_scaled(dst[px], premul, mask);
+            dst[column] = mask == 255u ? blend_pixel_opaque(dst[column], premul)
+                                       : blend_pixel_scaled(dst[column], premul, mask);
         }
     }
 }

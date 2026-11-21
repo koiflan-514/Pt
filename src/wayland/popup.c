@@ -156,9 +156,12 @@ static bool popup_ensure_buffers(pt_wl_popup *popup, int width, int height) {
         }
     }
     popup_destroy_buffers(popup);
+    size_t plane = 0;
+    size_t total = 0;
+    if (!pt_wl_buffer_geometry(width, height, popup_buffer_count, &plane, &total)) {
+        return false;
+    }
     int stride = width * 4;
-    size_t plane = (size_t)stride * (size_t)height;
-    size_t total = plane * popup_buffer_count;
     int fd = pt_wl_create_shm_file(total);
     if (fd < 0) {
         return false;
@@ -268,18 +271,26 @@ static void popup_draw(pt_wl_popup *popup) {
     }
 
     if (popup->viewport) {
-        wl_surface_set_buffer_scale(popup->surface, 1);
+        if (wl_surface_get_version(popup->surface) >= 3) {
+            wl_surface_set_buffer_scale(popup->surface, 1);
+        }
         wp_viewport_set_destination(popup->viewport, popup->width, popup->height);
     } else {
         int integer = (int)lroundf(scale);
         if (integer < 1) {
             integer = 1;
         }
-        wl_surface_set_buffer_scale(popup->surface, integer);
+        if (wl_surface_get_version(popup->surface) >= 3) {
+            wl_surface_set_buffer_scale(popup->surface, integer);
+        }
     }
     target->busy = true;
     wl_surface_attach(popup->surface, target->buffer, 0, 0);
-    wl_surface_damage_buffer(popup->surface, 0, 0, buffer_width, buffer_height);
+    if (wl_surface_get_version(popup->surface) >= 4) {
+        wl_surface_damage_buffer(popup->surface, 0, 0, buffer_width, buffer_height);
+    } else {
+        wl_surface_damage(popup->surface, 0, 0, INT32_MAX, INT32_MAX);
+    }
     wl_surface_commit(popup->surface);
     popup->needs_redraw = false;
     popup->mapped = true;

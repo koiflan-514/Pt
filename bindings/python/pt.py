@@ -30,7 +30,21 @@ __all__ = [
     "DragData",
     "TreeNode",
     "Transition",
+    "PaintContext",
+    "PointerEvent",
+    "paint_window_pixels",
     "pt_color_transparent",
+    "pointer_phase_enter",
+    "pointer_phase_leave",
+    "pointer_phase_motion",
+    "pointer_phase_down",
+    "pointer_phase_up",
+    "pointer_phase_axis",
+    "pointer_phase_cancel",
+    "fd_read",
+    "fd_write",
+    "fd_error",
+    "fd_hangup",
     "align_auto",
     "align_start",
     "align_center",
@@ -604,6 +618,21 @@ def color_alpha(color: int, alpha: int) -> int:
     return (color & 0xFFFFFF00) | (alpha & 0xFF)
 
 
+def paint_window_pixels(window: "Window", width: int, height: int) -> list[int]:
+    """Paints one full frame of ``window`` offscreen at scale 1.0.
+
+    Returns the pixels as a row-major list of ``0xAARRGGBB`` values. This
+    drives custom paint callbacks without a compositor, which makes them
+    testable headless.
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError("paint size must be positive")
+    buffer = (_c_uint32 * (int(width) * int(height)))()
+    if not _pt_window_paint_pixels(window._ptr, buffer, int(width), int(height)):
+        raise RuntimeError(_error_message())
+    return list(buffer)
+
+
 def _locate_library() -> str:
     override = _os.environ.get("PT_LIBRARY")
     if override:
@@ -689,6 +718,143 @@ class StylusEvent(_ctypes.Structure):
     @property
     def position(self) -> tuple[float, float]:
         return (float(self.x), float(self.y))
+
+
+class PointerEvent(_ctypes.Structure):
+    """One normalized pointer event delivered to ``Window.on_pointer``."""
+
+    _fields_ = [
+        ("phase", _ctypes.c_uint32),
+        ("x", _ctypes.c_float),
+        ("y", _ctypes.c_float),
+        ("delta_x", _ctypes.c_float),
+        ("delta_y", _ctypes.c_float),
+        ("button", _ctypes.c_uint32),
+        ("modifiers", _ctypes.c_uint32),
+        ("click_count", _ctypes.c_uint32),
+        ("pressed", _ctypes.c_bool),
+    ]
+
+    @property
+    def position(self) -> tuple[float, float]:
+        return (float(self.x), float(self.y))
+
+
+# Window-level pointer phases, shared by PointerEvent.phase.
+pointer_phase_enter = 0
+pointer_phase_leave = 1
+pointer_phase_motion = 2
+pointer_phase_down = 3
+pointer_phase_up = 4
+pointer_phase_axis = 5
+pointer_phase_cancel = 6
+
+# File descriptor watch event masks for App.watch_fd.
+fd_read = 1
+fd_write = 2
+fd_error = 4
+fd_hangup = 8
+
+
+class PaintContext:
+    """Borrowed drawing context passed to ``Widget.on_paint`` callbacks.
+
+    The native context is only valid for the duration of the callback; the
+    wrapper must not be stored beyond it. All coordinates are widget-local
+    logical pixels and colors are 0xRRGGBBAA values.
+    """
+
+    def __init__(self, pointer: int) -> None:
+        self._ptr = int(pointer)
+
+    @property
+    def width(self) -> float:
+        return float(_pt_paint_width(self._ptr))
+
+    @property
+    def height(self) -> float:
+        return float(_pt_paint_height(self._ptr))
+
+    @property
+    def scale(self) -> float:
+        return float(_pt_paint_scale(self._ptr))
+
+    def clip_rect(self) -> Optional[tuple[float, float, float, float]]:
+        """Returns the current damage clip, or None when it is empty."""
+        x = _c_float()
+        y = _c_float()
+        width = _c_float()
+        height = _c_float()
+        if not _pt_paint_clip_rect(
+            self._ptr, _ctypes.byref(x), _ctypes.byref(y),
+            _ctypes.byref(width), _ctypes.byref(height),
+        ):
+            return None
+        return (float(x.value), float(y.value), float(width.value), float(height.value))
+
+    def push_clip(self, x: float, y: float, width: float, height: float) -> "PaintContext":
+        _pt_paint_push_clip(self._ptr, float(x), float(y), float(width), float(height))
+        return self
+
+    def pop_clip(self) -> "PaintContext":
+        _pt_paint_pop_clip(self._ptr)
+        return self
+
+    def fill_rect(self, x: float, y: float, width: float, height: float, color: int) -> "PaintContext":
+        _pt_paint_fill_rect(self._ptr, float(x), float(y), float(width), float(height), int(color))
+        return self
+
+    def fill_rounded_rect(self, x: float, y: float, width: float, height: float,
+                          radius: float, color: int) -> "PaintContext":
+        _pt_paint_fill_rounded_rect(self._ptr, float(x), float(y), float(width),
+                                    float(height), float(radius), int(color))
+        return self
+
+    def stroke_rect(self, x: float, y: float, width: float, height: float,
+                    line_width: float, color: int) -> "PaintContext":
+        _pt_paint_stroke_rect(self._ptr, float(x), float(y), float(width),
+                              float(height), float(line_width), int(color))
+        return self
+
+    def draw_line(self, x0: float, y0: float, x1: float, y1: float,
+                  line_width: float, color: int) -> "PaintContext":
+        _pt_paint_draw_line(self._ptr, float(x0), float(y0), float(x1), float(y1),
+                            float(line_width), int(color))
+        return self
+
+    def draw_text(self, family: str, size: float, weight: int, slant: int,
+                  x: float, baseline: float, text: str, color: int) -> "PaintContext":
+        data = _string(text)
+        _pt_paint_draw_text(self._ptr, _string(family), float(size), int(weight),
+                            int(slant), float(x), float(baseline), data,
+                            len(data), int(color))
+        return self
+
+    def measure_text(self, family: str, size: float, weight: int, slant: int,
+                     text: str) -> float:
+        data = _string(text)
+        return float(_pt_paint_measure_text(self._ptr, _string(family), float(size),
+                                            int(weight), int(slant), data, len(data)))
+
+    def font_has_glyph(self, family: str, size: float, codepoint: int) -> bool:
+        return bool(_pt_paint_font_has_glyph(self._ptr, _string(family), float(size),
+                                             int(codepoint)))
+
+    def font_metrics(self, family: str, size: float, weight: int, slant: int
+                     ) -> Optional[tuple[float, float, float, float]]:
+        """Returns (ascent, descent, line_height, cell_width) or None."""
+        ascent = _c_float()
+        descent = _c_float()
+        line_height = _c_float()
+        cell_width = _c_float()
+        if not _pt_paint_font_metrics(
+            self._ptr, _string(family), float(size), int(weight), int(slant),
+            _ctypes.byref(ascent), _ctypes.byref(descent),
+            _ctypes.byref(line_height), _ctypes.byref(cell_width),
+        ):
+            return None
+        return (float(ascent.value), float(descent.value),
+                float(line_height.value), float(cell_width.value))
 
 
 class TextSpan(_ctypes.Structure):
@@ -823,6 +989,37 @@ _NULL_DROP_DATA = _DROP_DATA(0)
 _NULL_DROP_OFFER_ENTER = _DROP_OFFER_ENTER(0)
 _NULL_DROP_OFFER_DROP = _DROP_OFFER_DROP(0)
 _NULL_DRAG_FINISHED = _DRAG_FINISHED(0)
+
+# Custom paint and window extension callbacks (pt/custom.h, pt/window.h).
+_PAINT = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_void_p, _ctypes.c_void_p)
+_FD = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_uint32, _ctypes.c_void_p)
+_IME_COMMIT = _ctypes.CFUNCTYPE(
+    None, _ctypes.c_void_p, _ctypes.c_char_p, _ctypes.c_void_p
+)
+_IME_PREEDIT = _ctypes.CFUNCTYPE(
+    None,
+    _ctypes.c_void_p,
+    _ctypes.c_char_p,
+    _ctypes.c_int32,
+    _ctypes.c_int32,
+    _ctypes.c_void_p,
+)
+_FOCUS = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_bool, _ctypes.c_void_p)
+_KEY_EVENT = _ctypes.CFUNCTYPE(
+    _ctypes.c_bool,
+    _ctypes.c_void_p,
+    _ctypes.c_uint32,
+    _ctypes.c_uint32,
+    _ctypes.c_char_p,
+    _ctypes.c_void_p,
+)
+_POINTER = _ctypes.CFUNCTYPE(
+    _ctypes.c_bool, _ctypes.c_void_p, _ctypes.c_void_p, _ctypes.c_void_p
+)
+# Unregistered IME callbacks must be real NULL function pointers, which is
+# what the C side checks for; ctypes rejects None for these slots.
+_NULL_IME_COMMIT = _IME_COMMIT(0)
+_NULL_IME_PREEDIT = _IME_PREEDIT(0)
 
 class _DropTarget(_ctypes.Structure):
     _fields_ = [
@@ -977,6 +1174,176 @@ _pt_window_set_drag_timeout = _proto(
 _pt_window_get_drag_timeout = _proto(
     "pt_window_get_drag_timeout", _c_uint32, _c_void_p
 )
+
+# Custom paint extension (pt/custom.h).
+_pt_widget_set_paint_callback = _proto(
+    "pt_widget_set_paint_callback", None, _c_void_p, _PAINT, _c_void_p
+)
+_pt_widget_clear_paint_callback = _proto(
+    "pt_widget_clear_paint_callback", None, _c_void_p
+)
+_pt_widget_request_redraw = _proto("pt_widget_request_redraw", None, _c_void_p)
+_pt_widget_request_redraw_rect = _proto(
+    "pt_widget_request_redraw_rect",
+    None,
+    _c_void_p,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+)
+_pt_paint_width = _proto("pt_paint_width", _c_float, _c_void_p)
+_pt_paint_height = _proto("pt_paint_height", _c_float, _c_void_p)
+_pt_paint_scale = _proto("pt_paint_scale", _c_float, _c_void_p)
+_pt_paint_clip_rect = _proto(
+    "pt_paint_clip_rect",
+    _c_bool,
+    _c_void_p,
+    _ctypes.POINTER(_c_float),
+    _ctypes.POINTER(_c_float),
+    _ctypes.POINTER(_c_float),
+    _ctypes.POINTER(_c_float),
+)
+_pt_paint_push_clip = _proto(
+    "pt_paint_push_clip", None, _c_void_p, _c_float, _c_float, _c_float, _c_float
+)
+_pt_paint_pop_clip = _proto("pt_paint_pop_clip", None, _c_void_p)
+_pt_paint_fill_rect = _proto(
+    "pt_paint_fill_rect",
+    None,
+    _c_void_p,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_uint32,
+)
+_pt_paint_fill_rounded_rect = _proto(
+    "pt_paint_fill_rounded_rect",
+    None,
+    _c_void_p,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_uint32,
+)
+_pt_paint_stroke_rect = _proto(
+    "pt_paint_stroke_rect",
+    None,
+    _c_void_p,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_uint32,
+)
+_pt_paint_draw_line = _proto(
+    "pt_paint_draw_line",
+    None,
+    _c_void_p,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_float,
+    _c_uint32,
+)
+_pt_paint_draw_text = _proto(
+    "pt_paint_draw_text",
+    None,
+    _c_void_p,
+    _c_char_p,
+    _c_float,
+    _c_int,
+    _c_int,
+    _c_float,
+    _c_float,
+    _c_char_p,
+    _c_size_t,
+    _c_uint32,
+)
+_pt_paint_font_has_glyph = _proto(
+    "pt_paint_font_has_glyph", _c_bool, _c_void_p, _c_char_p, _c_float, _c_uint32
+)
+_pt_paint_measure_text = _proto(
+    "pt_paint_measure_text",
+    _c_float,
+    _c_void_p,
+    _c_char_p,
+    _c_float,
+    _c_int,
+    _c_int,
+    _c_char_p,
+    _c_size_t,
+)
+_pt_paint_font_metrics = _proto(
+    "pt_paint_font_metrics",
+    _c_bool,
+    _c_void_p,
+    _c_char_p,
+    _c_float,
+    _c_int,
+    _c_int,
+    _ctypes.POINTER(_c_float),
+    _ctypes.POINTER(_c_float),
+    _ctypes.POINTER(_c_float),
+    _ctypes.POINTER(_c_float),
+)
+
+# Window-level input and IME extension callbacks (pt/custom.h, pt/window.h).
+_pt_window_set_focus_callback = _proto(
+    "pt_window_set_focus_callback", None, _c_void_p, _FOCUS, _c_void_p
+)
+_pt_window_set_key_event_callback = _proto(
+    "pt_window_set_key_event_callback", None, _c_void_p, _KEY_EVENT, _c_void_p
+)
+_pt_window_set_pointer_callback = _proto(
+    "pt_window_set_pointer_callback", None, _c_void_p, _POINTER, _c_void_p
+)
+_pt_window_set_ime_callbacks = _proto(
+    "pt_window_set_ime_callbacks",
+    None,
+    _c_void_p,
+    _IME_COMMIT,
+    _IME_PREEDIT,
+    _c_void_p,
+)
+_pt_window_set_ime_enabled = _proto(
+    "pt_window_set_ime_enabled", None, _c_void_p, _c_bool
+)
+_pt_window_set_ime_cursor_rect = _proto(
+    "pt_window_set_ime_cursor_rect",
+    None,
+    _c_void_p,
+    _c_int,
+    _c_int,
+    _c_int,
+    _c_int,
+)
+
+# Primary selection (pt/window.h). The getter returns malloc'd UTF-8 memory
+# owned by the caller; release it with pt_free.
+_pt_window_primary_set = _proto("pt_window_primary_set", _c_bool, _c_void_p, _c_char_p)
+_pt_window_primary_get = _proto("pt_window_primary_get", _c_void_p, _c_void_p)
+
+# Offscreen painting (pt/custom.h).
+_pt_window_paint_pixels = _proto(
+    "pt_window_paint_pixels",
+    _c_bool,
+    _c_void_p,
+    _ctypes.POINTER(_c_uint32),
+    _c_int,
+    _c_int,
+)
+
+# File descriptor watches (pt/app.h).
+_pt_app_watch_fd = _proto(
+    "pt_app_watch_fd", _c_uint64, _c_void_p, _c_int, _c_uint32, _FD, _c_void_p
+)
+_pt_app_unwatch_fd = _proto("pt_app_unwatch_fd", None, _c_void_p, _c_uint64)
 
 # Overlays
 _pt_menu_create = _proto("pt_menu_create", _c_void_p, _c_void_p)
@@ -3273,6 +3640,36 @@ class Widget:
         _pt_button_set_on_click(self._ptr, trampoline, None)
         return self
 
+    def on_paint(self, callback: Callable[["Widget", "PaintContext"], Any]) -> "Widget":
+        """Custom paint hook running after the widget's normal content pass.
+
+        The callback receives a borrowed :class:`PaintContext` that is only
+        valid during the call. It must not change layout or destroy widgets.
+        """
+        def dispatch(_widget: int, context: int, _data: int) -> None:
+            callback(self, PaintContext(int(context)))
+
+        trampoline = _PAINT(dispatch)
+        self._keep(trampoline)
+        _pt_widget_set_paint_callback(self._ptr, trampoline, None)
+        return self
+
+    def clear_paint_callback(self) -> "Widget":
+        _pt_widget_clear_paint_callback(self._ptr)
+        return self
+
+    def request_redraw(self) -> "Widget":
+        """Repaints this widget and its subtree; damages the widget only."""
+        _pt_widget_request_redraw(self._ptr)
+        return self
+
+    def request_redraw_rect(self, x: float, y: float, width: float,
+                            height: float) -> "Widget":
+        """Repaints a widget-local sub-rectangle, clamped to the widget."""
+        _pt_widget_request_redraw_rect(self._ptr, float(x), float(y),
+                                       float(width), float(height))
+        return self
+
     def on_submit(self, callback: Callable[[], Any]) -> "Widget":
         def dispatch(_widget: int, _data: int) -> None:
             callback()
@@ -3817,6 +4214,106 @@ class Window:
         _pt_window_set_gesture_callback(self._ptr, trampoline, None)
         return self
 
+    def on_focus(self, callback: Callable[["Window", bool], Any]) -> "Window":
+        def dispatch(_window: int, focused: int, _data: int) -> None:
+            callback(self, bool(focused))
+
+        trampoline = _FOCUS(dispatch)
+        self._callbacks.append(trampoline)
+        _callback_roots.append(trampoline)
+        _pt_window_set_focus_callback(self._ptr, trampoline, None)
+        return self
+
+    def on_key_event(
+        self, callback: Callable[["Window", int, int, str], Any]
+    ) -> "Window":
+        """Raw key events with the UTF-8 text; return True to consume."""
+
+        def dispatch(_window: int, key: int, modifiers: int, utf8: bytes,
+                     _data: int) -> bool:
+            text = utf8.decode("utf-8") if utf8 else ""
+            return bool(callback(self, int(key), int(modifiers), text))
+
+        trampoline = _KEY_EVENT(dispatch)
+        self._callbacks.append(trampoline)
+        _callback_roots.append(trampoline)
+        _pt_window_set_key_event_callback(self._ptr, trampoline, None)
+        return self
+
+    def on_pointer(
+        self, callback: Callable[["Window", PointerEvent], Any]
+    ) -> "Window":
+        """Window-level pointer events; return True to consume down/up/axis."""
+
+        def dispatch(_window: int, event: Any, _data: int) -> bool:
+            return bool(callback(self, event.contents))
+
+        trampoline = _POINTER(dispatch)
+        self._callbacks.append(trampoline)
+        _callback_roots.append(trampoline)
+        _pt_window_set_pointer_callback(self._ptr, trampoline, None)
+        return self
+
+    def set_ime_callbacks(
+        self,
+        commit: Optional[Callable[["Window", str], Any]] = None,
+        preedit: Optional[Callable[["Window", str, int, int], Any]] = None,
+    ) -> "Window":
+        """Opts this window into custom-surface text input.
+
+        ``commit`` receives composed text; ``preedit`` receives the current
+        composition plus UTF-8 byte offsets (or -1). Passing both as None
+        disables custom IME handling again.
+        """
+        commit_trampoline = _NULL_IME_COMMIT
+        preedit_trampoline = _NULL_IME_PREEDIT
+        if commit is not None:
+            def dispatch_commit(_window: int, text: bytes, _data: int) -> None:
+                commit(self, text.decode("utf-8") if text else "")
+
+            commit_trampoline = _IME_COMMIT(dispatch_commit)
+            self._callbacks.append(commit_trampoline)
+            _callback_roots.append(commit_trampoline)
+        if preedit is not None:
+            def dispatch_preedit(_window: int, text: bytes, begin: int, end: int,
+                                 _data: int) -> None:
+                preedit(self, text.decode("utf-8") if text else "",
+                        int(begin), int(end))
+
+            preedit_trampoline = _IME_PREEDIT(dispatch_preedit)
+            self._callbacks.append(preedit_trampoline)
+            _callback_roots.append(preedit_trampoline)
+        _pt_window_set_ime_callbacks(self._ptr, commit_trampoline,
+                                     preedit_trampoline, None)
+        return self
+
+    def set_ime_enabled(self, enabled: bool) -> "Window":
+        _pt_window_set_ime_enabled(self._ptr, bool(enabled))
+        return self
+
+    def set_ime_cursor_rect(self, x: int, y: int, width: int, height: int) -> "Window":
+        _pt_window_set_ime_cursor_rect(self._ptr, int(x), int(y), int(width),
+                                       int(height))
+        return self
+
+    @property
+    def primary(self) -> str:
+        pointer = _pt_window_primary_get(self._ptr)
+        if not pointer:
+            return ""
+        try:
+            return _ctypes.string_at(pointer).decode("utf-8")
+        finally:
+            _pt_free(pointer)
+
+    @primary.setter
+    def primary(self, text: str) -> None:
+        _pt_window_primary_set(self._ptr, _string(text))
+
+    def set_primary(self, text: str) -> "Window":
+        self.primary = text
+        return self
+
     def set_long_press_delay(self, milliseconds: int) -> "Window":
         _pt_window_set_long_press_delay(self._ptr, int(milliseconds))
         return self
@@ -4123,6 +4620,7 @@ class App:
             raise RuntimeError(_error_message())
         self._ptr = int(pointer)
         self._timers: dict[int, Any] = {}
+        self._watch_fds: dict[int, Any] = {}
         self._callbacks: list[Any] = []
 
     @property
@@ -4171,6 +4669,30 @@ class App:
     def cancel_timeout(self, timer_id: int) -> None:
         _pt_app_cancel_timeout(self._ptr, int(timer_id))
         self._timers.pop(int(timer_id), None)
+
+    def watch_fd(self, fd: int, callback: Callable[[int], Any],
+                 events: int = fd_read) -> int:
+        """Watches a file descriptor on the app's event loop.
+
+        ``callback`` receives the event mask (``fd_read`` / ``fd_write`` /
+        ``fd_error`` / ``fd_hangup``). The callback must not block. Returns a
+        watch id to pass to :meth:`unwatch_fd`; keep a reference to it. The
+        same fd must not be watched twice concurrently.
+        """
+        def dispatch(_app: int, mask: int, _data: int) -> None:
+            callback(int(mask))
+
+        trampoline = _FD(dispatch)
+        watch_id = int(
+            _pt_app_watch_fd(self._ptr, int(fd), int(events), trampoline, None)
+        )
+        self._callbacks.append(trampoline)
+        self._watch_fds[watch_id] = trampoline
+        return watch_id
+
+    def unwatch_fd(self, watch_id: int) -> None:
+        _pt_app_unwatch_fd(self._ptr, int(watch_id))
+        self._watch_fds.pop(int(watch_id), None)
 
     @property
     def color_scheme(self) -> int:

@@ -224,7 +224,41 @@ ROUND_10_FUNCTIONS = {
 BINDING_ALLOWLIST: dict[str, set[str]] = {
     "cpp": set(),
     "python": set(),
-    "java": set(),
+    # The Java FFM binding does not wrap the custom-surface extension APIs
+    # yet: custom paint, fd watches, raw input and IME callbacks, primary
+    # selection and offscreen painting. They stay reachable from C, C++ and
+    # Python; wrapping them in Java is tracked as follow-up work.
+    "java": {
+        "pt_app_watch_fd",
+        "pt_app_unwatch_fd",
+        "pt_paint_clip_rect",
+        "pt_paint_draw_line",
+        "pt_paint_draw_text",
+        "pt_paint_fill_rect",
+        "pt_paint_fill_rounded_rect",
+        "pt_paint_font_has_glyph",
+        "pt_paint_font_metrics",
+        "pt_paint_height",
+        "pt_paint_measure_text",
+        "pt_paint_pop_clip",
+        "pt_paint_push_clip",
+        "pt_paint_scale",
+        "pt_paint_stroke_rect",
+        "pt_paint_width",
+        "pt_widget_clear_paint_callback",
+        "pt_widget_request_redraw",
+        "pt_widget_request_redraw_rect",
+        "pt_widget_set_paint_callback",
+        "pt_window_paint_pixels",
+        "pt_window_primary_get",
+        "pt_window_primary_set",
+        "pt_window_set_focus_callback",
+        "pt_window_set_ime_callbacks",
+        "pt_window_set_ime_cursor_rect",
+        "pt_window_set_ime_enabled",
+        "pt_window_set_key_event_callback",
+        "pt_window_set_pointer_callback",
+    },
 }
 
 FROZEN_05_DATA_VIEW = (

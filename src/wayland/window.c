@@ -208,9 +208,13 @@ static bool ensure_buffers(pt_window *window, int width, int height) {
         }
     }
     destroy_buffers(wl);
+    size_t plane = 0;
+    size_t total = 0;
+    if (!pt_wl_buffer_geometry(width, height, pt_wl_buffer_count, &plane, &total)) {
+        pt_set_error("window buffer size out of range: %dx%d", width, height);
+        return false;
+    }
     int stride = width * 4;
-    size_t plane = (size_t)stride * (size_t)height;
-    size_t total = plane * pt_wl_buffer_count;
     int fd = pt_wl_create_shm_file(total);
     if (fd < 0) {
         pt_set_error("failed to create shared memory buffer");
@@ -278,6 +282,16 @@ void pt_wl_window_apply_scale(pt_window *window) {
         return;
     }
     float desired = window->scale > 0.05f ? window->scale : 1.0f;
+    if (!wl->surface || wl_surface_get_version(wl->surface) < 3) {
+        /* Without wl_surface.set_buffer_scale (v3) the compositor assumes a
+         * scale of 1, so rendering at any other scale would misplace the
+         * buffer. */
+        window->scale = 1.0f;
+        window->render_scale = 1.0f;
+        pt_window_invalidate_layout(window, NULL);
+        window->needs_draw = true;
+        return;
+    }
     if (platform && platform->viewporter && wl->viewport) {
         window->render_scale = desired;
         wl_surface_set_buffer_scale(wl->surface, 1);
@@ -405,10 +419,12 @@ bool pt_wl_window_draw(pt_window *window) {
     }
 
     pt_wl_window_update_viewport(window);
-    if (platform->viewporter && wl->viewport) {
-        wl_surface_set_buffer_scale(wl->surface, 1);
-    } else if (window->scale > 0.05f) {
-        wl_surface_set_buffer_scale(wl->surface, (int32_t)lroundf(window->scale));
+    if (wl_surface_get_version(wl->surface) >= 3) {
+        if (platform->viewporter && wl->viewport) {
+            wl_surface_set_buffer_scale(wl->surface, 1);
+        } else if (window->scale > 0.05f) {
+            wl_surface_set_buffer_scale(wl->surface, (int32_t)lroundf(window->scale));
+        }
     }
     target->busy = true;
     if (!wl->frame_callback) {
@@ -658,9 +674,9 @@ void pt_platform_window_destroy(pt_window *window) {
     if (platform && platform->text_input_window == window) {
         pt_platform_ime_set_enabled(window, false);
     }
-    if (platform && platform->touch_focus == window) {
-        platform->touch_focus = NULL;
-    }
+    /* Drop cached focus and drag pointers before the surface goes away; input
+     * events that arrive afterwards must not reach this window. */
+    pt_platform_window_forget_focus(window);
     pt_platform_popup_destroy_all(window);
     if (wl->frame_callback) {
         wl_callback_destroy(wl->frame_callback);

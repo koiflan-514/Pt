@@ -24,6 +24,23 @@
 
 #define pt_wl_buffer_count 3
 
+/* Validates a wl_shm buffer geometry. The protocol carries pool sizes in
+ * int32, and compositors reject surfaces wider or taller than 32767, so a
+ * larger widget request must fail here instead of truncating the pool size. */
+static inline bool pt_wl_buffer_geometry(int width, int height, int count, size_t *plane_out,
+                                         size_t *total_out) {
+    if (width <= 0 || height <= 0 || width > 32767 || height > 32767 || count < 1) {
+        return false;
+    }
+    size_t plane = (size_t)width * 4u * (size_t)height;
+    if (plane > (size_t)INT32_MAX / (size_t)count) {
+        return false;
+    }
+    *plane_out = plane;
+    *total_out = plane * (size_t)count;
+    return true;
+}
+
 struct pt_wayland_window;
 typedef struct pt_wayland_window pt_wayland_window;
 
@@ -247,5 +264,9 @@ void pt_wl_window_schedule_frame(pt_window *window);
 bool pt_wl_window_draw(pt_window *window);
 void pt_wl_window_apply_scale(pt_window *window);
 void pt_wl_window_update_viewport(pt_window *window);
+/* Drops every cached focus/drag pointer that refers to `window` and stops
+ * keyboard repeat. Must run before the window's platform data is freed so
+ * later input events cannot touch a dangling window. */
+void pt_platform_window_forget_focus(pt_window *window);
 
 #endif

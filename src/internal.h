@@ -773,6 +773,10 @@ pt_widget *pt_widget_new(pt_widget *parent, pt_widget_kind kind);
 void pt_widget_append(pt_widget *parent, pt_widget *child);
 pt_window *pt_widget_window(const pt_widget *widget);
 pt_app *pt_widget_app(const pt_widget *widget);
+/* Liveness check usable after a user callback that may have destroyed widget:
+ * it scans the window's live trees (root and overlay panels) instead of
+ * dereferencing widget. A NULL window means "not attached". */
+bool pt_widget_attached(const pt_window *window, const pt_widget *widget);
 pt_layout_ctx pt_layout_context_for(const pt_widget *widget);
 float pt_widget_font_size(const pt_widget *widget);
 int pt_widget_font_weight(const pt_widget *widget);

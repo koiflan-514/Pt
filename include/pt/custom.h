@@ -44,6 +44,14 @@ pt_api void pt_widget_set_paint_callback(pt_widget *widget, pt_paint_callback ca
                                          void *user_data);
 pt_api void pt_widget_clear_paint_callback(pt_widget *widget);
 
+/* Paints one full frame of `window` into `pixels` (one uint32_t per pixel in
+ * 0xAARRGGBB byte order, `width` pixels per row) at a scale of 1.0. This is
+ * the offscreen entry point for headless and unit testing of custom paint
+ * callbacks: no compositor or window buffer is involved. Returns false when
+ * the window is NULL or the size is invalid. */
+pt_api bool pt_window_paint_pixels(pt_window *window, uint32_t *pixels, int width,
+                                   int height);
+
 /* Requests a repaint of this widget and its subtree. Unlike a window-level
  * redraw this damages the widget rectangle only. */
 pt_api void pt_widget_request_redraw(pt_widget *widget);

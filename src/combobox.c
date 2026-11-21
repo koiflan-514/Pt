@@ -540,8 +540,12 @@ void pt_combobox_choose_option(pt_widget *combobox, uint32_t position) {
     if (!state || item == pt_list_index_none || item_disabled(state, item)) {
         return;
     }
+    pt_window *window = pt_widget_window(combobox);
     pt_combobox_select(combobox, item, true);
-    pt_combobox_close_popup(combobox);
+    /* on_change may destroy the combo box; only the window is safe to use. */
+    if (pt_widget_attached(window, combobox)) {
+        pt_combobox_close_popup(combobox);
+    }
 }
 
 /* ---------- public API ---------- */
@@ -769,17 +773,17 @@ void pt_combobox_select(pt_widget *combobox, uint32_t index, bool notify) {
     state->highlighted = index;
     set_display(combobox, item_text(state, index));
     pt_widget_a11y_emit(combobox, pt_a11y_event_selection_changed);
-    /* The callback reports a choice, not an attempt: re-selecting the value
-     * that is already in the field stays silent, as it does in GtkComboBox and
-     * QComboBox. */
-    if (notify && changed && state->on_change) {
-        state->on_change(combobox, index, state->change_data);
-    }
     if (changed) {
         pt_widget_a11y_emit(combobox, pt_a11y_event_value_changed);
     }
     if (popup_open(state)) {
         mark_options(combobox);
+    }
+    /* The callback reports a choice, not an attempt: re-selecting the value
+     * that is already in the field stays silent, as it does in GtkComboBox and
+     * QComboBox. It runs last because it may destroy the combo box. */
+    if (notify && changed && state->on_change) {
+        state->on_change(combobox, index, state->change_data);
     }
 }
 
@@ -1019,9 +1023,6 @@ static void field_changed(pt_widget *field, const char *text, void *user_data) {
     free(combobox->text);
     combobox->text = pt_strdup(value);
     combobox->typeahead_at = 0;
-    if (state->on_text_change) {
-        state->on_text_change(combobox, value, state->text_change_data);
-    }
     if (!popup_open(state)) {
         show_popup(combobox, false);
     } else {
@@ -1032,6 +1033,10 @@ static void field_changed(pt_widget *field, const char *text, void *user_data) {
         pt_window_invalidate_layout(pt_widget_window(combobox), NULL);
     }
     pt_widget_mark_dirty(combobox, false);
+    /* Last touch: the callback may destroy the combo box or its field. */
+    if (state->on_text_change) {
+        state->on_text_change(combobox, value, state->text_change_data);
+    }
 }
 
 bool pt_combobox_key(pt_widget *combobox, uint32_t keysym, uint32_t modifiers,
@@ -1101,8 +1106,11 @@ bool pt_combobox_key(pt_widget *combobox, uint32_t keysym, uint32_t modifiers,
     }
     if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
         if (open) {
+            pt_window *window = pt_widget_window(combobox);
             commit_highlight(combobox);
-            pt_combobox_close_popup(combobox);
+            if (pt_widget_attached(window, combobox)) {
+                pt_combobox_close_popup(combobox);
+            }
             return true;
         }
         if (filterable) {
@@ -1117,8 +1125,11 @@ bool pt_combobox_key(pt_widget *combobox, uint32_t keysym, uint32_t modifiers,
             return false;
         }
         if (open) {
+            pt_window *window = pt_widget_window(combobox);
             commit_highlight(combobox);
-            pt_combobox_close_popup(combobox);
+            if (pt_widget_attached(window, combobox)) {
+                pt_combobox_close_popup(combobox);
+            }
         } else {
             show_popup(combobox, true);
         }

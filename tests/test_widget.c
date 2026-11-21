@@ -256,6 +256,74 @@ static void test_timers_and_close(pt_app *app) {
     pt_check(app->first_window == NULL);
 }
 
+typedef struct destroy_state {
+    int text_calls;
+    int submit_calls;
+} destroy_state;
+
+static void destroy_entry_on_text(pt_widget *widget, const char *text, void *data) {
+    (void)text;
+    ++((destroy_state *)data)->text_calls;
+    pt_widget_destroy(widget);
+}
+
+static void destroy_entry_on_submit(pt_widget *widget, void *data) {
+    ++((destroy_state *)data)->submit_calls;
+    pt_widget_destroy(widget);
+}
+
+static void test_callback_destroys_widget(pt_app *app) {
+    pt_window *window = pt_window_create(app, "lifetime", 400, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+
+    /* An on_text callback may destroy its own entry; the newline submit path
+     * must not call on_submit on the freed widget. */
+    destroy_state state = {0};
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_entry_set_on_change(entry, destroy_entry_on_text, &state);
+    pt_entry_set_on_submit(entry, destroy_entry_on_submit, &state);
+    pt_check(pt_widget_focus(entry));
+    pt_check(pt_widget_text_input(entry, "boom\n"));
+    pt_check(state.text_calls == 1);
+    pt_check(state.submit_calls == 0);
+    pt_check(window->focused == NULL);
+
+    /* Backspace editing fires the change callback mid-key; nothing may touch
+     * the entry afterwards. */
+    pt_widget *second = pt_entry_create(root, NULL);
+    pt_widget_set_text(second, "abcd");
+    pt_entry_set_selection(second, 4, 4);
+    pt_check(pt_widget_focus(second));
+    pt_entry_set_on_change(second, destroy_entry_on_text, &state);
+    pt_check(pt_widget_key(second, XKB_KEY_BackSpace, 0, NULL));
+    pt_check(state.text_calls == 2);
+    pt_check(window->focused == NULL);
+
+    /* Enter submits last, so a destroying submit callback is safe. */
+    pt_widget *third = pt_entry_create(root, "x");
+    pt_check(pt_widget_focus(third));
+    pt_entry_set_on_submit(third, destroy_entry_on_submit, &state);
+    pt_check(pt_widget_key(third, XKB_KEY_Return, 0, NULL));
+    pt_check(state.submit_calls == 1);
+    pt_check(window->focused == NULL);
+
+    /* An IME commit that replaces a selection notifies once, after the entry
+     * is fully updated, so the callback can destroy it. */
+    pt_widget *fourth = pt_entry_create(root, NULL);
+    pt_widget_set_text(fourth, "abcd");
+    pt_entry_set_selection(fourth, 0, 2);
+    pt_entry_set_on_change(fourth, destroy_entry_on_text, &state);
+    pt_check(pt_widget_ime_apply(fourth, "Q", 0, 0, true));
+    pt_check(state.text_calls == 3);
+    pt_check(window->focused == NULL);
+
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.widget");
@@ -266,6 +334,7 @@ int main(void) {
     test_controls(app);
     test_theme_and_decorations(app);
     test_timers_and_close(app);
+    test_callback_destroys_widget(app);
     pt_app_destroy(app);
     return pt_test_finish("widget");
 }

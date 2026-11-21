@@ -985,5 +985,115 @@ class StructuredDragDropTests(unittest.TestCase):
         self.assertEqual(pt._bytes_at(address, 0), b"")
 
 
+class ExtensionApiTests(unittest.TestCase):
+    """Headless coverage for the custom paint, IME, fd-watch and
+    primary-selection extension APIs (pt/custom.h and friends)."""
+
+    def setUp(self) -> None:
+        self.app = pt.App("pt.tests.python.extension")
+        self.window = pt.Window(self.app, "extension tests", 320, 240)
+        self.root = self.window.root
+        self.column = pt.column(self.root).set_gap(6)
+
+    def tearDown(self) -> None:
+        self.app.destroy()
+
+    def test_paint_callback_and_context(self) -> None:
+        fill_color = pt.rgb(0xAA3300)
+        checked: list[bool] = []
+
+        def paint(widget: pt.Widget, context: pt.PaintContext) -> None:
+            # The context is borrowed: every read must happen inside the
+            # callback, before the paint pass returns.
+            self.assertGreaterEqual(context.width, 40.0)
+            self.assertGreaterEqual(context.height, 20.0)
+            self.assertGreater(context.scale, 0.0)
+            clip = context.clip_rect()
+            self.assertIsNotNone(clip)
+            context.fill_rect(0.0, 0.0, 12.0, 12.0, fill_color)
+            context.fill_rounded_rect(0.0, 0.0, 8.0, 8.0, 2.0, pt.rgb(0x00AA33))
+            context.stroke_rect(1.0, 1.0, 6.0, 6.0, 1.0, pt.rgb(0x0033AA))
+            context.draw_line(0.0, 0.0, 4.0, 4.0, 1.0, pt.rgb(0x333333))
+            context.draw_text("sans", 12.0, pt.font_weight_regular,
+                              pt.font_slant_upright, 2.0, 10.0, "Pt", pt.rgb(0x111111))
+            self.assertGreater(context.measure_text(
+                "sans", 12.0, pt.font_weight_regular, pt.font_slant_upright, "Pt"), 0.0)
+            self.assertIsNotNone(context.font_metrics(
+                "sans", 12.0, pt.font_weight_regular, pt.font_slant_upright))
+            self.assertTrue(context.font_has_glyph("sans", 12.0, ord("P")))
+            checked.append(True)
+
+        box = pt.box(self.column)
+        box.set_size(40, 20)
+        box.on_paint(paint)
+        pixels = pt.paint_window_pixels(self.window, 320, 240)
+        self.assertEqual(checked, [True])
+        # The fill landed in the offscreen buffer, so the callback really ran
+        # through the paint pass instead of being a registration no-op.
+        # Colors arrive as 0xAARRGGBB; pt.rgb packs 0xRRGGBBAA.
+        buffer_value = ((fill_color & 0xFF) << 24) | (fill_color >> 8)
+        self.assertIn(buffer_value, pixels)
+
+        box.clear_paint_callback()
+        checked.clear()
+        pt.paint_window_pixels(self.window, 320, 240)
+        self.assertEqual(checked, [])
+
+    def test_watch_fd_read_events(self) -> None:
+        import os
+
+        read_fd, write_fd = os.pipe()
+        try:
+            events: list[int] = []
+            watch = self.app.watch_fd(read_fd, events.append)
+            os.write(write_fd, b"x")
+            self.assertEqual(self.app.run_for(50), 0)
+            self.assertTrue(events)
+            self.assertTrue(events[0] & pt.fd_read)
+            self.app.unwatch_fd(watch)
+            events.clear()
+            os.write(write_fd, b"y")
+            self.assertEqual(self.app.run_for(50), 0)
+            self.assertEqual(events, [])
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    def test_primary_selection_roundtrip(self) -> None:
+        # Headless keeps an in-process buffer so both sides stay testable.
+        self.assertTrue(self.window.set_primary("primary payload"))
+        self.assertEqual(self.window.primary, "primary payload")
+        self.window.primary = "second"
+        self.assertEqual(self.window.primary, "second")
+
+    def test_window_input_callbacks_register_and_run(self) -> None:
+        keys: list[tuple[int, int, str]] = []
+        pointers: list[pt.PointerEvent] = []
+        focus: list[bool] = []
+        self.window.on_key_event(
+            lambda _window, key, modifiers, text: keys.append((key, modifiers, text)) or True
+        )
+        self.window.on_pointer(
+            lambda _window, event: pointers.append(event) or True
+        )
+        self.window.on_focus(lambda _window, focused: focus.append(focused))
+        self.assertEqual(self.app.run_for(20), 0)
+
+    def test_ime_callbacks_register_and_clear(self) -> None:
+        commits: list[str] = []
+        preedits: list[tuple[str, int, int]] = []
+        self.window.set_ime_callbacks(
+            commit=lambda _window, text: commits.append(text),
+            preedit=lambda _window, text, begin, end: preedits.append((text, begin, end)),
+        )
+        self.window.set_ime_enabled(True)
+        self.window.set_ime_cursor_rect(4, 8, 12, 16)
+        self.assertEqual(self.app.run_for(20), 0)
+        # Clearing both callbacks disables custom IME handling again.
+        self.window.set_ime_callbacks()
+        self.window.set_ime_enabled(False)
+        self.assertEqual(self.app.run_for(20), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

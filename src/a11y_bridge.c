@@ -15,6 +15,7 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -324,6 +325,66 @@ static int a11y_child_count(const pt_a11y_obj *obj) {
     }
     default:
         return 0;
+    }
+}
+
+static void a11y_append_ref(DBusMessageIter *iter, const pt_a11y_bridge *bridge,
+                            const char *path);
+static bool a11y_obj_path(const pt_a11y_obj *obj, char *buffer, size_t size);
+
+/* Appends the accessible children in the same order as a11y_child_at, but in
+ * one pass instead of rescanning from the first child for every index. */
+static void a11y_append_children(DBusMessageIter *array, const pt_a11y_bridge *bridge,
+                                 const pt_a11y_obj *obj) {
+    char path[256];
+    pt_a11y_obj child = {0};
+    child.window = obj->window;
+    switch (obj->type) {
+    case pt_a11y_obj_app:
+        for (pt_window *window = bridge->app ? bridge->app->first_window : NULL; window;
+             window = window->next) {
+            child.type = pt_a11y_obj_window;
+            child.window = window;
+            child.widget = NULL;
+            if (a11y_obj_path(&child, path, sizeof(path))) {
+                a11y_append_ref(array, bridge, path);
+            }
+        }
+        break;
+    case pt_a11y_obj_window:
+        if (obj->window->root) {
+            child.type = pt_a11y_obj_widget;
+            child.widget = obj->window->root;
+            if (a11y_obj_path(&child, path, sizeof(path))) {
+                a11y_append_ref(array, bridge, path);
+            }
+        }
+        for (pt_overlay *overlay = obj->window->overlays; overlay; overlay = overlay->next) {
+            if (!overlay->open || !overlay->panel) {
+                continue;
+            }
+            child.type = pt_a11y_obj_widget;
+            child.widget = overlay->panel;
+            if (a11y_obj_path(&child, path, sizeof(path))) {
+                a11y_append_ref(array, bridge, path);
+            }
+        }
+        break;
+    case pt_a11y_obj_widget:
+        for (pt_widget *widget = obj->widget->first_child; widget;
+             widget = widget->next_sibling) {
+            if (!a11y_child_is_real(widget)) {
+                continue;
+            }
+            child.type = pt_a11y_obj_widget;
+            child.widget = widget;
+            if (a11y_obj_path(&child, path, sizeof(path))) {
+                a11y_append_ref(array, bridge, path);
+            }
+        }
+        break;
+    default:
+        break;
     }
 }
 
@@ -1566,6 +1627,17 @@ static void a11y_substring(const char *text, size_t start_char, size_t end_char,
     *out = copy;
 }
 
+/* Unicode White_Space; ctype isspace() is undefined for the full codepoint
+ * range and would classify bytes above 0x7F by locale. */
+static bool a11y_is_space(uint32_t code) {
+    if (code < 0x80u) {
+        return code == ' ' || (code >= '\t' && code <= '\r');
+    }
+    return code == 0x00A0u || code == 0x1680u || (code >= 0x2000u && code <= 0x200Au) ||
+           code == 0x2028u || code == 0x2029u || code == 0x202Fu || code == 0x205Fu ||
+           code == 0x3000u;
+}
+
 static void a11y_word_range(const char *text, size_t chars, size_t offset, size_t *start,
                             size_t *end) {
     *start = offset;
@@ -1577,7 +1649,7 @@ static void a11y_word_range(const char *text, size_t chars, size_t offset, size_
     while (cursor > 0) {
         size_t byte = a11y_utf8_byte_offset(text, cursor - 1);
         uint32_t code = a11y_utf8_decode(text, byte);
-        if (isspace((int)code)) {
+        if (a11y_is_space(code)) {
             break;
         }
         --cursor;
@@ -1587,7 +1659,7 @@ static void a11y_word_range(const char *text, size_t chars, size_t offset, size_
     while (cursor < chars) {
         size_t byte = a11y_utf8_byte_offset(text, cursor);
         uint32_t code = a11y_utf8_decode(text, byte);
-        if (isspace((int)code)) {
+        if (a11y_is_space(code)) {
             break;
         }
         ++cursor;
@@ -2379,10 +2451,21 @@ static DBusHandlerResult a11y_properties(DBusConnection *connection, DBusMessage
             return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
                               "Set expects interface, property and value");
         }
+        if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
+            return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
+                              "interface half of the property name must be a string");
+        }
         dbus_message_iter_get_basic(&iter, &iface);
-        dbus_message_iter_next(&iter);
+        if (!dbus_message_iter_next(&iter) ||
+            dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
+            return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
+                              "property name must be a string");
+        }
         dbus_message_iter_get_basic(&iter, &property);
-        dbus_message_iter_next(&iter);
+        if (!dbus_message_iter_next(&iter)) {
+            return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
+                              "missing property value");
+        }
         int type = dbus_message_iter_get_arg_type(&iter);
         if (type != DBUS_TYPE_VARIANT) {
             return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
@@ -2409,6 +2492,10 @@ static DBusHandlerResult a11y_properties(DBusConnection *connection, DBusMessage
                                   "CurrentValue expects a double");
             }
             dbus_message_iter_get_basic(&variant, &value);
+            if (!isfinite(value)) {
+                return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
+                                  "CurrentValue must be finite");
+            }
             if (!a11y_value_apply(obj, (float)value)) {
                 return a11y_error(connection, message, DBUS_ERROR_FAILED,
                                   "value is not writable");
@@ -2624,8 +2711,6 @@ static DBusHandlerResult a11y_accessible(DBusConnection *connection, DBusMessage
         return a11y_send(connection, message, reply);
     }
     if (strcmp(member, "GetChildren") == 0) {
-        int count = obj->type == pt_a11y_obj_app ? a11y_app_child_count(bridge->app)
-                                                 : a11y_child_count(obj);
         DBusMessage *reply = a11y_reply(message);
         if (!reply) {
             return DBUS_HANDLER_RESULT_NEED_MEMORY;
@@ -2634,14 +2719,7 @@ static DBusHandlerResult a11y_accessible(DBusConnection *connection, DBusMessage
         dbus_message_iter_init_append(reply, &iter);
         DBusMessageIter array;
         dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "(so)", &array);
-        for (int i = 0; i < count; ++i) {
-            pt_a11y_obj child = a11y_child_at(bridge->app, obj, i);
-            char path[256];
-            if (!a11y_obj_path(&child, path, sizeof(path))) {
-                continue;
-            }
-            a11y_append_ref(&array, bridge, path);
-        }
+        a11y_append_children(&array, bridge, obj);
         dbus_message_iter_close_container(&iter, &array);
         return a11y_send(connection, message, reply);
     }
@@ -3539,6 +3617,13 @@ static DBusHandlerResult a11y_editable_text(DBusConnection *connection,
     }
     if (strcmp(member, "DeleteText") == 0 || strcmp(member, "CopyText") == 0 ||
         strcmp(member, "CutText") == 0) {
+        /* The real text is never exposed for password entries, so a range copy
+         * would leak nothing while a range delete would rebuild the text from
+         * an empty string and wipe the field. */
+        if (view.password) {
+            return a11y_error(connection, message, DBUS_ERROR_NOT_SUPPORTED,
+                              "text range access is disabled for password entries");
+        }
         dbus_int32_t start = 0;
         dbus_int32_t end = 0;
         if (!dbus_message_get_args(message, NULL, DBUS_TYPE_INT32, &start,
@@ -4618,18 +4703,26 @@ void pt_a11y_bridge_dispatch(pt_app *app) {
         }
         return;
     }
-    if (!dbus_connection_read_write(bridge->bus, 0)) {
+    /* Handlers can run application callbacks, and a callback may disable
+     * accessibility and free the bridge. Hold a reference to the connection so
+     * the dispatch loop itself stays valid, and re-check the bridge after every
+     * message before touching it again. */
+    DBusConnection *bus = dbus_connection_ref(bridge->bus);
+    if (!dbus_connection_read_write(bus, 0)) {
+        dbus_connection_unref(bus);
         pt_a11y_bridge_stop(app);
         if (app->a11y_status == pt_a11y_status_active) {
             app->a11y_status = pt_a11y_status_unavailable;
         }
         return;
     }
-    while (dbus_connection_get_dispatch_status(bridge->bus) == DBUS_DISPATCH_DATA_REMAINS) {
-        if (dbus_connection_dispatch(bridge->bus) == DBUS_DISPATCH_COMPLETE) {
+    while (app->a11y_bridge && dbus_connection_get_dispatch_status(bus) ==
+                                  DBUS_DISPATCH_DATA_REMAINS) {
+        if (dbus_connection_dispatch(bus) == DBUS_DISPATCH_COMPLETE) {
             break;
         }
     }
+    dbus_connection_unref(bus);
 }
 
 #else /* !PT_HAVE_DBUS */

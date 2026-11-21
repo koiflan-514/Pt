@@ -125,6 +125,9 @@ void pt_tree_clear(pt_widget *tree) {
     if (!state) {
         return;
     }
+    /* The rename editor and its target node are about to be freed; drop both
+     * first so no later layout or commit follows a dangling pointer. */
+    pt_tree_cancel_rename(tree);
     tree_free_node(state->first_root);
     state->first_root = NULL;
     state->last_root = NULL;
@@ -613,10 +616,13 @@ bool pt_tree_commit_rename(pt_widget *tree) {
     free(node->text);
     node->text = pt_strdup(text);
     pt_widget_mark_dirty(tree, true);
-    if (state->on_rename) {
-        state->on_rename(tree, node, text, state->rename_data);
-    }
+    pt_tree_rename_callback callback = state->on_rename;
+    void *callback_data = state->rename_data;
+    /* Emit before user code runs: on_rename may destroy the tree. */
     pt_widget_a11y_emit(tree, pt_a11y_event_name_changed);
+    if (callback) {
+        callback(tree, node, text, callback_data);
+    }
     free(text);
     return true;
 }

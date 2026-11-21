@@ -61,6 +61,92 @@ struct sort_key {
     pt_sort_direction direction = pt_sort_none;
 };
 
+struct font_metrics {
+    float ascent = 0.0f;
+    float descent = 0.0f;
+    float line_height = 0.0f;
+    float cell_width = 0.0f;
+};
+
+class paint_context {
+  public:
+    explicit paint_context(pt_paint_context *handle) : handle_(handle) {}
+
+    [[nodiscard]] pt_paint_context *get() const { return handle_; }
+    [[nodiscard]] float width() const { return pt_paint_width(handle_); }
+    [[nodiscard]] float height() const { return pt_paint_height(handle_); }
+    [[nodiscard]] float scale() const { return pt_paint_scale(handle_); }
+    [[nodiscard]] std::optional<rect> clip() const {
+        rect value;
+        if (!pt_paint_clip_rect(handle_, &value.x, &value.y, &value.width, &value.height)) {
+            return std::nullopt;
+        }
+        return value;
+    }
+    paint_context &push_clip(float x, float y, float width, float height) {
+        pt_paint_push_clip(handle_, x, y, width, height);
+        return *this;
+    }
+    paint_context &push_clip(rect clip) { return push_clip(clip.x, clip.y, clip.width, clip.height); }
+    paint_context &pop_clip() {
+        pt_paint_pop_clip(handle_);
+        return *this;
+    }
+    paint_context &fill_rect(float x, float y, float width, float height, pt_color color) {
+        pt_paint_fill_rect(handle_, x, y, width, height, color);
+        return *this;
+    }
+    paint_context &fill_rect(rect area, pt_color color) {
+        return fill_rect(area.x, area.y, area.width, area.height, color);
+    }
+    paint_context &fill_rounded_rect(float x, float y, float width, float height, float radius,
+                                     pt_color color) {
+        pt_paint_fill_rounded_rect(handle_, x, y, width, height, radius, color);
+        return *this;
+    }
+    paint_context &stroke_rect(float x, float y, float width, float height, float line_width,
+                               pt_color color) {
+        pt_paint_stroke_rect(handle_, x, y, width, height, line_width, color);
+        return *this;
+    }
+    paint_context &draw_line(float x0, float y0, float x1, float y1, float line_width,
+                             pt_color color) {
+        pt_paint_draw_line(handle_, x0, y0, x1, y1, line_width, color);
+        return *this;
+    }
+    paint_context &draw_text(std::string_view family, float size, int weight, int slant, float x,
+                             float baseline, std::string_view text, pt_color color) {
+        std::string name = copy_string(family);
+        pt_paint_draw_text(handle_, name.c_str(), size, weight, slant, x, baseline, text.data(),
+                           text.size(), color);
+        return *this;
+    }
+    [[nodiscard]] bool font_has_glyph(std::string_view family, float size,
+                                      uint32_t codepoint) const {
+        std::string name = copy_string(family);
+        return pt_paint_font_has_glyph(handle_, name.c_str(), size, codepoint);
+    }
+    [[nodiscard]] float measure_text(std::string_view family, float size, int weight, int slant,
+                                     std::string_view text) const {
+        std::string name = copy_string(family);
+        return pt_paint_measure_text(handle_, name.c_str(), size, weight, slant, text.data(),
+                                     text.size());
+    }
+    [[nodiscard]] std::optional<font_metrics> metrics(std::string_view family, float size,
+                                                      int weight, int slant) const {
+        std::string name = copy_string(family);
+        font_metrics value;
+        if (!pt_paint_font_metrics(handle_, name.c_str(), size, weight, slant, &value.ascent,
+                                   &value.descent, &value.line_height, &value.cell_width)) {
+            return std::nullopt;
+        }
+        return value;
+    }
+
+  private:
+    pt_paint_context *handle_ = nullptr;
+};
+
 class app {
   public:
     explicit app(std::string_view app_id) {
@@ -100,6 +186,11 @@ class app {
     void cancel_timeout(uint64_t timer_id) const {
         pt_app_cancel_timeout(handle_, timer_id);
     }
+    [[nodiscard]] uint64_t watch_fd(int fd, uint32_t events, pt_fd_callback callback,
+                                    void *data = nullptr) const {
+        return pt_app_watch_fd(handle_, fd, events, callback, data);
+    }
+    void unwatch_fd(uint64_t watch_id) const { pt_app_unwatch_fd(handle_, watch_id); }
     void set_color_scheme(pt_color_scheme scheme) const {
         pt_app_set_color_scheme(handle_, scheme);
     }
@@ -412,6 +503,18 @@ class widget {
     widget &on_click(pt_click_callback callback, void *data = nullptr) {
         pt_button_set_on_click(handle_, callback, data);
         return *this;
+    }
+    widget &set_paint_callback(pt_paint_callback callback, void *data = nullptr) {
+        pt_widget_set_paint_callback(handle_, callback, data);
+        return *this;
+    }
+    widget &clear_paint_callback() {
+        pt_widget_clear_paint_callback(handle_);
+        return *this;
+    }
+    void request_redraw() const { pt_widget_request_redraw(handle_); }
+    void request_redraw_rect(float x, float y, float width, float height) const {
+        pt_widget_request_redraw_rect(handle_, x, y, width, height);
     }
     widget &set_password(bool password) {
         pt_entry_set_password(handle_, password);
@@ -1388,6 +1491,37 @@ class window {
     window &on_gesture(pt_gesture_callback callback, void *data = nullptr) {
         pt_window_set_gesture_callback(handle_, callback, data);
         return *this;
+    }
+    window &on_focus(pt_focus_callback callback, void *data = nullptr) {
+        pt_window_set_focus_callback(handle_, callback, data);
+        return *this;
+    }
+    window &on_key_event(pt_key_event_callback callback, void *data = nullptr) {
+        pt_window_set_key_event_callback(handle_, callback, data);
+        return *this;
+    }
+    window &on_pointer(pt_pointer_callback callback, void *data = nullptr) {
+        pt_window_set_pointer_callback(handle_, callback, data);
+        return *this;
+    }
+    window &set_ime_callbacks(pt_ime_commit_callback commit,
+                              pt_ime_preedit_callback preedit,
+                              void *data = nullptr) {
+        pt_window_set_ime_callbacks(handle_, commit, preedit, data);
+        return *this;
+    }
+    window &set_ime_enabled(bool enabled) {
+        pt_window_set_ime_enabled(handle_, enabled);
+        return *this;
+    }
+    window &set_ime_cursor_rect(int x, int y, int width, int height) {
+        pt_window_set_ime_cursor_rect(handle_, x, y, width, height);
+        return *this;
+    }
+    [[nodiscard]] char *primary() const { return pt_window_primary_get(handle_); }
+    bool set_primary(const char *text) { return pt_window_primary_set(handle_, text); }
+    bool paint_pixels(std::span<uint32_t> pixels, int width, int height) const {
+        return pt_window_paint_pixels(handle_, pixels.data(), width, height);
     }
     window &set_long_press_delay(uint32_t milliseconds) {
         pt_window_set_long_press_delay(handle_, milliseconds);

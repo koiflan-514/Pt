@@ -337,3 +337,13 @@ bool pt_paint_font_metrics(pt_paint_context *context, const char *family, float 
     }
     return true;
 }
+
+bool pt_window_paint_pixels(pt_window *window, uint32_t *pixels, int width,
+                            int height) {
+    if (!window || !pixels || width <= 0 || height <= 0) {
+        return false;
+    }
+    pt_canvas canvas;
+    pt_canvas_init(&canvas, pixels, width, height, width, 1.0f);
+    return pt_window_paint(window, &canvas);
+}

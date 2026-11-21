@@ -25,6 +25,19 @@ static void on_resize(pt_window *window, int width, int height, void *data) {
     state->height = height;
 }
 
+typedef struct paint_probe {
+    int calls;
+    float width;
+} paint_probe;
+
+static void record_paint(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)widget;
+    paint_probe *probe = data;
+    probe->calls++;
+    probe->width = pt_paint_width(context);
+    pt_paint_fill_rect(context, 0.0f, 0.0f, 12.0f, 12.0f, pt_rgb(0xAA3300));
+}
+
 static pt_rect bounds_of(pt_widget *widget) {
     float x = 0.0f;
     float y = 0.0f;
@@ -222,6 +235,34 @@ int main(void) {
     pt_check(!pt_window_primary_set(NULL, "nope"));
     pt_check(pt_window_primary_get(NULL) == NULL);
     pt_window_free(pwin);
+
+    /* Offscreen painting: drives a custom paint callback without a
+     * compositor and proves the drawn pixels land in the caller buffer.
+     * The buffer holds 0xAARRGGBB words. */
+    pt_window *dwin = pt_window_create(app, "offscreen", 64, 48);
+    pt_check(dwin != NULL);
+    paint_probe probe = {0, 0};
+    pt_widget_set_paint_callback(pt_window_root(dwin), record_paint, &probe);
+    uint32_t *pixels = calloc(64 * 48, sizeof(uint32_t));
+    pt_check(pixels != NULL);
+    pt_check(pt_window_paint_pixels(dwin, pixels, 64, 48));
+    pt_check(probe.calls == 1);
+    pt_check(probe.width >= 1.0f);
+    pt_color mark = pt_rgb(0xAA3300);
+    uint32_t expected = ((mark & 0xFFu) << 24) | (mark >> 8);
+    bool found = false;
+    for (int i = 0; i < 64 * 48; ++i) {
+        if (pixels[i] == expected) {
+            found = true;
+            break;
+        }
+    }
+    pt_check(found);
+    pt_check(!pt_window_paint_pixels(dwin, NULL, 64, 48));
+    pt_check(!pt_window_paint_pixels(NULL, pixels, 64, 48));
+    pt_check(!pt_window_paint_pixels(dwin, pixels, 0, 48));
+    free(pixels);
+    pt_window_free(dwin);
 
     pt_app_destroy(app);
     return pt_test_finish("window");
