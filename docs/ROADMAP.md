@@ -1274,14 +1274,21 @@ Delivered:
   the 48-check live Wayland suite, the live typing guard and the final
   performance figures.
 
-## M18 - 1.1.0: contract hardening (planned)
+## M18 - 1.1.0: contract hardening (delivered; tag pending)
 
 Goal: make the paths 1.0 already promised explainable, testable and fallback-able
 on real compositors, and finish the extension surface that has landed in the
 1.1.0 work-in-progress. 1.1 adds no new widgets; it hardens contracts and closes
-the gaps that currently make `tools/release-check.sh` red. The engineering rules
-this milestone must satisfy are consolidated in [standards.md](standards.md);
-the protocol evidence is in [compositor-matrix.md](compositor-matrix.md).
+the gaps that make `tools/release-check.sh` red. The engineering rules this
+milestone must satisfy are consolidated in [standards.md](standards.md); the
+protocol evidence is in [compositor-matrix.md](compositor-matrix.md).
+
+Status (2026-11-22): the five development branches are merged at `d552baf` and
+the baseline is 448 functions / 785 entries. C contracts, ABI pins, the
+generated reference, examples, binding tests and the bilingual guides are
+delivered. The remaining work is the last seven wrapper functions in all three
+bindings, the `Makefile` `VERSION` line, and the final gate run; the annotated
+tag stays uncreated until those land. Item status and evidence follow.
 
 ### 1. Scope decision
 
@@ -1314,44 +1321,60 @@ pickers, searchable select, icon slots, clipboard images, `text/uri-list`
 writes, per-run font fallback, column persistence, inline images, RTL/bidi, GPU
 renderer, theme editor.
 
-### 2. Current state (verified 2026-11-22)
+### 2. Current state (verified 2026-11-22, integration head `d552baf`)
 
+- The C surface is hardened and pinned: decoration rework (`7b69bda`), primary
+  serials (`ac0ee22`), paint contract (`c46d57b`), pure snapshot and `_ex`
+  (`8168d9d`), IME surface (`5c47fec`), fd ownership (`da4cdda`), raw consume
+  scope (`d96cb1b`, `6000e25`) and ABI pins (`0d4ec5b`).
+- `api/pt.api` reads 448 functions and 785 entries; the README, architecture and
+  bindings counts and the four version macros say 1.1.0. `Makefile` `VERSION`
+  is still 1.0.0 and is updated by the sibling release change.
+- The generated reference is derived from `include/pt/*.h` (`df89ba6`) and was
+  regenerated for the 448-function surface (`d552baf`), so `custom.h` can no
+  longer be silently omitted.
+- C++, Python and Java each report 441/448: the same seven functions (owned fd
+  watch, decoration setter and two getters, maximize, primary serial, snapshot
+  `_ex`) are declared and tested in C but not yet wrapped. The allowlist is
+  empty; the Java work started at `b220410` and the final group is in flight.
 - `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`
-  (48 checks) and `make check-typing` all pass on the work-in-progress tree.
-- `tools/release-check.sh` fails with five findings:
-  1. README quotes 412 functions and `docs/api-reference.md` quotes 419, while
-     the baseline is 441.
-  2. Java parity is 412/441 with 29 functions allowlisted in
-     `tools/api-audit.py`; C++ and Python are 441/441.
-  3. The generated reference is missing the 22 `custom.h` functions because
-     `tools/gen-api-reference.py` enumerates a hand-written `MODULES` tuple that
-     omits `custom.h`; its `--check` therefore passes falsely.
-  4. The bilingual check fails: `README.md` gained `## Decoration policy`
-     (commit `2b2796b`) without a `README.zh-CN.md` counterpart.
-- `Makefile` VERSION and the four version macros are still 1.0.0.
-- The new enums (`pt_fd_event_*`, `pt_pointer_phase_*`) and `pt_pointer_event`
-  are not pinned in `tests/test_abi.c`.
-- SSD and primary selection have headless tests only; no live or
-  fake-compositor protocol coverage.
+  (48 checks) and `make check-typing` pass on the merged tree. The bilingual
+  documentation check reports 9 public guides with no structural drift.
+- No fake-compositor wire-replay facility exists. Decoration, text-input,
+  primary-selection and popup orders are covered by headless state tests plus
+  live niri runs; the wire-level replay remains open.
+- `preedit_hint` visual presentation and `show_input_panel`/`hide_input_panel`
+  are deferred to 1.2; the custom IME event surface and full-state resend are
+  implemented.
 
 ### 3. Backlog
 
 P0 — a 1.1.0 tag is impossible without these:
 
-1. **Version and release surface.** Bump `Makefile` VERSION and the
+1. **Version and release surface — delivered; `Makefile` line in flight.**
+   `include/pt/base.h` is 1.1.0 (`b8a21c4`), README/architecture/bindings and
+   this milestone carry the same version; the 1.1.0 release record is in
+   [release.md](release.md). Bump `Makefile` VERSION and the
    `include/pt/base.h` macros to 1.1.0; sync the README status line, reference
    header, architecture/bindings counts; add the 1.1.0 release record and this
    milestone's completion evidence. SONAME stays `libpt.so.1`.
-2. **Generator and reference.** Make `tools/gen-api-reference.py` enumerate the
+2. **Generator and reference — delivered (`df89ba6`, `d552baf`).**
+   The generator now enumerates the
    public headers (or a derived manifest) so a missing module fails `--check`;
    regenerate `docs/api-reference.md` and `api/pt.api` with `make api-update`;
-   verify 441/441 and consistent counts. Do not hand-edit the reference.
-3. **Java parity.** Wrap the 29 missing functions in
-   `bindings/java/src/pt/Pt.java` with `PtTest` checks; empty the allowlist. If
-   any function is genuinely C-only, document the reason and a target-version
-   deadline in `api-policy.md` per standards section 3 — a silent allowlist is
-   not acceptable.
-4. **Decoration semantics.** Default to explicit `CLIENT_SIDE`; add
+   both now cover 448 functions and the reference names every baseline function.
+   Do not hand-edit the reference.
+3. **Binding parity — partly delivered; last seven wrappers in flight.**
+   Java gained 29 wrappers with `PtTest` checks in `b220410`; the same seven
+   functions are now missing from C++, Python and Java (441/448 each) and are
+   being added together, with `PtTest`, C++ and Python dispatch checks. The C++
+   methods and Python names in [bindings.md](bindings.md) are the intended
+   convention and must be confirmed against the wrapper change. If any function
+   is genuinely C-only, document the reason and a target-version deadline in
+   `api-policy.md` per standards section 3 — a silent allowlist is not
+   acceptable.
+4. **Decoration semantics — delivered (`7b69bda`); wire replay open.**
+   Default to explicit `CLIENT_SIDE`; add
    `pt_decoration_mode {auto, client, server}` and
    `pt_window_set_decoration_mode()`. Split `pt_window_set_decorated(bool)` (Pt
    draws its own header) from the decoration mode so `false` never requests
@@ -1359,52 +1382,80 @@ P0 — a 1.1.0 tag is impossible without these:
    `fullscreen`/`tiled_*`/`configure_bounds`/`wm_capabilities`. Fix the
    `src/wayland/window.c` comment that claims niri draws a title bar. Cover the
    six fake-compositor sequences and live-smoke Mutter/KWin/niri; record Weston
-   as a known double-border limitation (Q-DEC-003).
-5. **Offscreen snapshot.** Make `pt_window_paint_pixels` side-effect-free (no
+   as a known double-border limitation (Q-DEC-003). The requested/effective
+   split, `set_decorated(false)` and the state consumption are implemented and
+   headless-tested; the six wire sequences are not in the tree and the live
+   result is the 48-check niri run.
+5. **Offscreen snapshot — delivered (`8168d9d`).**
+   `pt_window_paint_pixels` is side-effect-free (no
    damage, no clearing `needs_draw`/`redraw_scheduled`, no overlay collection);
    add `pt_window_paint_pixels_ex` with stride/scale/format; document
-   premultiplied `0xAARRGGBB`. Test that a snapshot on a mapped window does not
-   swallow the next frame and that deferred overlays survive.
-6. **Primary-selection serial.** Split enter/pointer-button/key-press serials;
+   premultiplied `0xAARRGGBB`. `tests/test_window.c` keeps a mapped window's next
+   frame and deferred overlays intact across a snapshot, and covers the
+   descriptor stride/scale/format failures; `test_visuals` uses the entry point
+   for the goldens.
+6. **Primary-selection serial — delivered (`ac0ee22`).**
+   Split enter/pointer-button/key-press serials;
    `set_selection` uses the triggering event's serial; programmatic selection
    without a trigger returns false and does not send; add an explicit
    `..._set_serial` entry point. Test keyboard select, drag-select (one send per
    completed drag) and programmatic select; two-client live middle-click paste.
-7. **Input semantics.** Restore button filtering so right/middle do not disturb
+   The headless paths are covered; the two-client live paste is recorded in
+   [compositor-matrix.md](compositor-matrix.md) and the live suite, not as a
+   fake-compositor wire test.
+7. **Input semantics — delivered (`6000e25`, `d96cb1b`).**
+   Restore button filtering so right/middle do not disturb
    left press/double-click; track `click_count` per button; make the motion
    callback return value match the header's "advisory" contract (or document and
    test the consume behaviour explicitly).
-8. **ABI pins.** Add `_Static_assert`/`offsetof` for `pt_fd_event_*`,
+8. **ABI pins — delivered (`0d4ec5b`).**
+   Add `_Static_assert`/`offsetof` for `pt_fd_event_*`,
    `pt_pointer_phase_*` and `pt_pointer_event` to `tests/test_abi.c`.
 
 P1 — required before the tag, may land alongside P0:
 
-9. **Paint-callback contract.** Write the purity/idempotence, no-tree-mutation,
+9. **Paint-callback contract — delivered (`c46d57b`).**
+   Write the purity/idempotence, no-tree-mutation,
    context-lifetime, clip-balance and no-reentrancy rules into
    `include/pt/custom.h` and the guide; add the tile-consistency golden test
    (1/3/unordered tiles produce identical pixels), the destroy-self-during-paint
-   deferral test, and 1x/1.5x/2x goldens.
-10. **IME contract.** Define the custom-IME event surface and the full-state
+   deferral test, and 1x/1.5x/2x goldens. `tests/test_window.c` covers tile
+   order/count equality, self-destruction, reentrant snapshot rejection and
+   clip imbalance restoration; the goldens live in `test_visuals`.
+10. **IME contract — delivered, two visual items deferred to 1.2
+    (`5c47fec`).** Define the custom-IME event surface and the full-state
     resend rule; treat empty `done` as ack; keep a local composition buffer;
     handle v2 `action`/`preedit_hint` without faking an Enter key; document the
     `delete_surrounding_text` byte/codepoint boundary. Fake text-input replay
     plus live niri+fcitx5 (v1), KWin+fcitx5 (v2), Mutter+IBus (v2).
-11. **fd watch and raw input contracts.** Borrowed/owned fd semantics,
+    `preedit_hint` visual presentation and `show_input_panel`/`hide_input_panel`
+    move to 1.2; the event surface, local composition buffer, v2 `action`
+    handling and empty-`done` acknowledgement are in `tests/test_ime.c`. Wire
+    replay and the three live IME combinations remain open.
+11. **fd watch and raw input contracts — delivered (`da4cdda`, `d96cb1b`).**
+    Borrowed/owned fd semantics,
     self-unwatch deferral, error-event guarantee, `run_for` timeout inclusion;
     raw-input dispatch order, consume scope and IME interaction. pipe/eventfd/
     timerfd tests and create/destroy fd-count stability.
-12. **Documentation and bilingual sync.** Add custom-draw/IME/fd/raw-input/
+12. **Documentation and bilingual sync — delivered (`572d3e3`, `c4f89a4`,
+    `da0dfd7`, `b676843` and the M18 docs finalization).**
+    Add custom-draw/IME/fd/raw-input/
     primary sections to quickstart, bindings, architecture and README; correct
     the stale "client-side" decoration wording and the 412/412 parity claims;
     sync every changed public guide into `README.zh-CN.md` and `docs/zh-CN/*`
     (including the Decoration policy section) and pass
     `tools/check-bilingual-docs.py`.
-13. **Examples.** At least a C custom-paint/terminal-like example and a primary
-    selection example; C++ and Python equivalents; Java after its wrappers land.
-14. **Binding tests.** C++ and Java tests for the new API (Python already has
-    five extension tests but only registration coverage for the input
-    callbacks); add dispatch assertions, not just registration.
-15. **Commit hygiene and full gate.** Split future work by theme; land baseline,
+13. **Examples — delivered (`9bef87b`, `e8fff55`, `2456223`).**
+    A C custom-paint/terminal-like example and a primary selection example, plus
+    C++ and Python equivalents. The Java example waits for its wrappers, as the
+    item allowed.
+14. **Binding tests — delivered where headless input allows (`e61391b`,
+    `ce06814`, `b220410`).** Python and C++ have dispatch-level extension tests
+    and Java has `PtTest` coverage for the landed wrappers. Raw callback
+    dispatch still needs a real seat, so those assertions stay a live-suite
+    item; registration and callback-free paths are covered headless.
+15. **Commit hygiene and full gate — pending final gate run.**
+    Split future work by theme; land baseline,
     reference and docs with their code; rerun `tools/ci.sh` (sanitizers,
     install-check, tarball) and `tools/release-check.sh --full` to zero failures;
     record the new performance baseline after the canvas optimisation.
@@ -1412,24 +1463,28 @@ P1 — required before the tag, may land alongside P0:
 ### 4. Completion criteria
 
 - `tools/release-check.sh --full` reports zero failures on the 1.1.0 tree:
-  version agreement, 441/441 (or the documented in-deadline allowlist) parity,
-  generated reference covering every baseline function, and the bilingual check
-  green.
+  version agreement, 448/448 parity with an empty allowlist, generated
+  reference covering every baseline function, and the bilingual check green.
+  Status: bilingual and reference are green; version agreement waits for the
+  `Makefile` line and parity waits for the last seven wrappers.
 - `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`,
   `make check-typing` and `tools/ci.sh` pass, including sanitizers, installed
-  consumers and the reproducible tarball rebuild.
+  consumers and the reproducible tarball rebuild. Status: the first five pass on
+  the merged tree; the full `ci.sh` run is the pending final gate.
 - Every protocol path added or changed in 1.1 has a fake-compositor sequence
   test and a live-compositor smoke result recorded against
   [compositor-matrix.md](compositor-matrix.md); known limitations are written
-  there, not left implicit.
-- The new enums/struct are pinned in `tests/test_abi.c`; `abidiff` against
-  `1.0.0` shows only additions.
+  there, not left implicit. Status: the fake-compositor facility is absent and
+  stays open; the live result is the 48-check niri run.
+- The new enums/struct are pinned in `tests/test_abi.c` (delivered); `abidiff`
+  against `1.0.0` still runs as part of the final gate.
 - The decoration, offscreen, primary-selection, paint-callback, IME, fd-watch
   and raw-input contracts are stated in the headers and exercised by tests that
-  include failure paths.
+  include failure paths (delivered).
 - The 1.1.0 release record in [release.md](release.md) captures the audit,
-  parity, live suites, performance figures and the ABI/behaviour diff summary;
-  the "tag pending" wording from the 1.0 record is resolved.
+  parity, live suites, performance figures and the ABI/behaviour diff summary
+  (drafted; final gate numbers pending); the tag stays uncreated until the gate
+  passes.
 
 ### 5. Risks and open questions
 
@@ -1440,9 +1495,14 @@ P1 — required before the tag, may land alongside P0:
   retrieval date; 1.1 must not depend on it (compositor-matrix "To verify").
 - KWin/fcitx5 `commit_string` loss is mitigated by full-state resend, not by a
   root-cause fix; the exact trigger is unconfirmed.
-- The canvas render optimisation in the work-in-progress must be validated by
-  golden images and guards before it is trusted; it is currently bundled with
-  feature work.
+- The canvas render optimisation is validated by the golden images and the
+  guard suite: the work-in-progress measurement is dense 4.275 ms and 4K
+  8.429 ms for a full frame, both far below the ceilings. The remaining risk is
+  behavioural, not performance: a future change to damage or snapshot semantics
+  must keep the pure-snapshot tests green.
+- The seven unwrapped functions are a release-blocking gap, not a scope risk.
+  They are already declared, implemented and C-tested; only the wrappers and
+  their dispatch tests remain before the tag.
 
 ## Post-1.0 horizons
 

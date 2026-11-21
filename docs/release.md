@@ -36,7 +36,7 @@ Before tagging a release:
 
 - a clean `werror=1` build of the library, C/C++ examples and every C test;
 - `make check` (C suites, C++/Python/Java binding suites, exported-symbol and
-  API-baseline audit, 412/412 binding parity, the 0.6-0.10 surface audits,
+  API-baseline audit, 448/448 binding parity, the 0.6-0.10 surface audits,
   generated reference check);
 - `make perf-check` (dense, startup, data-view and guard benchmarks);
 - `tools/install-check.sh` (staged install, relocatable pkg-config, SONAME,
@@ -879,6 +879,116 @@ list in the behavior-only follow-up above. The RTL/bidi plan is written but is n
 binding parity. The git commit and annotated tag remain pending because the
 repository has no configured author identity; build scripts never change Git
 configuration.
+
+## 1.1.0 validation record (2026-11-22)
+
+Environment: the integrated `m18/docs-final` tree at `d552baf` on the reference
+machine (CachyOS, Wayland, niri 26.04) with the 1.0 toolchain (GCC 16.2.1,
+Python 3.14.8, OpenJDK 25.0.2). The five development branches were merged before
+this record: C contract hardening, Java/extension wrapping, examples, binding
+tests and documentation.
+
+This record is a release draft. The source, tests, examples and documentation
+are complete on the integration tree; the `Makefile` `VERSION` line, the last
+seven wrapper functions in C++/Python/Java and the final `tools/ci.sh` +
+`tools/release-check.sh --full` run are landing separately. Every figure marked
+**pending final gate run** is replaced by that run before the tag is created.
+
+### Scope
+
+1.1.0 keeps the 1.0 signatures and adds an append-only extension surface:
+
+- Decoration negotiation: `pt_decoration_mode` (`auto`, `client`, `server`),
+  `pt_window_set_decoration_mode`, `pt_window_get_decoration_mode`,
+  `pt_window_get_effective_decoration_mode`, `pt_window_maximize`, and the
+  requested/effective split with `configure` authoritative.
+- Side-effect-free snapshots: `pt_window_paint_pixels_ex` plus
+  `pt_pixel_format` and `pt_paint_pixels_desc` (stride, scale, format, reserved).
+- Custom paint: `pt_widget_set_paint_callback` with the borrowed
+  `pt_paint_context`, the `pt_paint_*` helpers and widget-level redraw requests.
+- Primary selection: `pt_window_primary_set`, `_set_serial`, `_get` over
+  `wp_primary_selection_unstable_v1` with an in-process fallback.
+- Custom IME: the window-level commit/preedit callbacks, enable switch and
+  caret rectangle.
+- Descriptor watches: `pt_app_watch_fd`, `pt_app_watch_fd_owned`,
+  `pt_app_unwatch_fd`, with the `pt_fd_event` mask.
+- Raw input: focus, key-event and pointer-event callbacks that run before widget
+  dispatch.
+
+The public surface is **448 functions** in **785 baseline entries**
+(448 `func`, 274 `enum`, 39 `callback`, 8 `struct`, 10 `opaque`, 5 `define`,
+1 `type`). The diff against the 724-entry 1.0 baseline is 61 additions and no
+removals, renames or signature changes; SONAME stays `libpt.so.1`.
+
+### Behaviour changes
+
+Every signature is compatible, but these observable behaviours changed and are
+the section an upgrading application must read:
+
+- The default decoration request moved from `SERVER_SIDE` to explicit
+  `CLIENT_SIDE` (`pt_decoration_client`).
+- `pt_window_set_decorated(false)` no longer sends a decoration mode at all; it
+  only stops Pt from drawing its header and edge zones.
+- `pt_window_primary_set` returns false and sends nothing when no pointer
+  release or key press has supplied a trigger serial. Use
+  `pt_window_primary_set_serial` from a callback that knows the serial.
+- An offscreen snapshot no longer consumes damage, clears
+  `needs_draw`/`redraw_scheduled`, updates the paint timestamp or collects
+  deferred overlays. It never swallows the next live frame.
+- Enter, leave and motion callback return values are ignored; only key and
+  pointer down/up/axis are consumed.
+- A duplicate watch of the same descriptor is rejected with a NULL/0 result.
+  `POLLHUP`/`POLLERR`/`POLLNVAL` always reach the callback as an error event.
+- A paint callback may destroy itself; the free is deferred until dispatch
+  returns. An unbalanced clip stack is corrected and recorded. A reentrant
+  snapshot returns false and records an error. These guards are always active;
+  there is no `PT_DEBUG_CALLBACKS` switch.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | `include/pt/base.h` and README say 1.1.0; `Makefile` `VERSION` **pending final gate run** |
+| API baseline | `api/pt.api` 448 functions / 785 entries; generated reference covers every baseline function |
+| Binding parity | target 448/448 in C++/Python/Java with an empty allowlist; 441/448 on this branch, last seven wrappers **pending** |
+| `make check` / `make check-bindings` | pass on the integration tree |
+| `make perf-check` | all guard ceilings hold; the work-in-progress measurement is dense full paint 4.275 ms and 4K full paint 8.429 ms. Final medians **pending final gate run** |
+| Live Wayland (`make check-wayland`) | 48 checks under a fullscreen nested niri |
+| Live typing (`make check-typing`) | pass under niri with text-input-v3 |
+| Sanitizer (`make check-sanitize`) | **pending final gate run** |
+| Staged install / reproducible tarball | **pending final gate run** |
+| `tools/release-check.sh --full` | **pending final gate run** |
+| `tools/check-bilingual-docs.py` | pass: 9 public guides, no structural drift |
+
+### ABI statement
+
+The 1.1.0 change is append-only within `libpt.so.1`: new functions, callback
+typedefs, enum constants and one public struct, with the existing enum values
+and struct layouts unchanged. `tests/test_abi.c` pins the new
+`pt_fd_event_*` bits, `pt_pointer_phase_*` values, `pt_pointer_event` offsets,
+`pt_decoration_mode`, `pt_pixel_format` and `pt_paint_pixels_desc`.
+`abidiff` against the 1.0.0 tag must report only additions; that comparison is
+part of the final gate.
+
+### Known issues
+
+- The fake-compositor wire-replay facility does not exist yet. Decoration,
+  text-input, primary-selection and popup event orders are covered by headless
+  state tests and the live niri run; the in-process fake compositor is an open
+  M18 item.
+- `preedit_hint` visual presentation and `show_input_panel`/`hide_input_panel`
+  are deferred to 1.2. The custom IME event surface, local composition buffer,
+  full-state resend and empty-`done` acknowledgement are implemented.
+- Binding raw-callback dispatch-level tests are limited by headless injection:
+  registration and callback-free paths are tested, but an actual raw key or
+  pointer event needs a live seat.
+- KWin/fcitx5 `commit_string` loss is mitigated by full-state resend, not a
+  confirmed root cause. The live KWin/Mutter IME matrix remains to be recorded.
+- The canvas performance figures above are work-in-progress measurements; the
+  final gate replaces them with the release-tree medians.
+
+The annotated tag is created from the final gate tree after the pending items
+close; this record is inside the release archive, so it does not quote a digest.
 
 ## Packaging notes
 
