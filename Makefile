@@ -94,6 +94,8 @@ CPP_EXAMPLES := $(patsubst examples/cpp/%.cpp,$(EXAMPLES)/cpp/%,$(wildcard examp
 	run-java-custom-paint run-java-primary-selection run-java-fd-watch \
 	run-popup-demo run-pickers run-icon-button run-clipboard-image \
 	run-font-fallback run-column-persist \
+	run-cpp-pickers run-cpp-popup-demo run-python-pickers run-python-popup-demo \
+	run-java-pickers run-java-popup-demo run-java-icon-button \
 	api-check api-update api-docs
 
 all: lib examples
@@ -428,3 +430,29 @@ run-font-fallback: $(EXAMPLES)/c/font_fallback
 
 run-column-persist: $(EXAMPLES)/c/column_persist
 	$(EXAMPLES)/c/column_persist
+
+run-cpp-pickers: $(EXAMPLES)/cpp/pickers
+	$(EXAMPLES)/cpp/pickers
+
+run-cpp-popup-demo: $(EXAMPLES)/cpp/popup_demo
+	$(EXAMPLES)/cpp/popup_demo
+
+run-python-pickers: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/pickers.py
+
+run-python-popup-demo: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/popup_demo.py
+
+run-java-pickers: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
+		-cp $(BUILD)/java Pickers
+
+run-java-popup-demo: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
+		-cp $(BUILD)/java PopupDemo
+
+run-java-icon-button: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
+		-cp $(BUILD)/java IconButton
