@@ -293,3 +293,5 @@ _Static_assert(sizeof(((pt_date *)0)->day) == 1, "date day is uint8");
 _Static_assert(sizeof(pt_date) == 8, "date is two 4-byte slots");
 _Static_assert(sizeof(pt_date_callback) == sizeof(void (*)(void)),
                "date callback is a function pointer");
+_Static_assert(sizeof(pt_number_callback) == sizeof(void (*)(void)),
+               "number callback is a function pointer");

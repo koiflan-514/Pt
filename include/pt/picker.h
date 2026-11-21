@@ -239,6 +239,61 @@ pt_api bool pt_date_picker_is_open(const pt_widget *picker);
 pt_api void pt_date_picker_set_on_change(pt_widget *picker, pt_date_callback callback,
                                          void *user_data);
 
+/* ---------- number picker ---------- */
+
+/* Fires after the value changes through user input; value is the clamped new
+ * value. The callback may destroy the picker. Since 1.2. */
+typedef void (*pt_number_callback)(pt_widget *picker, double value, void *user_data);
+
+/* Creates a spin box: an entry, an increment and a decrement button. The
+ * default range is [0, 100] with a step of 1 and no value (empty field). Up and
+ * Down step by one, Page Up/Page Down by ten, Home jumps to the minimum and End
+ * to the maximum. Typed text commits on Enter (a number is clamped into the
+ * range); a non-numeric text is rejected with the previous value and text kept.
+ * Escape restores the committed text. Stepping an empty picker starts from the
+ * clamped zero and then applies the step. Values, minimum, maximum and step are
+ * finite doubles; setters ignore NaN or infinity. The number picker has no
+ * popup, so it reports no expandable state. Since 1.2. */
+pt_api pt_widget *pt_number_picker_create(pt_widget *parent);
+
+/* Sets the inclusive range. A non-finite bound or min > max is rejected with
+ * pt_get_last_error and changes nothing. A current value outside the new range
+ * is clamped. Silent. Since 1.2. */
+pt_api void pt_number_picker_set_range(pt_widget *picker, double minimum, double maximum);
+pt_api double pt_number_picker_get_min(const pt_widget *picker);
+pt_api double pt_number_picker_get_max(const pt_widget *picker);
+
+/* A positive, finite increment. Invalid values are rejected silently with the
+ * error set. Since 1.2. */
+pt_api void pt_number_picker_set_step(pt_widget *picker, double step);
+pt_api double pt_number_picker_get_step(const pt_widget *picker);
+
+/* Sets a value, clamped into the range. A non-finite value is ignored. Silent. */
+pt_api void pt_number_picker_set_value(pt_widget *picker, double value);
+/* The value, or 0.0 while the picker is empty; use has_value to tell them
+ * apart. Since 1.2. */
+pt_api double pt_number_picker_get_value(const pt_widget *picker);
+pt_api bool pt_number_picker_has_value(const pt_widget *picker);
+/* Empties the value and the field. Silent. Since 1.2. */
+pt_api void pt_number_picker_clear(pt_widget *picker);
+
+/* Steps by steps * step with the result clamped. The multiplier must be finite.
+ * Stepping an empty picker first takes the clamped zero as the base. Since 1.2. */
+pt_api void pt_number_picker_step_by(pt_widget *picker, double steps);
+
+/* Parses and commits text. Empty text clears the value; a non-numeric text is
+ * rejected, keeps the old value and restores the old text. Silent on success. */
+pt_api bool pt_number_picker_set_text(pt_widget *picker, const char *text);
+/* Borrowed committed display text, "" while empty. Locale-independent: the
+ * decimal separator is always '.', both '.' and ',' are accepted on input. */
+pt_api const char *pt_number_picker_get_text(const pt_widget *picker);
+
+pt_api void pt_number_picker_set_placeholder(pt_widget *picker, const char *text);
+pt_api const char *pt_number_picker_get_placeholder(const pt_widget *picker);
+
+pt_api void pt_number_picker_set_on_change(pt_widget *picker, pt_number_callback callback,
+                                           void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

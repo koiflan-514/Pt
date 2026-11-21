@@ -898,6 +898,230 @@ static void test_date_callbacks_and_null(pt_app *app) {
     pt_check(!pt_date_picker_is_open(NULL));
 }
 
+/* ---------- number picker ---------- */
+
+typedef struct number_log {
+    int changes;
+    double last;
+    bool destroy;
+} number_log;
+
+static void on_number_change(pt_widget *picker, double value, void *user_data) {
+    (void)picker;
+    number_log *log = user_data;
+    ++log->changes;
+    log->last = value;
+    if (log->destroy) {
+        pt_widget_destroy(picker);
+    }
+}
+
+static void test_number_values(void) {
+    pt_widget *picker = pt_number_picker_create(NULL);
+    pt_check(picker != NULL);
+    pt_check(picker_of(picker)->kind == pt_picker_kind_number);
+    pt_check_near(pt_number_picker_get_min(picker), 0.0, 1e-9);
+    pt_check_near(pt_number_picker_get_max(picker), 100.0, 1e-9);
+    pt_check_near(pt_number_picker_get_step(picker), 1.0, 1e-9);
+    pt_check(!pt_number_picker_has_value(picker));
+    pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
+    pt_check(strcmp(pt_number_picker_get_text(picker), "") == 0);
+    pt_check(strcmp(pt_number_picker_get_placeholder(picker), "Number") == 0);
+    pt_check(pt_widget_get_a11y_role(picker) == pt_a11y_role_combo_box);
+    pt_check(strcmp(pt_widget_get_a11y_name(picker), "Number") == 0);
+    pt_check(!(pt_widget_get_a11y_state(picker) & pt_a11y_state_expandable));
+    float a11y_value = 0.0f;
+    pt_check(!pt_widget_get_a11y_value(picker, &a11y_value));
+
+    /* Range and step validation. */
+    pt_number_picker_set_range(picker, 10.0, 20.0);
+    pt_check_near(pt_number_picker_get_min(picker), 10.0, 1e-9);
+    pt_check_near(pt_number_picker_get_max(picker), 20.0, 1e-9);
+    pt_number_picker_set_range(picker, NAN, 20.0);
+    pt_number_picker_set_range(picker, 10.0, INFINITY);
+    pt_number_picker_set_range(picker, 30.0, 20.0);
+    pt_check_near(pt_number_picker_get_min(picker), 10.0, 1e-9);
+    pt_check_near(pt_number_picker_get_max(picker), 20.0, 1e-9);
+    pt_check(pt_get_last_error()[0] != '\0');
+    pt_number_picker_set_step(picker, 0.0);
+    pt_number_picker_set_step(picker, -1.0);
+    pt_number_picker_set_step(picker, NAN);
+    pt_check_near(pt_number_picker_get_step(picker), 1.0, 1e-9);
+    pt_number_picker_set_step(picker, 0.5);
+    pt_check_near(pt_number_picker_get_step(picker), 0.5, 1e-9);
+
+    /* Values clamp; non-finite setters are ignored. */
+    pt_number_picker_set_value(picker, 99.0);
+    pt_check(pt_number_picker_has_value(picker));
+    pt_check_near(pt_number_picker_get_value(picker), 20.0, 1e-9);
+    pt_check(strcmp(pt_number_picker_get_text(picker), "20") == 0);
+    pt_number_picker_set_value(picker, -50.0);
+    pt_check_near(pt_number_picker_get_value(picker), 10.0, 1e-9);
+    pt_number_picker_set_value(picker, NAN);
+    pt_check_near(pt_number_picker_get_value(picker), 10.0, 1e-9);
+    pt_check(pt_widget_get_a11y_value(picker, &a11y_value));
+    pt_check_near(a11y_value, 10.0, 1e-6);
+
+    /* Text parsing: plain, whitespace, comma decimal and clamping. */
+    pt_check(pt_number_picker_set_text(picker, "12.5"));
+    pt_check_near(pt_number_picker_get_value(picker), 12.5, 1e-9);
+    pt_check(strcmp(pt_number_picker_get_text(picker), "12.5") == 0);
+    pt_check(pt_number_picker_set_text(picker, " 13.5 "));
+    pt_check_near(pt_number_picker_get_value(picker), 13.5, 1e-9);
+    pt_check(pt_number_picker_set_text(picker, "14,25"));
+    pt_check_near(pt_number_picker_get_value(picker), 14.25, 1e-9);
+    pt_check(pt_number_picker_set_text(picker, "1000"));
+    pt_check_near(pt_number_picker_get_value(picker), 20.0, 1e-9);
+    pt_check(!pt_number_picker_set_text(picker, "abc"));
+    pt_check_near(pt_number_picker_get_value(picker), 20.0, 1e-9);
+    pt_check(strcmp(pt_number_picker_get_text(picker), "20") == 0);
+    pt_check(!pt_number_picker_set_text(picker, "12.5x"));
+    pt_check(!pt_number_picker_set_text(picker, "nan"));
+    pt_check(!pt_number_picker_set_text(picker, "inf"));
+
+    /* Empty semantics: clear drops has_value and the field text. */
+    pt_number_picker_clear(picker);
+    pt_check(!pt_number_picker_has_value(picker));
+    pt_check(strcmp(pt_number_picker_get_text(picker), "") == 0);
+    pt_check(strcmp(pt_widget_get_text(field_of(picker)), "") == 0);
+    pt_check(!pt_widget_get_a11y_value(picker, &a11y_value));
+    pt_check(pt_number_picker_set_text(picker, ""));
+    pt_check(!pt_number_picker_has_value(picker));
+
+    /* Stepping an empty picker starts from the clamped zero. */
+    pt_number_picker_set_range(picker, 0.0, 10.0);
+    pt_number_picker_set_step(picker, 2.0);
+    pt_number_picker_step_by(picker, 2.0);
+    pt_check(pt_number_picker_has_value(picker));
+    pt_check_near(pt_number_picker_get_value(picker), 4.0, 1e-9);
+    pt_number_picker_step_by(picker, 100.0);
+    pt_check_near(pt_number_picker_get_value(picker), 10.0, 1e-9);
+    pt_number_picker_step_by(picker, -100.0);
+    pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
+    pt_number_picker_step_by(picker, NAN);
+    pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
+
+    /* A narrower range clamps a live value. */
+    pt_number_picker_set_value(picker, 9.0);
+    pt_number_picker_set_range(picker, 1.0, 5.0);
+    pt_check_near(pt_number_picker_get_value(picker), 5.0, 1e-9);
+    pt_check(strcmp(pt_number_picker_get_text(picker), "5") == 0);
+
+    pt_widget_destroy(picker);
+}
+
+static void test_number_keyboard_and_pointer(pt_app *app) {
+    picker_fixture fx;
+    fixture_open(&fx, app);
+    pt_widget *picker = pt_number_picker_create(pt_window_root(fx.window));
+    pt_widget_set_width(picker, 220.0f);
+    pt_widget_destroy(fx.select);
+    fx.select = picker;
+    number_log log = {0};
+    pt_number_picker_set_on_change(picker, on_number_change, &log);
+    pt_number_picker_set_range(picker, 0.0, 100.0);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+
+    pt_widget *field = field_of(picker);
+    pt_check(pt_widget_focus(field));
+    type(fx.window, XKB_KEY_Up, NULL);
+    pt_check(pt_number_picker_has_value(picker));
+    pt_check_near(pt_number_picker_get_value(picker), 1.0, 1e-9);
+    pt_check(log.changes == 1);
+    type(fx.window, XKB_KEY_Down, NULL);
+    type(fx.window, XKB_KEY_Down, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
+    type(fx.window, XKB_KEY_Page_Up, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 10.0, 1e-9);
+    type(fx.window, XKB_KEY_End, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 100.0, 1e-9);
+    type(fx.window, XKB_KEY_Home, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
+    type(fx.window, XKB_KEY_Page_Down, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
+
+    /* Typed text commits on Enter; invalid text is rejected and restored. */
+    pt_widget_set_text(field, "42.5");
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 42.5, 1e-9);
+    pt_check(strcmp(pt_number_picker_get_text(picker), "42.5") == 0);
+    pt_widget_set_text(field, "not a number");
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 42.5, 1e-9);
+    pt_check(strcmp(pt_widget_get_text(field), "42.5") == 0);
+    pt_widget_set_text(field, "12345");
+    type(fx.window, XKB_KEY_Return, NULL);
+    pt_check_near(pt_number_picker_get_value(picker), 100.0, 1e-9);
+    /* Escape restores the committed text. */
+    pt_widget_set_text(field, "7");
+    type(fx.window, XKB_KEY_Escape, NULL);
+    pt_check(strcmp(pt_widget_get_text(field), "100") == 0);
+
+    /* Stepper buttons cover the increment/decrement paths. */
+    pt_number_picker_set_value(picker, 5.0);
+    pt_widget *up = find_named(picker, "Increment");
+    pt_widget *down = find_named(picker, "Decrement");
+    pt_check(up != NULL && down != NULL);
+    if (up && down) {
+        pt_check(pt_window_paint(fx.window, fx.canvas));
+        pt_rect up_bounds = bounds_of(up);
+        pt_check(up_bounds.w > 0.0f && up_bounds.h > 0.0f);
+        click_at(fx.window, up_bounds.x + up_bounds.w * 0.5f,
+                 up_bounds.y + up_bounds.h * 0.5f);
+        pt_check_near(pt_number_picker_get_value(picker), 6.0, 1e-9);
+        pt_check(fx.window->focused == field);
+        pt_rect down_bounds = bounds_of(down);
+        click_at(fx.window, down_bounds.x + down_bounds.w * 0.5f,
+                 down_bounds.y + down_bounds.h * 0.5f);
+        pt_check_near(pt_number_picker_get_value(picker), 5.0, 1e-9);
+    }
+
+    /* A press on the field body focuses the editor without changing the value. */
+    pt_rect host = bounds_of(picker);
+    click_at(fx.window, host.x + 8.0f, host.y + host.h * 0.5f);
+    pt_check(fx.window->focused == field);
+    pt_check_near(pt_number_picker_get_value(picker), 5.0, 1e-9);
+    pt_check(pt_number_picker_has_value(picker));
+
+    /* Tab is not consumed: focus leaves the picker. */
+    type(fx.window, XKB_KEY_Tab, NULL);
+    pt_check(fx.window->focused != field);
+
+    fixture_close(&fx);
+}
+
+static void test_number_callbacks_and_null(pt_app *app) {
+    picker_fixture fx;
+    fixture_open(&fx, app);
+    pt_widget *picker = pt_number_picker_create(pt_window_root(fx.window));
+    pt_widget_destroy(fx.select);
+    number_log log = {0};
+    log.destroy = true;
+    pt_number_picker_set_on_change(picker, on_number_change, &log);
+    pt_number_picker_set_value(picker, 4.0);
+    pt_number_picker_step_by(picker, 1.0);
+    pt_check(log.changes == 1);
+    pt_check(!pt_widget_attached(fx.window, picker));
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    fixture_close(&fx);
+
+    pt_number_picker_set_range(NULL, 0.0, 1.0);
+    pt_number_picker_set_step(NULL, 1.0);
+    pt_number_picker_set_value(NULL, 1.0);
+    pt_number_picker_clear(NULL);
+    pt_number_picker_step_by(NULL, 1.0);
+    pt_number_picker_set_text(NULL, "1");
+    pt_number_picker_set_placeholder(NULL, "x");
+    pt_number_picker_set_on_change(NULL, NULL, NULL);
+    pt_check_near(pt_number_picker_get_min(NULL), 0.0, 1e-9);
+    pt_check_near(pt_number_picker_get_max(NULL), 0.0, 1e-9);
+    pt_check_near(pt_number_picker_get_step(NULL), 0.0, 1e-9);
+    pt_check_near(pt_number_picker_get_value(NULL), 0.0, 1e-9);
+    pt_check(!pt_number_picker_has_value(NULL));
+    pt_check(pt_number_picker_get_text(NULL)[0] == '\0');
+    pt_check(pt_number_picker_get_placeholder(NULL)[0] == '\0');
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.picker");
@@ -915,6 +1139,9 @@ int main(void) {
     test_date_keyboard(app);
     test_date_pointer_and_limits(app);
     test_date_callbacks_and_null(app);
+    test_number_values();
+    test_number_keyboard_and_pointer(app);
+    test_number_callbacks_and_null(app);
     pt_app_destroy(app);
     return pt_test_finish("picker");
 }

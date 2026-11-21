@@ -711,6 +711,18 @@ typedef struct pt_picker {
     char display[64];
     pt_date_callback on_date;
     void *date_data;
+
+    /* Number picker. */
+    double min;
+    double max;
+    double step;
+    double value;
+    bool has_value;
+    char number_display[64];
+    pt_widget *up;
+    pt_widget *down;
+    pt_number_callback on_number;
+    void *number_data;
 } pt_picker;
 
 /* The picker behind a widget, or NULL for anything else (including a plain

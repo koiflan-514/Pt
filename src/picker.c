@@ -44,6 +44,8 @@ static void picker_on_dismiss(pt_popup *popup, void *user_data);
 static void pt_date_prev_click(pt_widget *button, void *user_data);
 static void pt_date_next_click(pt_widget *button, void *user_data);
 static void pt_date_today_click(pt_widget *button, void *user_data);
+static void pt_number_up_click(pt_widget *button, void *user_data);
+static void pt_number_down_click(pt_widget *button, void *user_data);
 
 pt_picker *pt_picker_of(const pt_widget *widget) {
     if (!widget || widget->kind != pt_widget_combobox) {
@@ -841,6 +843,183 @@ static bool date_commit_text(pt_widget *host, pt_picker *picker, const char *tex
     return true;
 }
 
+/* ---------- number picker internals ---------- */
+
+static void number_format_into(char *buffer, size_t size, double value) {
+    snprintf(buffer, size, "%.15g", value);
+    /* Keep the display parseable regardless of the process LC_NUMERIC; the
+     * control does not read the locale and must round-trip its own text. */
+    for (char *cursor = buffer; *cursor; ++cursor) {
+        if (*cursor == ',') {
+            *cursor = '.';
+        }
+    }
+}
+
+static bool number_parse(const char *text, double *out) {
+    if (!text || !text[0] || !out) {
+        return false;
+    }
+    char buffer[128];
+    size_t length = strlen(text);
+    if (length >= sizeof(buffer)) {
+        return false;
+    }
+    for (size_t i = 0; i <= length; ++i) {
+        buffer[i] = text[i] == ',' ? '.' : text[i];
+    }
+    char *end = NULL;
+    double value = strtod(buffer, &end);
+    if (end == buffer) {
+        return false;
+    }
+    while (*end && isspace((unsigned char)*end)) {
+        ++end;
+    }
+    if (*end != '\0' || !isfinite(value)) {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
+static double number_clamp(pt_picker *picker, double value) {
+    if (value < picker->min) {
+        return picker->min;
+    }
+    if (value > picker->max) {
+        return picker->max;
+    }
+    return value;
+}
+
+static void number_refresh_text(pt_widget *host, pt_picker *picker) {
+    if (!picker->has_value) {
+        picker->number_display[0] = '\0';
+    } else {
+        number_format_into(picker->number_display, sizeof(picker->number_display),
+                           picker->value);
+    }
+    picker_set_field_text(host, picker, picker->number_display);
+}
+
+static void number_commit(pt_widget *host, pt_picker *picker, double value, bool notify) {
+    bool had = picker->has_value;
+    double previous = picker->value;
+    picker->value = number_clamp(picker, value);
+    picker->has_value = true;
+    number_refresh_text(host, picker);
+    pt_widget_a11y_emit(host, pt_a11y_event_value_changed);
+    pt_widget_mark_dirty(host, false);
+    if ((!had || previous != picker->value) && notify && picker->on_number) {
+        picker->on_number(host, picker->value, picker->number_data);
+    }
+}
+
+static void number_clear_value(pt_widget *host, pt_picker *picker) {
+    bool had = picker->has_value;
+    picker->has_value = false;
+    picker->value = 0.0;
+    picker->number_display[0] = '\0';
+    picker_set_field_text(host, picker, "");
+    if (had) {
+        pt_widget_a11y_emit(host, pt_a11y_event_value_changed);
+    }
+    pt_widget_mark_dirty(host, false);
+}
+
+static void number_step(pt_widget *host, pt_picker *picker, double steps, bool notify) {
+    if (!isfinite(steps)) {
+        pt_set_error("pt_number_picker: the step multiplier must be finite");
+        return;
+    }
+    double base = picker->has_value ? picker->value : number_clamp(picker, 0.0);
+    double next = base + steps * picker->step;
+    if (!isfinite(next)) {
+        next = steps > 0.0 ? picker->max : picker->min;
+    }
+    number_commit(host, picker, next, notify);
+}
+
+static void pt_number_up_click(pt_widget *button, void *user_data) {
+    pt_unused(button);
+    pt_widget *host = user_data;
+    pt_picker *picker = pt_picker_of_kind(host, pt_picker_kind_number);
+    if (picker) {
+        number_step(host, picker, 1.0, true);
+    }
+}
+
+static void pt_number_down_click(pt_widget *button, void *user_data) {
+    pt_unused(button);
+    pt_widget *host = user_data;
+    pt_picker *picker = pt_picker_of_kind(host, pt_picker_kind_number);
+    if (picker) {
+        number_step(host, picker, -1.0, true);
+    }
+}
+
+static bool number_key(pt_widget *host, pt_picker *picker, uint32_t keysym,
+                       uint32_t modifiers, const char *utf8) {
+    pt_unused(modifiers);
+    pt_unused(utf8);
+    const char *field_text = picker->field ? pt_widget_get_text(picker->field) : "";
+    bool dirty = strcmp(field_text, picker->number_display) != 0;
+
+    if (keysym == XKB_KEY_Escape) {
+        if (dirty) {
+            picker_set_field_text(host, picker, picker->number_display);
+            return true;
+        }
+        return false;
+    }
+    if (keysym == XKB_KEY_Tab || keysym == XKB_KEY_ISO_Left_Tab) {
+        return false;
+    }
+    if (keysym == XKB_KEY_Up) {
+        number_step(host, picker, 1.0, true);
+        return true;
+    }
+    if (keysym == XKB_KEY_Down) {
+        number_step(host, picker, -1.0, true);
+        return true;
+    }
+    if (keysym == XKB_KEY_Page_Up) {
+        number_step(host, picker, 10.0, true);
+        return true;
+    }
+    if (keysym == XKB_KEY_Page_Down) {
+        number_step(host, picker, -10.0, true);
+        return true;
+    }
+    if (keysym == XKB_KEY_Home) {
+        number_commit(host, picker, picker->min, true);
+        return true;
+    }
+    if (keysym == XKB_KEY_End) {
+        number_commit(host, picker, picker->max, true);
+        return true;
+    }
+    if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
+        if (!dirty) {
+            return true;
+        }
+        if (!field_text[0]) {
+            number_clear_value(host, picker);
+            return true;
+        }
+        double parsed = 0.0;
+        if (!number_parse(field_text, &parsed)) {
+            pt_set_error("pt_number_picker: '%s' is not a number", field_text);
+            picker_set_field_text(host, picker, picker->number_display);
+            return true;
+        }
+        number_commit(host, picker, parsed, true);
+        return true;
+    }
+    return false;
+}
+
 /* ---------- popup lifecycle ---------- */
 
 static void picker_restore_display(pt_widget *host, pt_picker *picker) {
@@ -854,6 +1033,8 @@ static void picker_restore_display(pt_widget *host, pt_picker *picker) {
         picker_set_field_text(host, picker, select_item_text(picker, picker->selected));
     } else if (picker->kind == pt_picker_kind_date) {
         picker_set_field_text(host, picker, picker->display);
+    } else if (picker->kind == pt_picker_kind_number) {
+        picker_set_field_text(host, picker, picker->number_display);
     }
 }
 
@@ -1325,6 +1506,9 @@ bool pt_picker_key(pt_widget *host, uint32_t keysym, uint32_t modifiers, const c
     if (picker->kind == pt_picker_kind_date) {
         return date_key(host, picker, keysym, modifiers, utf8);
     }
+    if (picker->kind == pt_picker_kind_number) {
+        return number_key(host, picker, keysym, modifiers, utf8);
+    }
     return false;
 }
 
@@ -1355,6 +1539,20 @@ void pt_picker_layout(pt_widget *host, const pt_layout_ctx *ctx, pt_rect inner) 
     if (!picker || !picker->field) {
         return;
     }
+    if (picker->kind == pt_picker_kind_number) {
+        float buttons = pt_min_float(44.0f, pt_max_float(0.0f, inner.w));
+        float width = pt_max_float(0.0f, inner.w - buttons);
+        pt_widget_layout_child(picker->field, inner.x, inner.y, width, inner.h, ctx);
+        if (picker->up && picker->down && buttons >= 40.0f) {
+            float half = pt_max_float(1.0f, (inner.h - 2.0f) * 0.5f);
+            pt_widget_layout_child(picker->up, inner.x + inner.w - 22.0f, inner.y, 22.0f,
+                                   half, ctx);
+            pt_widget_layout_child(picker->down, inner.x + inner.w - 22.0f,
+                                   inner.y + half + 2.0f, 22.0f,
+                                   pt_max_float(1.0f, inner.h - half - 2.0f), ctx);
+        }
+        return;
+    }
     float width = pt_max_float(0.0f, inner.w - pt_combobox_chevron_reserve);
     pt_widget_layout_child(picker->field, inner.x, inner.y, width, inner.h, ctx);
 }
@@ -1376,8 +1574,11 @@ void pt_picker_preferred(pt_widget *host, const pt_layout_ctx *ctx, float *width
     }
     float padding_w = host->padding_left + host->padding_right;
     float padding_h = host->padding_top + host->padding_bottom;
-    *width = pt_max_float(picker_min_width,
-                          natural + padding_w + pt_combobox_chevron_reserve);
+    float reserve = pt_combobox_chevron_reserve;
+    if (picker && picker->kind == pt_picker_kind_number) {
+        reserve = 44.0f;
+    }
+    *width = pt_max_float(picker_min_width, natural + padding_w + reserve);
     *height = pt_widget_theme_metric_value(host, pt_theme_metric_control_height) + padding_h;
 }
 
@@ -1821,6 +2022,192 @@ void pt_date_picker_set_on_change(pt_widget *picker_widget, pt_date_callback cal
     picker->date_data = user_data;
 }
 
+/* ---------- public API: number picker ---------- */
+
+pt_widget *pt_number_picker_create(pt_widget *parent) {
+    pt_widget *host = pt_combobox_create(parent);
+    if (!host) {
+        return NULL;
+    }
+    pt_combobox_state *state = host->extra;
+    pt_picker *picker = pt_alloc_zeroed(1, sizeof(*picker));
+    picker->kind = pt_picker_kind_number;
+    picker->host = host;
+    picker->min = 0.0;
+    picker->max = 100.0;
+    picker->step = 1.0;
+    state->picker = picker;
+    state->mode = pt_combobox_filterable;
+    host->focusable = false;
+    free(host->placeholder);
+    host->placeholder = pt_strdup("Number");
+    picker_field_create(host, picker, "Number");
+    state->field = picker->field;
+    picker_set_field_text(host, picker, "");
+
+    picker->up = pt_button_create(host, "");
+    picker->up->button_variant = pt_button_secondary;
+    picker->up->focusable = false;
+    picker->up->radius = 6.0f;
+    pt_widget_set_icon(picker->up, pt_icon_chevron_up);
+    pt_widget_set_padding(picker->up, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_a11y_name(picker->up, "Increment");
+    pt_button_set_on_click(picker->up, pt_number_up_click, host);
+
+    picker->down = pt_button_create(host, "");
+    picker->down->button_variant = pt_button_secondary;
+    picker->down->focusable = false;
+    picker->down->radius = 6.0f;
+    pt_widget_set_icon(picker->down, pt_icon_chevron_down);
+    pt_widget_set_padding(picker->down, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_a11y_name(picker->down, "Decrement");
+    pt_button_set_on_click(picker->down, pt_number_down_click, host);
+
+    pt_widget_set_a11y_role(host, pt_a11y_role_combo_box);
+    pt_widget_set_a11y_name(host, "Number");
+    return host;
+}
+
+void pt_number_picker_set_range(pt_widget *picker_widget, double minimum, double maximum) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return;
+    }
+    if (!isfinite(minimum) || !isfinite(maximum) || minimum > maximum) {
+        pt_set_error("pt_number_picker: the range must be finite and ordered");
+        return;
+    }
+    picker->min = minimum;
+    picker->max = maximum;
+    if (picker->has_value) {
+        double clamped = number_clamp(picker, picker->value);
+        if (clamped != picker->value) {
+            picker->value = clamped;
+            number_refresh_text(picker_widget, picker);
+            pt_widget_a11y_emit(picker_widget, pt_a11y_event_value_changed);
+            pt_widget_mark_dirty(picker_widget, false);
+        }
+    }
+}
+
+double pt_number_picker_get_min(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    return picker ? picker->min : 0.0;
+}
+
+double pt_number_picker_get_max(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    return picker ? picker->max : 0.0;
+}
+
+void pt_number_picker_set_step(pt_widget *picker_widget, double step) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return;
+    }
+    if (!isfinite(step) || step <= 0.0) {
+        pt_set_error("pt_number_picker: the step must be finite and positive");
+        return;
+    }
+    picker->step = step;
+}
+
+double pt_number_picker_get_step(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    return picker ? picker->step : 0.0;
+}
+
+void pt_number_picker_set_value(pt_widget *picker_widget, double value) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return;
+    }
+    if (!isfinite(value)) {
+        pt_set_error("pt_number_picker: the value must be finite");
+        return;
+    }
+    number_commit(picker_widget, picker, value, false);
+}
+
+double pt_number_picker_get_value(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    return picker && picker->has_value ? picker->value : 0.0;
+}
+
+bool pt_number_picker_has_value(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    return picker && picker->has_value;
+}
+
+void pt_number_picker_clear(pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (picker) {
+        number_clear_value(picker_widget, picker);
+    }
+}
+
+void pt_number_picker_step_by(pt_widget *picker_widget, double steps) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return;
+    }
+    number_step(picker_widget, picker, steps, true);
+}
+
+bool pt_number_picker_set_text(pt_widget *picker_widget, const char *text) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return false;
+    }
+    if (!text || !text[0]) {
+        number_clear_value(picker_widget, picker);
+        return true;
+    }
+    double parsed = 0.0;
+    if (!number_parse(text, &parsed)) {
+        pt_set_error("pt_number_picker: '%s' is not a number", text);
+        picker_set_field_text(picker_widget, picker, picker->number_display);
+        return false;
+    }
+    number_commit(picker_widget, picker, parsed, false);
+    return true;
+}
+
+const char *pt_number_picker_get_text(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    return picker ? picker->number_display : "";
+}
+
+void pt_number_picker_set_placeholder(pt_widget *picker_widget, const char *text) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return;
+    }
+    char *copy = pt_strdup(text ? text : "");
+    free(picker_widget->placeholder);
+    picker_widget->placeholder = copy;
+    if (picker->field) {
+        pt_entry_set_placeholder(picker->field, text);
+    }
+    pt_widget_mark_dirty(picker_widget, false);
+}
+
+const char *pt_number_picker_get_placeholder(const pt_widget *picker_widget) {
+    return picker_widget
+               ? (picker_widget->placeholder ? picker_widget->placeholder : "")
+               : "";
+}
+
+void pt_number_picker_set_on_change(pt_widget *picker_widget, pt_number_callback callback,
+                                    void *user_data) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_number);
+    if (!picker) {
+        return;
+    }
+    picker->on_number = callback;
+    picker->number_data = user_data;
+}
+
 /* ---------- accessibility hooks ---------- */
 
 bool pt_picker_a11y_value(const pt_widget *widget, float *value) {
@@ -1839,6 +2226,13 @@ bool pt_picker_a11y_value(const pt_widget *widget, float *value) {
             *value = (float)(picker->date.year * 10000 + (int32_t)picker->date.month * 100 +
                              (int32_t)picker->date.day);
         }
+        return true;
+    }
+    if (picker->kind == pt_picker_kind_number) {
+        if (!picker->has_value) {
+            return false;
+        }
+        *value = (float)picker->value;
         return true;
     }
     return false;
