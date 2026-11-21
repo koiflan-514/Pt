@@ -5347,6 +5347,370 @@ public final class Pt {
         }
     }
 
+    /* ---------- pickers ---------- */
+
+    /** Creates a searchable select, owned by {@code parent} when non-null. */
+    public static MemorySegment select_create(MemorySegment parent) {
+        return (MemorySegment) invoke(select_create, parent);
+    }
+
+    public static void select_set_placeholder(MemorySegment select, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_set_placeholder, select, cstring(arena, text));
+        }
+    }
+
+    public static String select_get_placeholder(MemorySegment select) {
+        MemorySegment text = (MemorySegment) invoke(select_get_placeholder, select);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void select_add_item(MemorySegment select, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_add_item, select, cstring(arena, text));
+        }
+    }
+
+    /** Inserts at {@code index}, clamped to the current count. */
+    public static void select_insert_item(MemorySegment select, int index, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_insert_item, select, index, cstring(arena, text));
+        }
+    }
+
+    /** Appends an item whose data pointer stays owned by the caller. */
+    public static void select_add_item_with_data(MemorySegment select, String text,
+            MemorySegment data) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_add_item_with_data, select, cstring(arena, text), data);
+        }
+    }
+
+    public static void select_remove_item(MemorySegment select, int index) {
+        invoke(select_remove_item, select, index);
+    }
+
+    public static void select_clear(MemorySegment select) {
+        invoke(select_clear, select);
+    }
+
+    public static int select_get_item_count(MemorySegment select) {
+        return (int) invoke(select_get_item_count, select);
+    }
+
+    public static String select_get_item_text(MemorySegment select, int index) {
+        MemorySegment text = (MemorySegment) invoke(select_get_item_text, select, index);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static MemorySegment select_get_item_data(MemorySegment select, int index) {
+        return (MemorySegment) invoke(select_get_item_data, select, index);
+    }
+
+    public static void select_set_item_data(MemorySegment select, int index,
+            MemorySegment data) {
+        invoke(select_set_item_data, select, index, data);
+    }
+
+    public static int select_get_selected(MemorySegment select) {
+        return (int) invoke(select_get_selected, select);
+    }
+
+    /** Selects silently; an out-of-range index clears the selection. */
+    public static void select_set_selected(MemorySegment select, int index) {
+        invoke(select_set_selected, select, index);
+    }
+
+    public static void select_clear_selection(MemorySegment select) {
+        invoke(select_clear_selection, select);
+    }
+
+    public static String select_get_query(MemorySegment select) {
+        MemorySegment text = (MemorySegment) invoke(select_get_query, select);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /** Copies the filter text and filters without opening the popup. */
+    public static void select_set_query(MemorySegment select, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(select_set_query, select, cstring(arena, text));
+        }
+    }
+
+    public static int select_get_match_count(MemorySegment select) {
+        return (int) invoke(select_get_match_count, select);
+    }
+
+    /** Visible position to model index; {@link #list_index_none} when out of range. */
+    public static int select_get_match_item(MemorySegment select, int position) {
+        return (int) invoke(select_get_match_item, select, position);
+    }
+
+    /** Clamps the popup row limit to 1..{@link #picker_max_candidates}. */
+    public static void select_set_max_popup_rows(MemorySegment select, int rows) {
+        invoke(select_set_max_popup_rows, select, rows);
+    }
+
+    public static int select_get_max_popup_rows(MemorySegment select) {
+        return (int) invoke(select_get_max_popup_rows, select);
+    }
+
+    public static void select_open(MemorySegment select) {
+        invoke(select_open, select);
+    }
+
+    public static void select_close(MemorySegment select) {
+        invoke(select_close, select);
+    }
+
+    public static boolean select_is_open(MemorySegment select) {
+        return (boolean) invoke(select_is_open, select);
+    }
+
+    /** Fires when the user commits an item; programmatic selection stays silent. */
+    public static void select_set_on_change(MemorySegment select, IndexHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL : index_upcall(handler, arena);
+        invoke(select_set_on_change, select, stub, MemorySegment.NULL);
+    }
+
+    /** Today's local civil date, or the empty date when out of range. */
+    public static PtDate date_today() {
+        try (Arena arena = Arena.ofConfined()) {
+            return readDate((MemorySegment) invoke(date_today, arena));
+        }
+    }
+
+    public static boolean date_is_valid(PtDate date) {
+        Objects.requireNonNull(date, "date");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(date_is_valid, nativeDate(arena, date));
+        }
+    }
+
+    public static MemorySegment date_picker_create(MemorySegment parent) {
+        return (MemorySegment) invoke(date_picker_create, parent);
+    }
+
+    /** Sets the committed date silently; an invalid date changes nothing. */
+    public static boolean date_picker_set_date(MemorySegment picker, PtDate date) {
+        Objects.requireNonNull(date, "date");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(date_picker_set_date, picker, nativeDate(arena, date));
+        }
+    }
+
+    public static PtDate date_picker_get_date(MemorySegment picker) {
+        try (Arena arena = Arena.ofConfined()) {
+            return readDate((MemorySegment) invoke(date_picker_get_date, arena, picker));
+        }
+    }
+
+    public static void date_picker_clear(MemorySegment picker) {
+        invoke(date_picker_clear, picker);
+    }
+
+    /** Invalid formats select ISO. The committed text is rewritten immediately. */
+    public static void date_picker_set_format(MemorySegment picker, int format) {
+        invoke(date_picker_set_format, picker, format);
+    }
+
+    public static int date_picker_get_format(MemorySegment picker) {
+        return (int) invoke(date_picker_get_format, picker);
+    }
+
+    /** Parses and commits; an invalid date restores the previous value and text. */
+    public static boolean date_picker_set_text(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(date_picker_set_text, picker, cstring(arena, text));
+        }
+    }
+
+    public static String date_picker_get_text(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(date_picker_get_text, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void date_picker_set_placeholder(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(date_picker_set_placeholder, picker, cstring(arena, text));
+        }
+    }
+
+    public static String date_picker_get_placeholder(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(date_picker_get_placeholder, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void date_picker_open(MemorySegment picker) {
+        invoke(date_picker_open, picker);
+    }
+
+    public static void date_picker_close(MemorySegment picker) {
+        invoke(date_picker_close, picker);
+    }
+
+    public static boolean date_picker_is_open(MemorySegment picker) {
+        return (boolean) invoke(date_picker_is_open, picker);
+    }
+
+    public static void date_picker_set_on_change(MemorySegment picker, DateChangeHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : date_change_upcall(handler, arena);
+        invoke(date_picker_set_on_change, picker, stub, MemorySegment.NULL);
+    }
+
+    public static MemorySegment number_picker_create(MemorySegment parent) {
+        return (MemorySegment) invoke(number_picker_create, parent);
+    }
+
+    /** Sets the inclusive range; non-finite or inverted bounds are rejected. */
+    public static void number_picker_set_range(MemorySegment picker, double minimum,
+            double maximum) {
+        invoke(number_picker_set_range, picker, minimum, maximum);
+    }
+
+    public static double number_picker_get_min(MemorySegment picker) {
+        return (double) invoke(number_picker_get_min, picker);
+    }
+
+    public static double number_picker_get_max(MemorySegment picker) {
+        return (double) invoke(number_picker_get_max, picker);
+    }
+
+    /** Sets a finite positive increment; invalid values are rejected silently. */
+    public static void number_picker_set_step(MemorySegment picker, double step) {
+        invoke(number_picker_set_step, picker, step);
+    }
+
+    public static double number_picker_get_step(MemorySegment picker) {
+        return (double) invoke(number_picker_get_step, picker);
+    }
+
+    /** Sets a value clamped into the range; a non-finite value is ignored. */
+    public static void number_picker_set_value(MemorySegment picker, double value) {
+        invoke(number_picker_set_value, picker, value);
+    }
+
+    /** The value, or 0.0 while empty; use {@link #number_picker_has_value} to tell. */
+    public static double number_picker_get_value(MemorySegment picker) {
+        return (double) invoke(number_picker_get_value, picker);
+    }
+
+    public static boolean number_picker_has_value(MemorySegment picker) {
+        return (boolean) invoke(number_picker_has_value, picker);
+    }
+
+    public static void number_picker_clear(MemorySegment picker) {
+        invoke(number_picker_clear, picker);
+    }
+
+    /** Steps by {@code steps * step}, clamped; this path reports on_change. */
+    public static void number_picker_step_by(MemorySegment picker, double steps) {
+        invoke(number_picker_step_by, picker, steps);
+    }
+
+    public static boolean number_picker_set_text(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(number_picker_set_text, picker, cstring(arena, text));
+        }
+    }
+
+    public static String number_picker_get_text(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(number_picker_get_text, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void number_picker_set_placeholder(MemorySegment picker, String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(number_picker_set_placeholder, picker, cstring(arena, text));
+        }
+    }
+
+    public static String number_picker_get_placeholder(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(number_picker_get_placeholder, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /** Fires after user input changes the value; {@code step_by} is the reachable path. */
+    public static void number_picker_set_on_change(MemorySegment picker,
+            NumberChangeHandler handler, Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : number_change_upcall(handler, arena);
+        invoke(number_picker_set_on_change, picker, stub, MemorySegment.NULL);
+    }
+
+    public static MemorySegment color_picker_create(MemorySegment parent) {
+        return (MemorySegment) invoke(color_picker_create, parent);
+    }
+
+    public static void color_picker_set_color(MemorySegment picker, int color) {
+        invoke(color_picker_set_color, picker, color);
+    }
+
+    public static int color_picker_get_color(MemorySegment picker) {
+        return (int) invoke(color_picker_get_color, picker);
+    }
+
+    /** Parses #RRGGBB / #RRGGBBAA; an invalid string keeps the old colour and text. */
+    public static boolean color_picker_set_hex(MemorySegment picker, String hex) {
+        Objects.requireNonNull(hex, "hex");
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(color_picker_set_hex, picker, cstring(arena, hex));
+        }
+    }
+
+    /** #RRGGBB for opaque colours, #RRGGBBAA otherwise. */
+    public static String color_picker_get_hex(MemorySegment picker) {
+        MemorySegment text = (MemorySegment) invoke(color_picker_get_hex, picker);
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    public static void color_picker_add_preset(MemorySegment picker, int color) {
+        invoke(color_picker_add_preset, picker, color);
+    }
+
+    public static void color_picker_clear_presets(MemorySegment picker) {
+        invoke(color_picker_clear_presets, picker);
+    }
+
+    public static int color_picker_get_preset_count(MemorySegment picker) {
+        return (int) invoke(color_picker_get_preset_count, picker);
+    }
+
+    public static int color_picker_get_preset(MemorySegment picker, int index) {
+        return (int) invoke(color_picker_get_preset, picker, index);
+    }
+
+    public static void color_picker_open(MemorySegment picker) {
+        invoke(color_picker_open, picker);
+    }
+
+    public static void color_picker_close(MemorySegment picker) {
+        invoke(color_picker_close, picker);
+    }
+
+    public static boolean color_picker_is_open(MemorySegment picker) {
+        return (boolean) invoke(color_picker_is_open, picker);
+    }
+
+    public static void color_picker_set_on_change(MemorySegment picker, ColorChangeHandler handler,
+            Arena arena) {
+        MemorySegment stub = handler == null ? MemorySegment.NULL
+                : color_change_upcall(handler, arena);
+        invoke(color_picker_set_on_change, picker, stub, MemorySegment.NULL);
+    }
+
     public static final class Transition implements AutoCloseable {
         private static final long bytes = 28;
         private final Arena arena;

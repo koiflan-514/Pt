@@ -1536,6 +1536,286 @@ public final class PtTest {
             Pt.window_set_icon(window, MemorySegment.NULL);
             check(Pt.window_get_icon(window).address() == 0, "window icon cleared");
 
+            /* Searchable select. */
+            MemorySegment select = Pt.select_create(column);
+            check(select.address() != 0, "select create");
+            check(Pt.select_get_placeholder(select).isEmpty(), "select placeholder default");
+            Pt.select_set_placeholder(select, "Pick one");
+            check(Pt.select_get_placeholder(select).equals("Pick one"), "select placeholder");
+            Pt.select_add_item(select, "Apple");
+            Pt.select_add_item(select, "Banana");
+            Pt.select_insert_item(select, 1, "Apricot");
+            Pt.select_insert_item(select, 99, "Cherry");
+            check(Pt.select_get_item_count(select) == 4, "select item count");
+            check(Pt.select_get_item_text(select, 1).equals("Apricot"), "select item text");
+            check(Pt.select_get_item_text(select, 99).isEmpty(), "select item text out of range");
+            check(Pt.select_get_item_data(select, 0).address() == 0, "select item data null");
+            try (Arena dataArena = Arena.ofConfined()) {
+                MemorySegment selectPayload = dataArena.allocate(ValueLayout.JAVA_INT, 0xCAFE);
+                Pt.select_add_item_with_data(select, "Date", selectPayload);
+                check(Pt.select_get_item_data(select, 4).address() == selectPayload.address(),
+                        "select item data");
+                Pt.select_set_item_data(select, 0, selectPayload);
+                check(Pt.select_get_item_data(select, 0).address() == selectPayload.address(),
+                        "select item data set");
+                Pt.select_set_item_data(select, 99, selectPayload);
+            }
+            check(Pt.select_get_selected(select) == Pt.list_index_none,
+                    "select no selection");
+            Pt.select_set_selected(select, 2);
+            check(Pt.select_get_selected(select) == 2, "select selection");
+            Pt.select_set_selected(select, 99);
+            check(Pt.select_get_selected(select) == Pt.list_index_none,
+                    "select out-of-range clears");
+            Pt.select_set_selected(select, 1);
+            Pt.select_clear_selection(select);
+            check(Pt.select_get_selected(select) == Pt.list_index_none,
+                    "select clear selection");
+            Pt.select_set_query(select, "ap");
+            check(Pt.select_get_query(select).equals("ap"), "select query");
+            check(Pt.select_get_match_count(select) == 2, "select match count");
+            check(Pt.select_get_match_item(select, 0) == 0, "select match first");
+            check(Pt.select_get_match_item(select, 99) == Pt.list_index_none,
+                    "select match out of range");
+            Pt.select_set_query(select, "");
+            check(Pt.select_get_match_count(select) == 5, "select query cleared");
+            check(Pt.select_get_max_popup_rows(select) == 8, "select popup rows default");
+            Pt.select_set_max_popup_rows(select, 0);
+            check(Pt.select_get_max_popup_rows(select) == 1, "select popup rows clamp low");
+            Pt.select_set_max_popup_rows(select, 500);
+            check(Pt.select_get_max_popup_rows(select) == Pt.picker_max_candidates,
+                    "select popup rows clamp high");
+            final int[] selectChoice = {Pt.list_index_none};
+            Pt.select_set_on_change(select, (widget, index, data) -> selectChoice[0] = index,
+                    arena);
+            Pt.select_set_selected(select, 2);
+            check(selectChoice[0] == Pt.list_index_none, "select programmatic silent");
+            Pt.select_open(select);
+            check(Pt.select_is_open(select), "select open");
+            Pt.select_close(select);
+            check(!Pt.select_is_open(select), "select close");
+            Pt.select_remove_item(select, 0);
+            check(Pt.select_get_item_count(select) == 4, "select remove item");
+            Pt.select_remove_item(select, 99);
+            check(Pt.select_get_item_count(select) == 4, "select remove out of range");
+            Pt.select_clear(select);
+            check(Pt.select_get_item_count(select) == 0, "select clear");
+            Pt.select_open(select);
+            check(!Pt.select_is_open(select), "select open empty model is a no-op");
+
+            /* Date picker and pt_date by value. */
+            Pt.PtDate today = Pt.date_today();
+            check(!today.isEmpty() && today.year() >= 1 && today.year() <= 9999,
+                    "date today");
+            check(Pt.date_is_valid(today), "date today valid");
+            check(Pt.date_is_valid(new Pt.PtDate(2024, 2, 29)), "date leap day valid");
+            check(!Pt.date_is_valid(new Pt.PtDate(2023, 2, 29)), "date non-leap day invalid");
+            check(!Pt.date_is_valid(new Pt.PtDate(2024, 13, 1)), "date month invalid");
+            check(!Pt.date_is_valid(new Pt.PtDate(2024, 1, 0)), "date day invalid");
+            check(!Pt.date_is_valid(Pt.PtDate.empty()), "date empty invalid");
+            check(Pt.PtDate.empty().isEmpty() && new Pt.PtDate(2024, 1, 1).isEmpty() == false,
+                    "date empty predicate");
+            MemorySegment datePicker = Pt.date_picker_create(column);
+            check(datePicker.address() != 0, "date picker create");
+            check(Pt.date_picker_get_date(datePicker).isEmpty(), "date picker starts empty");
+            check(Pt.date_picker_get_text(datePicker).isEmpty(), "date picker empty text");
+            check(Pt.date_picker_get_format(datePicker) == Pt.date_format_iso,
+                    "date picker default format");
+            Pt.PtDate committed = new Pt.PtDate(2025, 12, 31);
+            check(Pt.date_picker_set_date(datePicker, committed), "date picker set date");
+            check(Pt.date_picker_get_date(datePicker).equals(committed), "date picker date");
+            check(Pt.date_picker_get_text(datePicker).equals("2025-12-31"),
+                    "date picker ISO text");
+            Pt.date_picker_set_format(datePicker, Pt.date_format_dmy);
+            check(Pt.date_picker_get_format(datePicker) == Pt.date_format_dmy,
+                    "date picker format");
+            check(Pt.date_picker_get_text(datePicker).equals("31/12/2025"),
+                    "date picker DMY text");
+            Pt.date_picker_set_format(datePicker, 99);
+            check(Pt.date_picker_get_format(datePicker) == Pt.date_format_iso,
+                    "date picker invalid format");
+            check(Pt.date_picker_set_text(datePicker, "2026-11-22"), "date picker set ISO text");
+            check(Pt.date_picker_get_date(datePicker).equals(new Pt.PtDate(2026, 11, 22)),
+                    "date picker parsed text");
+            check(!Pt.date_picker_set_text(datePicker, "2026-02-30"),
+                    "date picker invalid text rejected");
+            check(Pt.date_picker_get_text(datePicker).equals("2026-11-22"),
+                    "date picker invalid text keeps value");
+            check(!Pt.date_picker_set_date(datePicker, new Pt.PtDate(2026, 2, 30)),
+                    "date picker invalid date rejected");
+            check(Pt.date_picker_get_date(datePicker).equals(new Pt.PtDate(2026, 11, 22)),
+                    "date picker invalid date keeps value");
+            check(Pt.date_picker_set_text(datePicker, ""), "date picker empty text clears");
+            check(Pt.date_picker_get_date(datePicker).isEmpty(), "date picker cleared by text");
+            Pt.date_picker_set_placeholder(datePicker, "Pick a date");
+            check(Pt.date_picker_get_placeholder(datePicker).equals("Pick a date"),
+                    "date picker placeholder");
+            final int[] dateChanges = {0};
+            final int[] dateSeen = {0, 0, 0};
+            Pt.date_picker_set_on_change(datePicker, (widget, date, data) -> {
+                dateChanges[0] += 1;
+                dateSeen[0] = date.year();
+                dateSeen[1] = date.month();
+                dateSeen[2] = date.day();
+            }, arena);
+            Pt.date_picker_set_date(datePicker, new Pt.PtDate(2027, 1, 2));
+            check(dateChanges[0] == 0, "date picker programmatic silent");
+            Pt.date_picker_open(datePicker);
+            check(Pt.date_picker_is_open(datePicker), "date picker open");
+            Pt.date_picker_close(datePicker);
+            check(!Pt.date_picker_is_open(datePicker), "date picker close");
+            Pt.date_picker_clear(datePicker);
+            check(Pt.date_picker_get_date(datePicker).isEmpty(), "date picker clear");
+
+            /* Number picker: clamping, step callback and text parsing. */
+            MemorySegment numberPicker = Pt.number_picker_create(column);
+            check(numberPicker.address() != 0, "number picker create");
+            check(!Pt.number_picker_has_value(numberPicker), "number picker starts empty");
+            check(Math.abs(Pt.number_picker_get_min(numberPicker)) < 0.0001
+                    && Math.abs(Pt.number_picker_get_max(numberPicker) - 100.0) < 0.0001,
+                    "number picker default range");
+            check(Math.abs(Pt.number_picker_get_step(numberPicker) - 1.0) < 0.0001,
+                    "number picker default step");
+            check(Pt.number_picker_get_value(numberPicker) == 0.0
+                    && Pt.number_picker_get_text(numberPicker).isEmpty(),
+                    "number picker empty value");
+            Pt.number_picker_set_range(numberPicker, 0.0, 10.0);
+            check(Math.abs(Pt.number_picker_get_max(numberPicker) - 10.0) < 0.0001,
+                    "number picker range");
+            Pt.number_picker_set_range(numberPicker, 20.0, 10.0);
+            check(Math.abs(Pt.number_picker_get_max(numberPicker) - 10.0) < 0.0001,
+                    "number picker inverted range rejected");
+            Pt.number_picker_set_range(numberPicker, Double.NaN, 10.0);
+            check(Math.abs(Pt.number_picker_get_min(numberPicker)) < 0.0001,
+                    "number picker NaN range rejected");
+            Pt.number_picker_set_value(numberPicker, 20.0);
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 10.0) < 0.0001,
+                    "number picker value clamps");
+            check(Pt.number_picker_has_value(numberPicker), "number picker has value");
+            check(Pt.number_picker_get_text(numberPicker).equals("10"),
+                    "number picker text follows value");
+            Pt.number_picker_set_value(numberPicker, Double.NaN);
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 10.0) < 0.0001,
+                    "number picker NaN value ignored");
+            Pt.number_picker_set_step(numberPicker, 0.5);
+            check(Math.abs(Pt.number_picker_get_step(numberPicker) - 0.5) < 0.0001,
+                    "number picker step");
+            Pt.number_picker_set_step(numberPicker, 0.0);
+            check(Math.abs(Pt.number_picker_get_step(numberPicker) - 0.5) < 0.0001,
+                    "number picker zero step rejected");
+            final int[] numberChanges = {0};
+            final double[] numberSeen = {Double.NaN};
+            Pt.number_picker_set_on_change(numberPicker, (widget, value, data) -> {
+                numberChanges[0] += 1;
+                numberSeen[0] = value;
+            }, arena);
+            Pt.number_picker_step_by(numberPicker, -2.0);
+            check(numberChanges[0] == 1 && Math.abs(numberSeen[0] - 9.0) < 0.0001,
+                    "number picker step callback");
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 9.0) < 0.0001,
+                    "number picker step value");
+            Pt.number_picker_set_text(numberPicker, "3,5");
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 3.5) < 0.0001,
+                    "number picker comma decimal");
+            check(Pt.number_picker_get_text(numberPicker).equals("3.5"),
+                    "number picker canonical text");
+            check(!Pt.number_picker_set_text(numberPicker, "abc"),
+                    "number picker invalid text rejected");
+            check(Pt.number_picker_get_text(numberPicker).equals("3.5"),
+                    "number picker invalid text keeps value");
+            check(Pt.number_picker_set_text(numberPicker, ""), "number picker empty text");
+            check(!Pt.number_picker_has_value(numberPicker), "number picker text clears value");
+            Pt.number_picker_step_by(numberPicker, 1.0);
+            check(Math.abs(Pt.number_picker_get_value(numberPicker) - 0.5) < 0.0001,
+                    "number picker step from empty");
+            Pt.number_picker_set_placeholder(numberPicker, "Amount");
+            check(Pt.number_picker_get_placeholder(numberPicker).equals("Amount"),
+                    "number picker placeholder");
+            Pt.number_picker_clear(numberPicker);
+            check(!Pt.number_picker_has_value(numberPicker)
+                    && Pt.number_picker_get_text(numberPicker).isEmpty(),
+                    "number picker clear");
+            final int[] lifetimeSteps = {0};
+            MemorySegment lifetimeNumber = Pt.number_picker_create(column);
+            try (Arena callbackArena = Arena.ofConfined()) {
+                Pt.number_picker_set_on_change(lifetimeNumber,
+                        (widget, value, data) -> lifetimeSteps[0] += 1, callbackArena);
+                Pt.number_picker_step_by(lifetimeNumber, 1.0);
+                check(lifetimeSteps[0] == 1, "number callback before arena close");
+            }
+            Pt.number_picker_set_on_change(lifetimeNumber, null, arena);
+            Pt.number_picker_step_by(lifetimeNumber, 1.0);
+            check(lifetimeSteps[0] == 1, "number no callback after arena close");
+
+            /* Colour picker: hex parsing, presets and silent programmatic paths. */
+            MemorySegment colorPicker = Pt.color_picker_create(column);
+            check(colorPicker.address() != 0, "color picker create");
+            check(Pt.color_picker_get_color(colorPicker) == 0x000000FF,
+                    "color picker default black");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#000000"),
+                    "color picker default hex");
+            check(Pt.color_picker_get_preset_count(colorPicker) == 24,
+                    "color picker default presets");
+            Pt.color_picker_set_color(colorPicker, 0x112233FF);
+            check(Pt.color_picker_get_color(colorPicker) == 0x112233FF,
+                    "color picker set color");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#112233"),
+                    "color picker opaque hex");
+            check(Pt.color_picker_set_hex(colorPicker, "#10203040"),
+                    "color picker set alpha hex");
+            check(Pt.color_picker_get_color(colorPicker) == 0x10203040,
+                    "color picker alpha hex color");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#10203040"),
+                    "color picker alpha hex text");
+            check(Pt.color_picker_set_hex(colorPicker, "A1B2C3"),
+                    "color picker hex without hash");
+            check(Pt.color_picker_get_color(colorPicker) == 0xA1B2C3FF,
+                    "color picker hex without hash color");
+            check(!Pt.color_picker_set_hex(colorPicker, "zzz"),
+                    "color picker invalid hex rejected");
+            check(Pt.color_picker_get_hex(colorPicker).equals("#A1B2C3"),
+                    "color picker invalid hex keeps text");
+            Pt.color_picker_add_preset(colorPicker, 0xFF0000FF);
+            check(Pt.color_picker_get_preset_count(colorPicker) == 25,
+                    "color picker preset add");
+            check(Pt.color_picker_get_preset(colorPicker, 24) == 0xFF0000FF,
+                    "color picker preset value");
+            Pt.color_picker_clear_presets(colorPicker);
+            check(Pt.color_picker_get_preset_count(colorPicker) == 0,
+                    "color picker presets cleared");
+            for (int index = 0; index < Pt.color_max_presets + 1; index++) {
+                Pt.color_picker_add_preset(colorPicker, 0x010203FF + index);
+            }
+            check(Pt.color_picker_get_preset_count(colorPicker) == Pt.color_max_presets,
+                    "color picker preset cap");
+            check(Pt.color_picker_get_preset(colorPicker, Pt.color_max_presets) == 0,
+                    "color picker preset out of range");
+            final int[] colorChanges = {0};
+            final int[] colorSeen = {0};
+            Pt.color_picker_set_on_change(colorPicker, (widget, color, data) -> {
+                colorChanges[0] += 1;
+                colorSeen[0] = color;
+            }, arena);
+            Pt.color_picker_set_color(colorPicker, 0x556677FF);
+            check(colorChanges[0] == 0, "color picker programmatic silent");
+            Pt.color_picker_set_hex(colorPicker, "#010203");
+            check(colorChanges[0] == 0, "color picker hex silent");
+            Pt.color_picker_open(colorPicker);
+            check(Pt.color_picker_is_open(colorPicker), "color picker open");
+            Pt.color_picker_close(colorPicker);
+            check(!Pt.color_picker_is_open(colorPicker), "color picker close");
+            check(Pt.select_get_item_count(MemorySegment.NULL) == 0, "select null count");
+            check(!Pt.select_is_open(MemorySegment.NULL), "select null closed");
+            check(Pt.date_picker_get_date(MemorySegment.NULL).isEmpty(), "date picker null");
+            check(!Pt.number_picker_has_value(MemorySegment.NULL), "number picker null");
+            check(Pt.color_picker_get_preset_count(MemorySegment.NULL) == 0,
+                    "color picker null");
+            Pt.widget_destroy(select);
+            Pt.widget_destroy(datePicker);
+            Pt.widget_destroy(numberPicker);
+            Pt.widget_destroy(lifetimeNumber);
+            Pt.widget_destroy(colorPicker);
+
             final boolean[] allowed = {false};
             Pt.window_set_close_handler(window, (target, data) -> allowed[0], arena);
             Pt.window_close(window);
