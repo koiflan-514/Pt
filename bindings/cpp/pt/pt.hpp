@@ -1504,8 +1504,9 @@ class window {
         pt_window_set_pointer_callback(handle_, callback, data);
         return *this;
     }
-    window &set_ime_callbacks(pt_ime_commit_callback commit,
-                              pt_ime_preedit_callback preedit,
+    /* Passing no callbacks disables custom IME handling again. */
+    window &set_ime_callbacks(pt_ime_commit_callback commit = nullptr,
+                              pt_ime_preedit_callback preedit = nullptr,
                               void *data = nullptr) {
         pt_window_set_ime_callbacks(handle_, commit, preedit, data);
         return *this;
@@ -1518,9 +1519,31 @@ class window {
         pt_window_set_ime_cursor_rect(handle_, x, y, width, height);
         return *this;
     }
-    [[nodiscard]] char *primary() const { return pt_window_primary_get(handle_); }
-    bool set_primary(const char *text) { return pt_window_primary_set(handle_, text); }
+    /* The C getter returns malloc'd memory owned by the caller; copy it and
+     * release it here so callers never have to pair it with pt_free(). */
+    [[nodiscard]] std::string primary() const {
+        char *value = pt_window_primary_get(handle_);
+        if (!value) {
+            return {};
+        }
+        std::string copy(value);
+        pt_free(value);
+        return copy;
+    }
+    bool set_primary(std::string_view text) const {
+        std::string value = copy_string(text);
+        return pt_window_primary_set(handle_, value.c_str());
+    }
+    /* The C entry point cannot know the caller's buffer capacity, so reject a
+     * span that cannot hold width * height pixels instead of overrunning it. */
     bool paint_pixels(std::span<uint32_t> pixels, int width, int height) const {
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        const size_t required = static_cast<size_t>(width) * static_cast<size_t>(height);
+        if (pixels.size() < required) {
+            return false;
+        }
         return pt_window_paint_pixels(handle_, pixels.data(), width, height);
     }
     window &set_long_press_delay(uint32_t milliseconds) {

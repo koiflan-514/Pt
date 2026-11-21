@@ -6,10 +6,36 @@
 
 #include <pt/pt.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <string_view>
+#include <vector>
+
+#include <unistd.h>
+
+/* Internal UI-thread hooks. The C suite uses the same entry points to drive
+ * synthetic compositor input; they are not part of the public ABI, but the
+ * binding test links the static library so raw focus/key/pointer and IME
+ * dispatch can be observed without a compositor. Declared locally so the
+ * binding itself does not depend on <src/internal.h>. */
+extern "C" {
+void pt_window_input_pointer_enter(pt_window *window, float x, float y);
+void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_t time);
+void pt_window_input_pointer_leave(pt_window *window);
+void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pressed, float x,
+                                    float y, uint32_t serial, uint32_t time);
+void pt_window_input_axis(pt_window *window, float x, float y, float delta);
+void pt_window_input_keyboard_focus(pt_window *window, bool focused, uint32_t serial);
+void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
+                         const char *utf8, bool pressed);
+void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
+                                 int32_t cursor_begin, int32_t cursor_end,
+                                 uint32_t delete_before, uint32_t delete_after);
+}
 
 namespace {
 
@@ -241,6 +267,166 @@ void on_tree_rename(pt_widget *tree, pt_tree_node *node, const char *text, void 
     auto *capture = static_cast<rename_capture *>(data);
     capture->node = node;
     capture->text = text ? text : "";
+}
+
+/* ---- 1.1 extension probes: custom paint, raw input, IME, fd watches ---- */
+
+constexpr pt_color paint_fill = 0xAA3300FFu; // pt_rgb(0xAA3300)
+
+struct paint_capture {
+    int calls = 0;
+    pt_widget *widget = nullptr;
+    float width = 0.0f;
+    float height = 0.0f;
+    float scale = 0.0f;
+    bool has_clip = false;
+    pt::rect clip{};
+    float measured = 0.0f;
+    bool has_metrics = false;
+    pt::font_metrics metrics{};
+    bool glyph = false;
+};
+
+void paint_probe(pt_widget *widget, pt_paint_context *raw, void *data) {
+    auto *capture = static_cast<paint_capture *>(data);
+    pt::paint_context context(raw);
+    capture->calls += 1;
+    capture->widget = widget;
+    capture->width = context.width();
+    capture->height = context.height();
+    capture->scale = context.scale();
+    if (const auto clip = context.clip()) {
+        capture->has_clip = true;
+        capture->clip = *clip; // copy while the context is borrowed
+    }
+    capture->measured =
+        context.measure_text("sans", 12.0f, pt_font_weight_regular, pt_font_slant_upright, "Pt");
+    if (const auto metrics = context.metrics("sans", 12.0f, pt_font_weight_regular,
+                                             pt_font_slant_upright)) {
+        capture->has_metrics = true;
+        capture->metrics = *metrics;
+    }
+    capture->glyph =
+        context.font_has_glyph("sans", 12.0f, static_cast<uint32_t>('P'));
+    context.push_clip(0.0f, 0.0f, 40.0f, 20.0f)
+        .fill_rect(0.0f, 0.0f, 40.0f, 20.0f, paint_fill)
+        .pop_clip()
+        .fill_rounded_rect(0.0f, 0.0f, 8.0f, 8.0f, 2.0f, pt_rgb(0x00AA33))
+        .stroke_rect(1.0f, 1.0f, 6.0f, 6.0f, 1.0f, pt_rgb(0x0033AA))
+        .draw_line(0.0f, 0.0f, 4.0f, 4.0f, 1.0f, pt_rgb(0x333333))
+        .draw_text("sans", 12.0f, pt_font_weight_regular, pt_font_slant_upright, 2.0f, 10.0f,
+                   "Pt", pt_rgb(0x111111));
+}
+
+struct focus_capture {
+    pt_window *window = nullptr;
+    bool focused = false;
+    int calls = 0;
+};
+
+void focus_probe(pt_window *window, bool focused, void *data) {
+    auto *capture = static_cast<focus_capture *>(data);
+    capture->window = window;
+    capture->focused = focused;
+    capture->calls += 1;
+}
+
+struct key_event_capture {
+    pt_window *window = nullptr;
+    uint32_t key = 0;
+    uint32_t modifiers = 0;
+    std::string text;
+    int calls = 0;
+    bool consume = true;
+};
+
+bool key_event_probe(pt_window *window, uint32_t key, uint32_t modifiers, const char *utf8,
+                     void *data) {
+    auto *capture = static_cast<key_event_capture *>(data);
+    capture->window = window;
+    capture->key = key;
+    capture->modifiers = modifiers;
+    capture->text = utf8 ? utf8 : ""; // copy: payload is borrowed
+    capture->calls += 1;
+    return capture->consume;
+}
+
+struct legacy_key_capture {
+    int calls = 0;
+};
+
+bool legacy_key_probe(pt_window *window, uint32_t key, uint32_t modifiers, void *data) {
+    (void)window;
+    (void)key;
+    (void)modifiers;
+    ++static_cast<legacy_key_capture *>(data)->calls;
+    return true;
+}
+
+struct pointer_capture {
+    pt_window *window = nullptr;
+    std::vector<pt_pointer_event> events; // each entry is a copy of the payload
+    bool consume = true;
+};
+
+bool pointer_probe(pt_window *window, const pt_pointer_event *event, void *data) {
+    auto *capture = static_cast<pointer_capture *>(data);
+    capture->window = window;
+    capture->events.push_back(*event); // copy: payload is borrowed
+    return capture->consume;
+}
+
+struct ime_capture {
+    pt_window *window = nullptr;
+    std::string commit;
+    std::string preedit;
+    int32_t begin = -2;
+    int32_t end = -2;
+    int commits = 0;
+    int preedits = 0;
+};
+
+void ime_commit_probe(pt_window *window, const char *text, void *data) {
+    auto *capture = static_cast<ime_capture *>(data);
+    capture->window = window;
+    capture->commit = text ? text : ""; // copy: payload is borrowed
+    capture->commits += 1;
+}
+
+void ime_preedit_probe(pt_window *window, const char *text, int32_t cursor_begin,
+                       int32_t cursor_end, void *data) {
+    auto *capture = static_cast<ime_capture *>(data);
+    capture->window = window;
+    capture->preedit = text ? text : "";
+    capture->begin = cursor_begin;
+    capture->end = cursor_end;
+    capture->preedits += 1;
+}
+
+struct fd_capture {
+    int calls = 0;
+    uint32_t last = 0;
+};
+
+void fd_probe(pt_app *app, uint32_t events, void *data) {
+    (void)app;
+    auto *capture = static_cast<fd_capture *>(data);
+    capture->calls += 1;
+    capture->last = events;
+}
+
+struct fd_self_capture {
+    pt_app *app = nullptr;
+    uint64_t watch_id = 0;
+    int calls = 0;
+    uint32_t last = 0;
+};
+
+void fd_self_probe(pt_app *app, uint32_t events, void *data) {
+    auto *capture = static_cast<fd_self_capture *>(data);
+    capture->calls += 1;
+    capture->last = events;
+    pt_app_unwatch_fd(app, capture->watch_id);
 }
 
 } // namespace
@@ -914,6 +1100,252 @@ int main() {
 
     check(window.set_clipboard("copied text"));
     check(window.clipboard() == "copied text");
+
+    /* ---- 1.1 extension API: paint context and offscreen snapshot ---- */
+    pt::window paint_window(application, "cpp paint", 320, 240);
+    check(paint_window.valid());
+    pt::widget paint_root = paint_window.root();
+    pt::widget paint_column = pt::column(paint_root.get());
+    pt::widget painted = pt::box(paint_column.get(), pt_direction_column);
+    painted.set_size(40.0f, 20.0f);
+    paint_capture paint_state;
+    painted.set_paint_callback(paint_probe, &paint_state);
+    check(paint_state.calls == 0); // installing the callback paints nothing
+
+    const int frame_width = paint_window.width();
+    const int frame_height = paint_window.height();
+    std::vector<uint32_t> frame(static_cast<size_t>(frame_width) *
+                                static_cast<size_t>(frame_height));
+    const std::span<uint32_t> frame_span(frame);
+    check(paint_window.paint_pixels(frame_span, frame_width, frame_height));
+    check(paint_state.calls >= 1);
+    check(paint_state.widget == painted.get());
+    check(paint_state.width >= 40.0f);
+    check(paint_state.height >= 20.0f);
+    check(paint_state.scale > 0.0f);
+    check(paint_state.has_clip);
+    check(paint_state.clip.width >= 40.0f);
+    check(paint_state.clip.height >= 20.0f);
+    check(paint_state.measured > 0.0f);
+    check(paint_state.has_metrics);
+    check(paint_state.metrics.line_height > 0.0f);
+    check(paint_state.glyph);
+    const uint32_t painted_value = ((paint_fill & 0xFFu) << 24) | (paint_fill >> 8);
+    check(std::find(frame.begin(), frame.end(), painted_value) != frame.end());
+
+    const int first_calls = paint_state.calls;
+    const paint_capture first_paint = paint_state; // copied out of the callback
+    std::vector<uint32_t> frame_again(frame.size());
+    check(paint_window.paint_pixels(std::span<uint32_t>(frame_again), frame_width, frame_height));
+    check(paint_state.calls > first_calls);
+    check(paint_state.width == first_paint.width);
+    check(paint_state.height == first_paint.height);
+    check(paint_state.clip.width == first_paint.clip.width);
+    check(paint_state.clip.height == first_paint.clip.height);
+
+    // A span smaller than width * height is rejected by the wrapper before the
+    // C entry point can write past its end.
+    check(!paint_window.paint_pixels(std::span<uint32_t>(frame.data(), frame.size() - 1),
+                               frame_width, frame_height));
+    check(!paint_window.paint_pixels(frame_span, 0, frame_height));
+    check(!paint_window.paint_pixels(frame_span, frame_width, -1));
+
+    painted.clear_paint_callback();
+    const int cleared_calls = paint_state.calls;
+    check(paint_window.paint_pixels(frame_span, frame_width, frame_height));
+    check(paint_state.calls == cleared_calls);
+    painted.request_redraw();
+    painted.request_redraw_rect(-4.0f, -4.0f, 8.0f, 8.0f);
+    painted.request_redraw_rect(0.0f, 0.0f, 0.0f, 0.0f);
+
+    // A null context is the failure path for every helper: geometry is zero,
+    // optional queries are empty and drawing is a no-op.
+    pt::paint_context null_paint(nullptr);
+    check(null_paint.get() == nullptr);
+    check(null_paint.width() == 0.0f);
+    check(null_paint.height() == 0.0f);
+    check(null_paint.scale() == 1.0f);
+    check(!null_paint.clip().has_value());
+    check(null_paint.measure_text("sans", 12.0f, pt_font_weight_regular,
+                                  pt_font_slant_upright, "Pt") == 0.0f);
+    check(!null_paint.metrics("sans", 12.0f, pt_font_weight_regular,
+                              pt_font_slant_upright)
+               .has_value());
+    check(!null_paint.font_has_glyph("sans", 12.0f, static_cast<uint32_t>('P')));
+    null_paint.push_clip(0.0f, 0.0f, 1.0f, 1.0f)
+        .fill_rect(0.0f, 0.0f, 1.0f, 1.0f, paint_fill)
+        .fill_rounded_rect(0.0f, 0.0f, 1.0f, 1.0f, 1.0f, paint_fill)
+        .stroke_rect(0.0f, 0.0f, 1.0f, 1.0f, 1.0f, paint_fill)
+        .draw_line(0.0f, 0.0f, 1.0f, 1.0f, 1.0f, paint_fill)
+        .draw_text("sans", 12.0f, pt_font_weight_regular, pt_font_slant_upright, 0.0f, 0.0f,
+                   "Pt", paint_fill)
+        .pop_clip();
+
+    /* ---- primary selection: copied, freed string instead of raw malloc ---- */
+    check(window.set_primary("primary payload"));
+    check(window.primary() == "primary payload");
+    const std::string unicode_primary = "primary \xE4\xB8\x96 na\xC3\xAFve";
+    check(window.set_primary(unicode_primary));
+    check(window.primary() == unicode_primary);
+    check(window.set_primary(std::string_view{}));
+    check(window.primary().empty());
+    for (int i = 0; i < 8; ++i) {
+        check(window.primary().empty());
+    }
+
+    /* ---- raw focus/key/pointer callbacks: real dispatch through C ---- */
+    focus_capture focus_state;
+    window.on_focus(focus_probe, &focus_state);
+    pt_window_input_keyboard_focus(window.get(), true, 7);
+    check(focus_state.calls == 1);
+    check(focus_state.window == window.get());
+    check(focus_state.focused);
+    pt_window_input_keyboard_focus(window.get(), false, 8);
+    check(focus_state.calls == 2);
+    check(!focus_state.focused);
+    window.on_focus(nullptr);
+    pt_window_input_keyboard_focus(window.get(), true, 9);
+    check(focus_state.calls == 2);
+    pt_window_input_keyboard_focus(window.get(), false, 10);
+
+    key_event_capture key_state;
+    legacy_key_capture legacy_state;
+    window.on_key_event(key_event_probe, &key_state);
+    window.on_key(legacy_key_probe, &legacy_state);
+    pt_window_input_key(window.get(), 0x61u, static_cast<uint32_t>(pt_key_modifier_ctrl), "a",
+                        true);
+    check(key_state.calls == 1);
+    check(key_state.window == window.get());
+    check(key_state.key == 0x61u);
+    check(key_state.modifiers == static_cast<uint32_t>(pt_key_modifier_ctrl));
+    check(key_state.text == "a");
+    check(legacy_state.calls == 0); // consumed before the legacy callback
+    key_state.consume = false;
+    pt_window_input_key(window.get(), 0xFF09u, 0, nullptr, true);
+    check(key_state.calls == 2);
+    check(key_state.text.empty());
+    check(legacy_state.calls == 1); // not consumed, so legacy sees it
+    window.on_key_event(nullptr);
+    window.on_key(nullptr, nullptr);
+
+    pointer_capture pointer_state;
+    window.on_pointer(pointer_probe, &pointer_state);
+    pt_window_input_pointer_enter(window.get(), 10.0f, 20.0f);
+    pt_window_input_pointer_motion(window.get(), 12.0f, 22.0f, 1);
+    pt_window_input_pointer_button(window.get(), 0x110u, true, 12.0f, 22.0f, 5, 100);
+    pt_window_input_pointer_button(window.get(), 0x110u, false, 12.0f, 22.0f, 0, 101);
+    pt_window_input_axis(window.get(), 12.0f, 22.0f, 15.0f);
+    pt_window_input_pointer_leave(window.get());
+    check(pointer_state.window == window.get());
+    check(pointer_state.events.size() == 6);
+    if (pointer_state.events.size() == 6) {
+        check(pointer_state.events[0].phase == pt_pointer_phase_enter);
+        check(pointer_state.events[0].x == 10.0f);
+        check(pointer_state.events[0].y == 20.0f);
+        check(pointer_state.events[1].phase == pt_pointer_phase_motion);
+        check(pointer_state.events[1].delta_x == 2.0f);
+        check(pointer_state.events[1].delta_y == 2.0f);
+        check(pointer_state.events[2].phase == pt_pointer_phase_down);
+        check(pointer_state.events[2].button == 0x110u);
+        check(pointer_state.events[2].pressed);
+        check(pointer_state.events[2].click_count == 1);
+        check(pointer_state.events[3].phase == pt_pointer_phase_up);
+        check(!pointer_state.events[3].pressed);
+        check(pointer_state.events[4].phase == pt_pointer_phase_axis);
+        check(pointer_state.events[4].delta_y == 15.0f);
+        check(pointer_state.events[5].phase == pt_pointer_phase_leave);
+    }
+    window.on_pointer(nullptr);
+
+    /* ---- custom IME callbacks: dispatch, payload copy, clear ---- */
+    ime_capture ime_state;
+    window.set_ime_callbacks(ime_commit_probe, ime_preedit_probe, &ime_state)
+        .set_ime_enabled(true)
+        .set_ime_cursor_rect(4, 8, 12, 16);
+    pt_window_input_ime_compose(window.get(), "hello \xE4\xB8\x96", "ni", 0, 2, 0, 0);
+    check(ime_state.commits == 1);
+    check(ime_state.commit == "hello \xE4\xB8\x96");
+    check(ime_state.window == window.get());
+    check(ime_state.preedits == 1);
+    check(ime_state.preedit == "ni");
+    check(ime_state.begin == 0);
+    check(ime_state.end == 2);
+    pt_window_input_ime_compose(window.get(), nullptr, "", -1, -1, 0, 0);
+    check(ime_state.commits == 1);
+    check(ime_state.preedits == 2);
+    check(ime_state.preedit.empty());
+    check(ime_state.begin == -1);
+    check(ime_state.end == -1);
+    window.set_ime_callbacks();
+    pt_window_input_ime_compose(window.get(), "ignored", "ignored", 0, 0, 0, 0);
+    check(ime_state.commits == 1);
+    check(ime_state.preedits == 2);
+    window.set_ime_enabled(false);
+
+    /* ---- fd watches: real pipe readiness, hangup, self-unwatch ---- */
+    int pipe_fds[2] = {-1, -1};
+    check(pipe(pipe_fds) == 0);
+    if (pipe_fds[0] >= 0 && pipe_fds[1] >= 0) {
+        fd_capture fd_state;
+        const uint64_t read_watch =
+            application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe, &fd_state);
+        check(read_watch != 0);
+        check(::write(pipe_fds[1], "x", 1) == 1);
+        check(application.run_for(80) == 0);
+        check(fd_state.calls >= 1);
+        check((fd_state.last & pt_fd_event_read) != 0);
+        application.unwatch_fd(read_watch);
+        fd_state.calls = 0;
+        check(::write(pipe_fds[1], "y", 1) == 1);
+        check(application.run_for(40) == 0);
+        check(fd_state.calls == 0);
+
+        // Two independent watches on one descriptor are allowed.
+        fd_capture first_watch_state;
+        fd_capture second_watch_state;
+        const uint64_t first_watch =
+            application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe, &first_watch_state);
+        const uint64_t second_watch =
+            application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe, &second_watch_state);
+        check(first_watch != 0 && second_watch != 0);
+        check(first_watch != second_watch);
+        check(::write(pipe_fds[1], "z", 1) == 1);
+        check(application.run_for(80) == 0);
+        check(first_watch_state.calls >= 1);
+        check(second_watch_state.calls >= 1);
+        application.unwatch_fd(first_watch);
+        application.unwatch_fd(second_watch);
+
+        fd_self_capture self_state;
+        self_state.app = application.get();
+        self_state.watch_id = application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_self_probe,
+                                                   &self_state);
+        check(self_state.watch_id != 0);
+        check(application.run_for(80) == 0);
+        check(self_state.calls == 1);
+        check((self_state.last & pt_fd_event_read) != 0);
+        check(::write(pipe_fds[1], "w", 1) == 1);
+        check(application.run_for(40) == 0);
+        check(self_state.calls == 1);
+
+        fd_capture hangup_state;
+        const uint64_t hangup_watch =
+            application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe, &hangup_state);
+        check(hangup_watch != 0);
+        check(::close(pipe_fds[1]) == 0);
+        pipe_fds[1] = -1;
+        check(application.run_for(80) == 0);
+        check(hangup_state.calls >= 1);
+        check((hangup_state.last & (pt_fd_event_hangup | pt_fd_event_error)) != 0);
+        application.unwatch_fd(hangup_watch);
+
+        fd_capture never_state;
+        check(application.watch_fd(-1, pt_fd_event_read, fd_probe, &never_state) == 0);
+        check(application.watch_fd(pipe_fds[0], 0, fd_probe, &never_state) == 0);
+        application.unwatch_fd(0);
+        check(::close(pipe_fds[0]) == 0);
+        pipe_fds[0] = -1;
+    }
 
     pt::widget card = pt::card(column.get());
     card.set_radius(12.0f).set_background(pt_rgb(0x161D28)).set_gap(4.0f);
