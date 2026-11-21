@@ -883,17 +883,17 @@ configuration.
 
 ## 1.1.0 validation record (2026-11-22)
 
-Environment: the integrated `m18/docs-final` tree at `d552baf` on the reference
+Environment: the integrated `m18/integration` tree on the reference
 machine (CachyOS, Wayland, niri 26.04) with the 1.0 toolchain (GCC 16.2.1,
 Python 3.14.8, OpenJDK 25.0.2). The five development branches were merged before
 this record: C contract hardening, Java/extension wrapping, examples, binding
-tests and documentation.
+tests and documentation; the final seven wrappers, the 1.1.0 version bump and
+the documentation finalisation landed on top.
 
-This record is a release draft. The source, tests, examples and documentation
-are complete on the integration tree; the `Makefile` `VERSION` line, the last
-seven wrapper functions in C++/Python/Java and the final `tools/ci.sh` +
-`tools/release-check.sh --full` run are landing separately. Every figure marked
-**pending final gate run** is replaced by that run before the tag is created.
+The source, tests, examples and documentation are complete on the integration
+tree. Every figure below was measured on that tree, including the full
+`tools/ci.sh` run; the only remaining steps before the tag are the owner's
+freeze commit and annotated tag.
 
 ### Scope
 
@@ -949,17 +949,18 @@ the section an upgrading application must read:
 
 | Check | Result |
 | --- | --- |
-| Version agreement | `include/pt/base.h` and README say 1.1.0; `Makefile` `VERSION` **pending final gate run** |
+| Version agreement | `include/pt/base.h`, `Makefile` `VERSION`, README and the generated reference all say 1.1.0 |
 | API baseline | `api/pt.api` 448 functions / 785 entries; generated reference covers every baseline function |
-| Binding parity | target 448/448 in C++/Python/Java with an empty allowlist; 441/448 on this branch, last seven wrappers **pending** |
+| Binding parity | 448/448 in C++/Python/Java, 0 missing, empty allowlists |
 | C suites, C++/Python/Java test binaries | pass on the integration tree |
-| `make check` / `make check-bindings` | C and binding suites pass; the combined `make check` is red on the seven wrappers and the stale generated reference until the sibling changes land (**pending final gate run**) |
-| `make perf-check` | all guard ceilings hold; the work-in-progress measurement is dense full paint 4.275 ms and 4K full paint 8.429 ms. Final medians **pending final gate run** |
-| Live Wayland (`make check-wayland`) | 48 checks under a fullscreen nested niri |
-| Live typing (`make check-typing`) | pass under niri with text-input-v3 |
-| Sanitizer (`make check-sanitize`) | **pending final gate run** |
-| Staged install / reproducible tarball | **pending final gate run** |
-| `tools/release-check.sh --full` | **pending final gate run** |
+| `make check` / `make check-bindings` | all checks passed; C++ 517 checks, Python 48 tests, Java 372 checks, 0 failures |
+| `make perf-check` | all guard ceilings hold; release-tree medians: dense full paint 4.917 ms, 4K full paint 9.257 ms, first frame 22.32 ms, idle 500 ms CPU 0.968 ms |
+| Live Wayland (`make check-wayland`) | 48 checks under niri; focused-entry idle guard 21.7 ms / 5000 ms after one external-input retry |
+| Live typing (`make check-typing`) | pass under niri with text-input-v3 (ptdirect) |
+| Sanitizer (`make check-sanitize`) | pass: ASan+UBSan C suites, sanitized C++ 517 checks / Python 48 tests / Java 372 checks, 0 failures |
+| Staged install / reproducible tarball | pass: SONAME `libpt.so.1`, pkg-config 1.1.0, exported ABI matches the baseline, C/C++/Python/Java consumers, uninstall; two `make dist` runs reproduced sha256 `0aa2b1c7…3a446`, extracted tree rebuilds and passes `make check` |
+| `tools/ci.sh` | pass end to end (`CI verification passed for Pt 1.1.0`): werror build, check, perf, install-check, sanitizers, tarball, live suites |
+| `tools/release-check.sh --full` | automated gates pass for 1.1.0; two human items remain (freeze commit/tag, live-suite sign-off — the live suites and example smoke tests above were run on this tree) |
 | `tools/check-bilingual-docs.py` | pass: 9 public guides, no structural drift |
 
 ### ABI statement
@@ -969,8 +970,12 @@ typedefs, enum constants and one public struct, with the existing enum values
 and struct layouts unchanged. `tests/test_abi.c` pins the new
 `pt_fd_event_*` bits, `pt_pointer_phase_*` values, `pt_pointer_event` offsets,
 `pt_decoration_mode`, `pt_pixel_format` and `pt_paint_pixels_desc`.
-`abidiff` against the 1.0.0 tag must report only additions; that comparison is
-part of the final gate.
+`abidiff` (libabigail) is not installed on the reference machine and could not
+be added without elevated privileges; the release-time comparison was done at
+the symbol level instead: `nm -D --defined-only` on the 1.0.0 tag build and the
+1.1.0 build shows 412 → 448 exported `pt_*` symbols, **0 removed, 36 added**,
+and `readelf -d` confirms SONAME stays `libpt.so.1`. Run `abidiff` on a machine
+with libabigail before publishing if a type-level comparison is wanted.
 
 ### Known issues
 
@@ -986,8 +991,6 @@ part of the final gate.
   pointer event needs a live seat.
 - KWin/fcitx5 `commit_string` loss is mitigated by full-state resend, not a
   confirmed root cause. The live KWin/Mutter IME matrix remains to be recorded.
-- The canvas performance figures above are work-in-progress measurements; the
-  final gate replaces them with the release-tree medians.
 
 The annotated tag is created from the final gate tree after the pending items
 close; this record is inside the release archive, so it does not quote a digest.
@@ -1000,7 +1003,7 @@ close; this record is inside the release archive, so it does not quote a digest.
 - The pkg-config file puts those in `Requires.private` and only `-lm` in
   `Libs.private`; public headers expose no external types.
 - The install layout is:
-  - `$PREFIX/lib/libpt.so.1.0.0`, `libpt.so.1`, `libpt.so`, `libpt.a`
+  - `$PREFIX/lib/libpt.so.1.1.0`, `libpt.so.1`, `libpt.so`, `libpt.a`
   - `$PREFIX/include/pt/*.h`, including `pt.hpp`
   - `$PREFIX/lib/pkgconfig/pt.pc`
   - `$PREFIX/share/pt/bindings/python/pt.py`

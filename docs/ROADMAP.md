@@ -1328,21 +1328,20 @@ renderer, theme editor.
   (`8168d9d`), IME surface (`5c47fec`), fd ownership (`da4cdda`), raw consume
   scope (`d96cb1b`, `6000e25`) and ABI pins (`0d4ec5b`).
 - `api/pt.api` reads 448 functions and 785 entries; the README, architecture and
-  bindings counts and the four version macros say 1.1.0. `Makefile` `VERSION`
-  is still 1.0.0 and is updated by the sibling release change.
+  bindings counts, the four version macros and `Makefile` `VERSION` all say
+  1.1.0.
 - The generated reference is derived from `include/pt/*.h` (`df89ba6`) and was
-  regenerated for the 448-function surface (`d552baf`), so `custom.h` can no
-  longer be silently omitted.
-- C++, Python and Java each report 441/448: the same seven functions (owned fd
-  watch, decoration setter and two getters, maximize, primary serial, snapshot
-  `_ex`) are declared and tested in C but not yet wrapped. The allowlist is
-  empty; the Java work started at `b220410` and the final group is in flight.
-- The C suites, the C++/Python/Java test binaries, `make perf-check` (all
-  ceilings), `make check-wayland` (48 checks) and `make check-typing` pass on
-  the merged tree. The combined `make check` is red only on the seven missing
-  wrappers and the generated reference's stale version line; both are sibling
-  changes. The bilingual documentation check reports 9 public guides with no
-  structural drift.
+  regenerated for the 448-function surface (`d552baf`, `39061d3`), so `custom.h`
+  can no longer be silently omitted.
+- C++, Python and Java each report 448/448 with empty allowlists: the final
+  seven wrappers (owned fd watch, decoration setter and two getters, maximize,
+  primary serial, snapshot `_ex`) landed with dispatch checks in `5945267`,
+  `973bb3a` and `ff59fc5`.
+- The combined `make check` passes end to end, as do `make check-bindings`
+  (C++ 517 checks, Python 48 tests, Java 372 checks), `make perf-check` (all
+  ceilings), `make check-wayland` (48 checks) and `make check-typing` on the
+  merged tree. The bilingual documentation check reports 9 public guides with
+  no structural drift.
 - No fake-compositor wire-replay facility exists. Decoration, text-input,
   primary-selection and popup orders are covered by headless state tests plus
   live niri runs; the wire-level replay remains open.
@@ -1354,28 +1353,23 @@ renderer, theme editor.
 
 P0 — a 1.1.0 tag is impossible without these:
 
-1. **Version and release surface — delivered; `Makefile` line in flight.**
-   `include/pt/base.h` is 1.1.0 (`b8a21c4`), README/architecture/bindings and
-   this milestone carry the same version; the 1.1.0 release record is in
-   [release.md](release.md). Bump `Makefile` VERSION and the
-   `include/pt/base.h` macros to 1.1.0; sync the README status line, reference
-   header, architecture/bindings counts; add the 1.1.0 release record and this
-   milestone's completion evidence. SONAME stays `libpt.so.1`.
+1. **Version and release surface — delivered (`b8a21c4`, `4e4f26f`, `f2633cf`).**
+   `include/pt/base.h` and `Makefile` `VERSION` are 1.1.0; README, reference
+   header, architecture/bindings counts and this milestone carry the same
+   version; the 1.1.0 release record is in [release.md](release.md). SONAME
+   stays `libpt.so.1`.
 2. **Generator and reference — delivered (`df89ba6`, `d552baf`).**
    The generator now enumerates the
    public headers (or a derived manifest) so a missing module fails `--check`;
    regenerate `docs/api-reference.md` and `api/pt.api` with `make api-update`;
    both now cover 448 functions and the reference names every baseline function.
    Do not hand-edit the reference.
-3. **Binding parity — partly delivered; last seven wrappers in flight.**
-   Java gained 29 wrappers with `PtTest` checks in `b220410`; the same seven
-   functions are now missing from C++, Python and Java (441/448 each) and are
-   being added together, with `PtTest`, C++ and Python dispatch checks. The C++
-   methods and Python names in [bindings.md](bindings.md) are the intended
-   convention and must be confirmed against the wrapper change. If any function
-   is genuinely C-only, document the reason and a target-version deadline in
-   `api-policy.md` per standards section 3 — a silent allowlist is not
-   acceptable.
+3. **Binding parity — delivered (`b220410`, `5945267`, `973bb3a`, `ff59fc5`).**
+   Java gained 29 wrappers in `b220410`; the final seven functions were then
+   wrapped in all three languages with `PtTest`, C++ and Python dispatch
+   checks. All three report 448/448 with empty allowlists. The C++ methods and
+   Python names in [bindings.md](bindings.md) were confirmed against the
+   landed wrappers. No function is C-only; the allowlist stays empty.
 4. **Decoration semantics — delivered (`7b69bda`); wire replay open.**
    Default to explicit `CLIENT_SIDE`; add
    `pt_decoration_mode {auto, client, server}` and
@@ -1448,48 +1442,53 @@ P1 — required before the tag, may land alongside P0:
     sync every changed public guide into `README.zh-CN.md` and `docs/zh-CN/*`
     (including the Decoration policy section) and pass
     `tools/check-bilingual-docs.py`.
-13. **Examples — delivered (`9bef87b`, `e8fff55`, `2456223`).**
-    A C custom-paint/terminal-like example and a primary selection example, plus
-    C++ and Python equivalents. The Java example waits for its wrappers, as the
-    item allowed.
+13. **Examples — delivered (`9bef87b`, `e8fff55`, `2456223`, `c9c2318`).**
+    A C custom-paint/terminal-like example, a primary selection example and an
+    fd-watch example, plus C++/Python equivalents and the Java trio
+    (`CustomPaint`, `PrimarySelection`, `FdWatch`), all smoke-run under a
+    nested niri.
 14. **Binding tests — delivered where headless input allows (`e61391b`,
     `ce06814`, `b220410`).** Python and C++ have dispatch-level extension tests
     and Java has `PtTest` coverage for the landed wrappers. Raw callback
     dispatch still needs a real seat, so those assertions stay a live-suite
     item; registration and callback-free paths are covered headless.
-15. **Commit hygiene and full gate — pending final gate run.**
-    Split future work by theme; land baseline,
-    reference and docs with their code; rerun `tools/ci.sh` (sanitizers,
-    install-check, tarball) and `tools/release-check.sh --full` to zero failures;
-    record the new performance baseline after the canvas optimisation.
+15. **Commit hygiene and full gate — delivered.**
+    Work landed split by theme with baseline, reference and docs alongside
+    their code. `tools/ci.sh` passes end to end (werror, sanitizers,
+    install-check, reproducible tarball, live suites) and
+    `tools/release-check.sh --full` passes its automated gates; the two
+    remaining human items are the freeze commit/tag and live-suite sign-off.
+    The release-tree performance medians are recorded in
+    [release.md](release.md).
 
 ### 4. Completion criteria
 
 - `tools/release-check.sh --full` reports zero failures on the 1.1.0 tree:
   version agreement, 448/448 parity with an empty allowlist, generated
   reference covering every baseline function, and the bilingual check green.
-  Status: bilingual and reference are green; version agreement waits for the
-  `Makefile` line and parity waits for the last seven wrappers.
+  Status: delivered; the automated gates pass and only the owner's freeze
+  commit/tag and live-suite sign-off remain as human items.
 - `make check`, `make check-bindings`, `make perf-check`, `make check-wayland`,
   `make check-typing` and `tools/ci.sh` pass, including sanitizers, installed
-  consumers and the reproducible tarball rebuild. Status: the C/binding suites,
-  performance, Wayland and typing pass on the merged tree; the combined
-  `make check` waits for the seven wrappers and the reference regeneration, and
-  the full `ci.sh` run is the pending final gate.
+  consumers and the reproducible tarball rebuild. Status: delivered; the full
+  `ci.sh` run passed on the integration tree.
 - Every protocol path added or changed in 1.1 has a fake-compositor sequence
   test and a live-compositor smoke result recorded against
   [compositor-matrix.md](compositor-matrix.md); known limitations are written
   there, not left implicit. Status: the fake-compositor facility is absent and
   stays open; the live result is the 48-check niri run.
-- The new enums/struct are pinned in `tests/test_abi.c` (delivered); `abidiff`
-  against `1.0.0` still runs as part of the final gate.
+- The new enums/struct are pinned in `tests/test_abi.c` (delivered). The
+  release-time ABI comparison against `1.0.0` was done at symbol level
+  (`nm -D`: 412 → 448, 0 removed, 36 added; SONAME `libpt.so.1` unchanged)
+  because libabigail is not installed on the reference machine; `abidiff`
+  remains the preferred check where available.
 - The decoration, offscreen, primary-selection, paint-callback, IME, fd-watch
   and raw-input contracts are stated in the headers and exercised by tests that
   include failure paths (delivered).
 - The 1.1.0 release record in [release.md](release.md) captures the audit,
   parity, live suites, performance figures and the ABI/behaviour diff summary
-  (drafted; final gate numbers pending); the tag stays uncreated until the gate
-  passes.
+  (delivered, including the full `ci.sh` result); the tag stays uncreated
+  until the owner freezes the release.
 
 ### 5. Risks and open questions
 

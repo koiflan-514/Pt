@@ -341,23 +341,17 @@ fixes regressions only and adds no feature.
 
 ## Current deviations
 
-The 1.1.0 tree closes most of the gaps this page was written around: the
-generated reference derives its module list from `include/pt/*.h`, the baseline
-and reference agree on the 448-function surface, the bilingual pairs are in
-sync, the version is 1.1.0, and the ABI pins cover the new enums and structs.
-The remaining deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md)
-under M18:
+The 1.1.0 tree closes the gaps this page was written around: the generated
+reference derives its module list from `include/pt/*.h`, the baseline and
+reference agree on the 448-function surface, all three bindings report 448/448
+with empty allowlists, the bilingual pairs are in sync, the version is 1.1.0
+everywhere, and the ABI pins cover the new enums and structs. The remaining
+deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under M18:
 
-- **Seven extension wrappers are in flight.** Owned fd watches, the decoration
-  mode getter/setter/get-effective group, maximize, primary serial and the
-  descriptor snapshot are declared and tested in C but not yet wrapped in
-  C++, Python and Java on this branch. `tools/release-check.sh` reports them
-  until the wrapper change lands; the release record keeps the final gate
-  pending for that reason.
 - **No fake-compositor replay facility.** Protocol sequences are covered by
-  headless state tests plus live niri/Mutter/KWin smoke runs. The in-process
-  fake compositor that standards section 6 asks for is not in the tree; M18
-  records it as open rather than silently claiming coverage.
+  headless state tests plus the live niri run. The in-process fake compositor
+  that standards section 6 asks for is not in the tree; M18 records it as open
+  rather than silently claiming coverage.
 - **Two IME items are deferred.** `preedit_hint` visual presentation and
   `show_input_panel`/`hide_input_panel` move to 1.2; the event surface,
   full-state resend and empty-`done` acknowledgement are implemented and
