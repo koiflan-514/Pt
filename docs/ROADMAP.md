@@ -1508,6 +1508,64 @@ P1 — required before the tag, may land alongside P0:
   They are already declared, implemented and C-tested; only the wrappers and
   their dispatch tests remain before the tag.
 
+## M19 - 1.2.0: common-but-missing surface (in progress)
+
+Goal: ship the first post-1.0 horizon wave. 1.2.0 stays append-only within
+`libpt.so.1`; every new function follows [standards.md](standards.md) section 2.
+The engineering process that worked for M18 repeats: parallel C workstreams in
+isolated worktrees, then an integration phase that regenerates the baseline and
+reference, adds the three-language wrappers, examples and bilingual docs, bumps
+the version and runs the full gate before the tag.
+
+### Wave 1 (parallel C workstreams)
+
+1. **App-owned popups** (`m19/popup`): a public `pt_popup` surface on the
+   existing `xdg_popup` backend — create with a parent window and a content
+   widget, show at an anchor rect in parent logical coordinates with
+   flip/slide constrained positioning, reposition, dismiss (outside click, Esc,
+   grab break) with a dismiss callback, headless fallback consistent with the
+   overlay family, keyboard and accessibility semantics. This is the
+   prerequisite for the wave-2 pickers and searchable select. Subsurfaces stay
+   out (2.0).
+2. **Per-run font fallback** (`m19/font-fallback`): HarfBuzz script
+   segmentation plus Fontconfig charset coverage to pick a fallback face per
+   run; an app-level default chain and a per-font override; deterministic
+   metrics and caret offsets through the public API and AT-SPI; tests degrade
+   gracefully when a script's fonts are absent. Prerequisite for readable
+   CJK/Arabic/Devanagari mixing and for RTL (2.0).
+3. **Clipboard media** (`m19/clipboard-media`): `image/png` clipboard read and
+   write with a bounded decode (existing 1.5 s / 16 MiB transfer caps plus an
+   8192x8192 decoded-pixel cap, failure returns NULL), documented
+   premultiplied-ARGB to straight-alpha PNG conversion, and `text/uri-list`
+   clipboard writes (CRLF, percent-encoded `file://`), reusing the drag-source
+   URI-list encoder.
+4. **Column-layout persistence** (`m19/column-persist`): versioned
+   serialize/restore blobs for the row-view column model (widths, order,
+   visibility; table and tree where they share the model); the application
+   stores the blob; unknown versions and corrupt input are rejected, round-trip
+   and boundary tests included.
+
+Workstream rules: header + implementation + C tests + ABI pins land together;
+new test binaries are pre-registered (`test_popup`, `test_font_fallback`,
+`test_clipboard_media`, `test_column_persist`); `src/*.c` is wildcard-built.
+Workstreams do not edit bindings, generated artifacts, the Makefile or public
+guides — the integration phase owns those, as in M18.
+
+### Wave 2 (after wave 1 integrates)
+
+- Date/number/colour pickers and a searchable select built on entry + popup +
+  grid, with full keyboard paths and accessibility assertions.
+- Icon slots (`pt_icon`: PNG, optional SVG, hicolor lookup, per-size/scale
+  cache) and best-effort `xdg-toplevel-icon-v1` where the compositor exposes it.
+- Generated binding stubs from the API manifest.
+
+### Completion criteria
+
+Same gate set as M18 section 4: `make check`, `make check-bindings`,
+`make perf-check`, live suites, `tools/ci.sh`, `tools/release-check.sh --full`,
+bilingual sync, three-language parity with an empty allowlist, ABI pins and an
+append-only diff against `1.1.0`, and a 1.2.0 release record.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
@@ -1515,7 +1573,7 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 [compositor-matrix.md](compositor-matrix.md); the engineering rules are in
 [standards.md](standards.md).
 
-### 1.2 — common but missing
+### 1.2 — common but missing (wave 1 in progress, see M19)
 
 - Application-owned popups via the existing `xdg_popup` backend (content widget,
   anchor, dismiss, reposition). This is the prerequisite for searchable select
