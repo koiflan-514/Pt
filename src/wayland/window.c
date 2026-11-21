@@ -454,18 +454,39 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel, int32_
     wl->pending_height = height;
     bool maximized = false;
     bool fullscreen = false;
+    bool tiled_left = false;
+    bool tiled_right = false;
+    bool tiled_top = false;
+    bool tiled_bottom = false;
     uint32_t *state = states->data;
     for (size_t i = 0; i < states->size / sizeof(uint32_t); ++i) {
-        if (state[i] == XDG_TOPLEVEL_STATE_MAXIMIZED) {
+        switch (state[i]) {
+        case XDG_TOPLEVEL_STATE_MAXIMIZED:
             maximized = true;
-        } else if (state[i] == XDG_TOPLEVEL_STATE_FULLSCREEN) {
+            break;
+        case XDG_TOPLEVEL_STATE_FULLSCREEN:
             fullscreen = true;
+            break;
+        case XDG_TOPLEVEL_STATE_TILED_LEFT:
+            tiled_left = true;
+            break;
+        case XDG_TOPLEVEL_STATE_TILED_RIGHT:
+            tiled_right = true;
+            break;
+        case XDG_TOPLEVEL_STATE_TILED_TOP:
+            tiled_top = true;
+            break;
+        case XDG_TOPLEVEL_STATE_TILED_BOTTOM:
+            tiled_bottom = true;
+            break;
+        default:
+            /* Unknown states must be ignored (xdg-shell v7 contract). */
+            break;
         }
     }
     if (wl->window) {
-        wl->window->maximized = maximized;
-        wl->window->fullscreen = fullscreen;
-        wl->window->needs_draw = true;
+        pt_window_apply_toplevel_state(wl->window, maximized, fullscreen, tiled_left,
+                                       tiled_right, tiled_top, tiled_bottom);
     }
 }
 
@@ -479,17 +500,41 @@ static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
 
 static void toplevel_configure_bounds(void *data, struct xdg_toplevel *toplevel, int32_t width,
                                       int32_t height) {
-    (void)data;
     (void)toplevel;
-    (void)width;
-    (void)height;
+    pt_wayland_window *wl = data;
+    if (wl->window) {
+        pt_window_apply_configure_bounds(wl->window, width, height);
+    }
 }
 
 static void toplevel_wm_capabilities(void *data, struct xdg_toplevel *toplevel,
                                      struct wl_array *capabilities) {
-    (void)data;
     (void)toplevel;
-    (void)capabilities;
+    pt_wayland_window *wl = data;
+    if (!wl->window) {
+        return;
+    }
+    bool maximize = false;
+    bool minimize = false;
+    bool fullscreen = false;
+    uint32_t *capability = capabilities->data;
+    for (size_t i = 0; i < capabilities->size / sizeof(uint32_t); ++i) {
+        switch (capability[i]) {
+        case XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE:
+            maximize = true;
+            break;
+        case XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE:
+            minimize = true;
+            break;
+        case XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN:
+            fullscreen = true;
+            break;
+        default:
+            /* WINDOW_MENU and future capabilities are not consumed yet. */
+            break;
+        }
+    }
+    pt_window_apply_wm_capabilities(wl->window, maximize, minimize, fullscreen);
 }
 
 static const struct xdg_toplevel_listener toplevel_listener = {
@@ -526,14 +571,12 @@ static void decoration_configure(void *data,
     if (!wl->window) {
         return;
     }
-    bool client_side = mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
-    if (wl->window->csd == client_side) {
-        return;
-    }
-    pt_window_set_csd_enabled(wl->window, client_side);
-    if (!client_side) {
-        pt_platform_window_set_min_size(wl->window);
-    }
+    /* configure is authoritative: a client-side request may be answered with
+     * server-side (Sway tiling, Q-DEC-001) and vice versa. */
+    pt_decoration_mode effective = mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                                       ? pt_decoration_server
+                                       : pt_decoration_client;
+    pt_window_apply_decoration_mode(wl->window, effective);
     pt_wl_window_schedule_frame(wl->window);
 }
 
@@ -638,13 +681,15 @@ bool pt_platform_window_init(pt_window *window) {
         wl->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
             platform->decoration_manager, wl->toplevel);
         zxdg_toplevel_decoration_v1_add_listener(wl->decoration, &decoration_listener, wl);
-        /* Ask the compositor for server-side decorations first. Desktops such
-         * as niri then draw native shadows, resize borders and title bars, and
-         * the window follows the platform style. The configure listener falls
-         * back to Pt's client-side decorations when the compositor answers
-         * with CSD (or no decoration manager exists at all). */
+        /* Explicit client-side preference (Q-DEC-002: niri's server-side mode
+         * draws a border/focus ring, not a title bar). The configure listener
+         * obeys a forced server-side answer such as Sway's tiled windows. */
         zxdg_toplevel_decoration_v1_set_mode(
-            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    } else {
+        /* No decoration global (Mutter, Weston): the client must draw CSD. */
+        window->effective_decoration = pt_decoration_client;
+        pt_window_set_csd_enabled(window, true);
     }
     if (platform->fractional_scale_manager) {
         wl->fractional_scale =
@@ -781,21 +826,35 @@ void pt_platform_window_set_size_hint(pt_window *window) {
 
 void pt_platform_window_set_decorated(pt_window *window) {
     pt_wayland_window *wl = pt_wl_window_for(window);
-    /* Decoration mode follows the initial request; the configure listener
-     * owns any switch between server-side and client-side. */
-    if (wl && wl->decoration) {
-        zxdg_toplevel_decoration_v1_set_mode(
-            wl->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
-    }
-    if (!wl && window->app && window->app->platform) {
+    /* Header ownership only: never send a decoration mode from here. */
+    if (wl && wl->window) {
+        pt_window_set_csd_enabled(window, window->effective_decoration == pt_decoration_client);
+    } else if (window->app && window->app->platform) {
         pt_platform *platform = (pt_platform *)window->app->platform;
         if (platform->headless) {
-            window->csd = window->decorated;
-            window->header_height = window->decorated ? pt_header_height : 0.0f;
-            pt_window_invalidate_layout(window, NULL);
-            window->needs_draw = true;
+            window->csd = window->effective_decoration == pt_decoration_client;
         }
     }
+}
+
+void pt_platform_window_set_decoration_mode(pt_window *window) {
+    pt_wayland_window *wl = pt_wl_window_for(window);
+    pt_decoration_mode requested = window->decoration_mode;
+    if (wl && wl->decoration) {
+        /* auto and client both prefer client-side; only an explicit server
+         * request asks for server-side. set_mode is called only because the
+         * requested mode changed (checked by pt_window_set_decoration_mode). */
+        uint32_t mode = requested == pt_decoration_server
+                            ? ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                            : ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+        zxdg_toplevel_decoration_v1_set_mode(wl->decoration, mode);
+        return;
+    }
+    /* Headless or no decoration global: there is no configure event to wait
+     * for, so the effective mode follows the request with a CSD fallback. */
+    pt_window_apply_decoration_mode(
+        window, requested == pt_decoration_server ? pt_decoration_server
+                                                  : pt_decoration_client);
 }
 
 void pt_platform_window_schedule_draw(pt_window *window) {

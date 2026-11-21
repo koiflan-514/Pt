@@ -142,7 +142,10 @@ static void unlink_window(pt_window *window) {
 }
 
 static void update_window_header(pt_window *window) {
-    window->header_height = (window->csd && window->decorated) ? pt_header_height : 0.0f;
+    /* Fullscreen always hides the header; the effective decoration mode decides
+     * whether Pt is allowed to own one at all (standards section 8). */
+    window->header_height =
+        (window->csd && window->decorated && !window->fullscreen) ? pt_header_height : 0.0f;
     pt_window_invalidate_layout(window, NULL);
     window->needs_draw = true;
     pt_window_damage_all(window);
@@ -161,7 +164,12 @@ pt_window *pt_window_alloc(pt_app *app, const char *title, int width, int height
     window->render_scale = 1.0f;
     window->open = true;
     window->decorated = true;
+    window->decoration_mode = pt_decoration_client;
+    window->effective_decoration = pt_decoration_client;
     window->csd = true;
+    window->maximize_enabled = true;
+    window->minimize_enabled = true;
+    window->fullscreen_enabled = true;
     window->resizable = true;
     pt_window_invalidate_layout(window, NULL);
     window->needs_draw = true;
@@ -331,10 +339,22 @@ void pt_window_set_size(pt_window *window, int width, int height) {
         return;
     }
     if (width > 0) {
+        if (window->bounds_max_width > 0 && width > window->bounds_max_width) {
+            width = window->bounds_max_width;
+        }
+        if (width < window->min_width) {
+            width = window->min_width;
+        }
         window->width = width;
         window->requested_width = width;
     }
     if (height > 0) {
+        if (window->bounds_max_height > 0 && height > window->bounds_max_height) {
+            height = window->bounds_max_height;
+        }
+        if (height < window->min_height) {
+            height = window->min_height;
+        }
         window->height = height;
         window->requested_height = height;
     }
@@ -382,9 +402,48 @@ void pt_window_set_decorated(pt_window *window, bool decorated) {
         return;
     }
     window->decorated = decorated;
+    /* Header ownership only. This deliberately does not request a decoration
+     * mode: false means "Pt draws nothing" on every compositor. */
     pt_platform_window_set_decorated(window);
     update_window_header(window);
     pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_set_decoration_mode(pt_window *window, pt_decoration_mode mode) {
+    if (!window) {
+        return;
+    }
+    if (mode != pt_decoration_auto && mode != pt_decoration_client &&
+        mode != pt_decoration_server) {
+        return;
+    }
+    if (window->decoration_mode == mode) {
+        return;
+    }
+    window->decoration_mode = mode;
+    pt_platform_window_set_decoration_mode(window);
+}
+
+pt_decoration_mode pt_window_get_decoration_mode(const pt_window *window) {
+    return window ? window->decoration_mode : pt_decoration_auto;
+}
+
+pt_decoration_mode pt_window_get_effective_decoration_mode(const pt_window *window) {
+    if (!window) {
+        return pt_decoration_auto;
+    }
+    return window->effective_decoration;
+}
+
+bool pt_window_maximize(pt_window *window) {
+    if (!window || !window->resizable || !window->maximize_enabled) {
+        return false;
+    }
+    if (!window->maximized) {
+        window->maximized = true;
+        pt_platform_window_toggle_maximize(window);
+    }
+    return true;
 }
 
 void pt_window_set_csd_enabled(pt_window *window, bool enabled) {
@@ -393,6 +452,68 @@ void pt_window_set_csd_enabled(pt_window *window, bool enabled) {
     }
     window->csd = enabled;
     update_window_header(window);
+    pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_apply_decoration_mode(pt_window *window, pt_decoration_mode mode) {
+    if (!window) {
+        return;
+    }
+    if (mode != pt_decoration_client && mode != pt_decoration_server) {
+        mode = pt_decoration_client;
+    }
+    window->effective_decoration = mode;
+    bool client_side = mode == pt_decoration_client;
+    if (window->csd == client_side) {
+        return;
+    }
+    pt_window_set_csd_enabled(window, client_side);
+    if (!client_side) {
+        pt_platform_window_set_min_size(window);
+    }
+}
+
+void pt_window_apply_toplevel_state(pt_window *window, bool maximized, bool fullscreen,
+                                    bool tiled_left, bool tiled_right, bool tiled_top,
+                                    bool tiled_bottom) {
+    if (!window) {
+        return;
+    }
+    bool header_changed = window->fullscreen != fullscreen;
+    window->maximized = maximized;
+    window->fullscreen = fullscreen;
+    window->tiled_left = tiled_left;
+    window->tiled_right = tiled_right;
+    window->tiled_top = tiled_top;
+    window->tiled_bottom = tiled_bottom;
+    if (header_changed) {
+        update_window_header(window);
+    }
+    /* Pt paints a square, shadowless window surface, so "drop radius/shadow when
+     * tiled" costs nothing here; tiling additionally disables edge-resize
+     * affordances because the compositor owns the tile geometry. */
+    window->needs_draw = true;
+    pt_platform_window_schedule_draw(window);
+}
+
+void pt_window_apply_configure_bounds(pt_window *window, int width, int height) {
+    if (!window) {
+        return;
+    }
+    window->bounds_max_width = width > 0 ? width : 0;
+    window->bounds_max_height = height > 0 ? height : 0;
+}
+
+void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
+                                     bool fullscreen) {
+    if (!window) {
+        return;
+    }
+    window->wm_capabilities_known = true;
+    window->maximize_enabled = maximize;
+    window->minimize_enabled = minimize;
+    window->fullscreen_enabled = fullscreen;
+    window->needs_draw = true;
     pt_platform_window_schedule_draw(window);
 }
 
@@ -544,6 +665,9 @@ void pt_window_set_maximized(pt_window *window, bool maximized) {
     if (!window || window->maximized == maximized) {
         return;
     }
+    if (maximized && (!window->resizable || !window->maximize_enabled)) {
+        return;
+    }
     window->maximized = maximized;
     pt_platform_window_toggle_maximize(window);
 }
@@ -680,14 +804,19 @@ static pt_csd_part csd_button_at(const pt_window *window, float x, float y) {
         return pt_csd_part_close;
     }
     pt_rect maximize = csd_maximize_rect(window);
-    if (pt_rect_contains(maximize, x, y)) {
+    if (window->maximize_enabled && pt_rect_contains(maximize, x, y)) {
         return pt_csd_part_maximize;
     }
     pt_rect minimize = csd_minimize_rect(window);
-    if (pt_rect_contains(minimize, x, y)) {
+    if (window->minimize_enabled && pt_rect_contains(minimize, x, y)) {
         return pt_csd_part_minimize;
     }
     return pt_csd_part_none;
+}
+
+static bool window_is_tiled(const pt_window *window) {
+    return window->tiled_left || window->tiled_right || window->tiled_top ||
+           window->tiled_bottom;
 }
 
 static pt_csd_part csd_part_at(const pt_window *window, float x, float y) {
@@ -698,7 +827,8 @@ static pt_csd_part csd_part_at(const pt_window *window, float x, float y) {
      * with header_height == 0) still need their edges to be resizable; only
      * the titlebar and buttons require an actual header. */
     float margin = pt_resize_margin;
-    if (window->resizable && !window->maximized && !window->fullscreen) {
+    if (window->resizable && !window->maximized && !window->fullscreen &&
+        !window_is_tiled(window)) {
         bool left = x < margin;
         bool right = x >= (float)window->width - margin;
         bool top = y < margin;
@@ -781,10 +911,10 @@ static pt_cursor csd_cursor(pt_csd_part part) {
 }
 
 static void paint_csd_button(pt_canvas *canvas, pt_window *window, pt_csd_part part,
-                             pt_rect rect, bool hovered, bool pressed) {
+                             pt_rect rect, bool hovered, bool pressed, bool enabled) {
     pt_color background = pt_color_transparent;
     bool close = part == pt_csd_part_close;
-    if (hovered || pressed) {
+    if (enabled && (hovered || pressed)) {
         background = close ? window_theme_color(window, pt_theme_danger, 0xE5484DFFu)
                            : window_theme_color(window, pt_theme_surface_hover,
                                                 0x232C3AFFu);
@@ -796,9 +926,12 @@ static void paint_csd_button(pt_canvas *canvas, pt_window *window, pt_csd_part p
         pt_canvas_fill_rounded_rect(canvas, rect.x + 2.0f, rect.y + 3.0f, rect.w - 4.0f,
                                     rect.h - 6.0f, 7.0f, background);
     }
-    pt_color color = close && (hovered || pressed)
+    pt_color color = close && enabled && (hovered || pressed)
                          ? window_theme_color(window, pt_theme_accent_text, 0xFFFFFFFFu)
                          : window_theme_color(window, pt_theme_text_muted, 0x8B98A9FFu);
+    if (!enabled) {
+        color = pt_color_alpha(color, 90);
+    }
     float cx = rect.x + rect.w * 0.5f;
     float cy = rect.y + rect.h * 0.5f;
     switch (part) {
@@ -841,13 +974,13 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
     pt_rect close = csd_close_rect(window);
     paint_csd_button(canvas, window, pt_csd_part_minimize, minimize,
                      window->hovered_csd == pt_csd_part_minimize,
-                     window->active_csd == pt_csd_part_minimize);
+                     window->active_csd == pt_csd_part_minimize, window->minimize_enabled);
     paint_csd_button(canvas, window, pt_csd_part_maximize, maximize,
                      window->hovered_csd == pt_csd_part_maximize,
-                     window->active_csd == pt_csd_part_maximize);
+                     window->active_csd == pt_csd_part_maximize, window->maximize_enabled);
     paint_csd_button(canvas, window, pt_csd_part_close, close,
                      window->hovered_csd == pt_csd_part_close,
-                     window->active_csd == pt_csd_part_close);
+                     window->active_csd == pt_csd_part_close, true);
 
     const char *title = window->title ? window->title : "";
     if (*title) {
@@ -1291,6 +1424,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
         }
         if (part == pt_csd_part_minimize || part == pt_csd_part_maximize ||
             part == pt_csd_part_close) {
+            if (part == pt_csd_part_maximize && !window->maximize_enabled) {
+                return;
+            }
             window->active_csd = part;
             window->needs_draw = true;
             pt_window_damage_rect(window, (pt_rect){0.0f, 0.0f, (float)window->width,

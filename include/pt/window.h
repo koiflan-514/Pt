@@ -32,6 +32,9 @@
  * the window's last pointer serial, or the seat's most recent serial when no
  * pointer event has landed on the window. Menus, tooltips and select-only
  * combobox popups inherit this contract (see overlay.h).
+ * Decoration. set_mode is a preference; the compositor's configure is
+ * authoritative. Requested and effective modes are tracked separately.
+ * pt_window_set_decorated controls only whether Pt paints its header.
  */
 
 #ifdef __cplusplus
@@ -60,9 +63,35 @@ pt_api void pt_window_set_size(pt_window *window, int width, int height);
 pt_api void pt_window_set_min_size(pt_window *window, int width, int height);
 pt_api void pt_window_set_resizable(pt_window *window, bool resizable);
 
-/* A decorated window gets a Pt-drawn title bar when the compositor permits
- * client-side decorations. Defaults to true. */
+/* Decoration negotiation. set_mode is a preference and the compositor's
+ * configure is authoritative: a client request may be answered with the other
+ * mode (Sway tiles force server-side, Q-DEC-001). The default is an explicit
+ * client-side request; Pt draws the header itself when it is also decorated.
+ * pt_decoration_auto means "prefer client-side, accept a forced server-side",
+ * and pt_decoration_server asks the compositor to decorate. Since 1.1. */
+typedef enum pt_decoration_mode {
+    pt_decoration_auto = 0,
+    pt_decoration_client = 1,
+    pt_decoration_server = 2
+} pt_decoration_mode;
+
+/* A decorated window lets Pt draw its own header (default true). This never
+ * requests server-side decoration: false means Pt draws nothing and no
+ * server-side mode is asked for. Requesting compositor decoration is a
+ * separate pt_window_set_decoration_mode(pt_decoration_server) choice. */
 pt_api void pt_window_set_decorated(pt_window *window, bool decorated);
+
+/* Requests a decoration preference. Sends a preference only when the request
+ * changes; the effective mode always follows the compositor's configure. The
+ * getters return the requested and effective modes. Since 1.1. */
+pt_api void pt_window_set_decoration_mode(pt_window *window, pt_decoration_mode mode);
+pt_api pt_decoration_mode pt_window_get_decoration_mode(const pt_window *window);
+pt_api pt_decoration_mode pt_window_get_effective_decoration_mode(const pt_window *window);
+
+/* Requests maximize. Returns false when the window is not resizable, the
+ * compositor did not advertise the maximize capability, or the window is NULL.
+ * The header's maximize button is disabled in the same case. Since 1.1. */
+pt_api bool pt_window_maximize(pt_window *window);
 pt_api void pt_window_request_redraw(pt_window *window);
 pt_api void pt_window_focus(pt_window *window, pt_widget *widget);
 

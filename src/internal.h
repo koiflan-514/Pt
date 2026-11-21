@@ -1046,12 +1046,24 @@ struct pt_window {
     bool needs_layout;
     bool needs_draw;
     bool decorated;
+    pt_decoration_mode decoration_mode;
+    pt_decoration_mode effective_decoration;
     bool csd;
     bool resizable;
     bool keyboard_focused;
     uint32_t modifiers;
     bool maximized;
     bool fullscreen;
+    bool tiled_left;
+    bool tiled_right;
+    bool tiled_top;
+    bool tiled_bottom;
+    bool wm_capabilities_known;
+    bool maximize_enabled;
+    bool minimize_enabled;
+    bool fullscreen_enabled;
+    int bounds_max_width;
+    int bounds_max_height;
     bool animating;
     bool redraw_scheduled;
     bool pointer_inside;
@@ -1315,6 +1327,15 @@ void pt_window_tick(pt_window *window);
 void pt_window_set_fullscreen(pt_window *window, bool fullscreen);
 void pt_window_set_maximized(pt_window *window, bool maximized);
 void pt_window_set_csd_enabled(pt_window *window, bool enabled);
+/* Applies a decoration mode from the compositor's configure. Never changes the
+ * requested mode; the effective mode and header follow the answer. */
+void pt_window_apply_decoration_mode(pt_window *window, pt_decoration_mode mode);
+void pt_window_apply_toplevel_state(pt_window *window, bool maximized, bool fullscreen,
+                                    bool tiled_left, bool tiled_right, bool tiled_top,
+                                    bool tiled_bottom);
+void pt_window_apply_configure_bounds(pt_window *window, int width, int height);
+void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
+                                     bool fullscreen);
 void pt_window_update_caret_timer(pt_window *window);
 bool pt_window_has_editable_focus(const pt_window *window);
 bool pt_window_wants_ime(const pt_window *window);
@@ -1383,6 +1404,7 @@ void pt_platform_window_set_title(pt_window *window);
 void pt_platform_window_set_min_size(pt_window *window);
 void pt_platform_window_set_resizable(pt_window *window);
 void pt_platform_window_set_decorated(pt_window *window);
+void pt_platform_window_set_decoration_mode(pt_window *window);
 void pt_platform_window_schedule_draw(pt_window *window);
 void pt_platform_window_begin_move(pt_window *window, uint32_t serial);
 void pt_platform_window_begin_resize(pt_window *window, uint32_t serial, uint32_t edges);

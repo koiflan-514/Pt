@@ -412,6 +412,94 @@ static void test_raw_key_dispatch(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Decoration negotiation and window-state consumption (standards section 8). */
+static void test_decoration(pt_app *app) {
+    pt_window *window = pt_window_create(app, "decor", 400, 300);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(400, 300, 1.0f);
+    pt_check(pt_window_paint(window, canvas));
+
+    /* Explicit client-side by default; Pt draws the header. */
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_client);
+    pt_check(pt_window_get_effective_decoration_mode(window) == pt_decoration_client);
+    pt_check_near(window->header_height, pt_header_height, 0.01);
+
+    /* set_decorated only governs the Pt-drawn header and never requests SSD. */
+    pt_window_set_decorated(window, false);
+    pt_check_near(window->header_height, 0.0, 0.01);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_client);
+    pt_window_set_decorated(window, true);
+    pt_check_near(window->header_height, pt_header_height, 0.01);
+
+    /* A server request takes effect immediately headlessly. */
+    pt_window_set_decoration_mode(window, pt_decoration_server);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_server);
+    pt_check(pt_window_get_effective_decoration_mode(window) == pt_decoration_server);
+    pt_check(!window->csd);
+    pt_check_near(window->header_height, 0.0, 0.01);
+    pt_window_set_decorated(window, false);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_server);
+    pt_window_set_decorated(window, true);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_server);
+    pt_check_near(window->header_height, 0.0, 0.01);
+
+    /* Back to client-side, then Q-DEC-001: requested CSD, configure says SSD. */
+    pt_window_set_decoration_mode(window, pt_decoration_client);
+    pt_check_near(window->header_height, pt_header_height, 0.01);
+    pt_window_apply_decoration_mode(window, pt_decoration_server);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_client);
+    pt_check(pt_window_get_effective_decoration_mode(window) == pt_decoration_server);
+    pt_check(!window->csd);
+    pt_check_near(window->header_height, 0.0, 0.01);
+    pt_window_apply_decoration_mode(window, pt_decoration_client);
+    pt_check_near(window->header_height, pt_header_height, 0.01);
+
+    /* Fullscreen hides the header independent of the decoration mode. */
+    pt_window_apply_toplevel_state(window, false, true, false, false, false, false);
+    pt_check_near(window->header_height, 0.0, 0.01);
+    pt_window_apply_toplevel_state(window, false, false, false, false, false, false);
+    pt_check_near(window->header_height, pt_header_height, 0.01);
+
+    /* Tiling disables edge-resize affordances (the compositor owns geometry). */
+    pt_window_apply_toplevel_state(window, false, false, true, false, false, false);
+    pt_window_input_pointer_enter(window, 1.0f, 120.0f);
+    pt_check(window->hovered_csd == pt_csd_part_none);
+    pt_window_apply_toplevel_state(window, false, false, false, false, false, false);
+    pt_window_input_pointer_enter(window, 1.0f, 120.0f);
+    pt_check(window->hovered_csd == pt_csd_part_edge_left);
+    pt_window_input_pointer_leave(window);
+
+    /* configure_bounds clamps size requests; zero clears the bound. */
+    pt_window_apply_configure_bounds(window, 300, 200);
+    pt_window_set_size(window, 500, 400);
+    pt_check(pt_window_get_width(window) == 300);
+    pt_check(pt_window_get_height(window) == 200);
+    pt_window_apply_configure_bounds(window, 0, 0);
+    pt_window_set_size(window, 500, 400);
+    pt_check(pt_window_get_width(window) == 500);
+    pt_check(pt_window_get_height(window) == 400);
+
+    /* Missing maximize capability disables the request and the button. */
+    pt_window_apply_wm_capabilities(window, false, false, false);
+    pt_check(!window->maximize_enabled);
+    pt_check(!pt_window_maximize(window));
+    float max_x = (float)pt_window_get_width(window) - 8.0f - 36.0f - 18.0f;
+    pt_window_input_pointer_enter(window, max_x, window->header_height * 0.5f);
+    pt_check(window->hovered_csd != pt_csd_part_maximize);
+    pt_window_input_pointer_leave(window);
+    pt_window_apply_wm_capabilities(window, true, true, true);
+    pt_check(pt_window_maximize(window));
+    pt_check(window->maximized);
+    pt_window_apply_toplevel_state(window, false, false, false, false, false, false);
+
+    /* Invalid enum values are ignored. */
+    pt_window_set_decoration_mode(window, (pt_decoration_mode)99);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_client);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.window");
@@ -427,6 +515,7 @@ int main(void) {
     test_button_specificity(app);
     test_motion_advisory(app);
     test_raw_key_dispatch(app);
+    test_decoration(app);
 
     /* Primary selection (middle-click paste) API. Headless runs keep an
      * in-process buffer, but publication still requires a triggering event

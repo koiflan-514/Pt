@@ -59,6 +59,10 @@ _Static_assert(pt_pointer_phase_up == 4, "pointer up must stay 4");
 _Static_assert(pt_pointer_phase_axis == 5, "pointer axis must stay 5");
 _Static_assert(pt_pointer_phase_cancel == 6, "pointer cancel must stay 6");
 
+_Static_assert(pt_decoration_auto == 0, "decoration auto must stay 0");
+_Static_assert(pt_decoration_client == 1, "decoration client must stay 1");
+_Static_assert(pt_decoration_server == 2, "decoration server must stay 2");
+
 /* fd-watch event bits: append-only, one bit per readiness class. */
 _Static_assert(pt_fd_event_read == (1u << 0), "fd read bit");
 _Static_assert(pt_fd_event_write == (1u << 1), "fd write bit");
