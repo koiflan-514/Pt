@@ -56,6 +56,21 @@ static void overlay_push_garbage(pt_window *window, pt_widget *panel,
     window->overlay_garbage = item;
 }
 
+/* Deferred panel free for owner-built trees that outlive their overlay record.
+ * A popup destroy may be called from a widget callback, so the tree goes to the
+ * same garbage list menus and dialogs use. */
+void pt_window_overlay_defer_panel_free(pt_window *window, pt_widget *panel) {
+    if (!panel) {
+        return;
+    }
+    panel->window = NULL;
+    if (!window) {
+        pt_widget_free_tree(panel);
+        return;
+    }
+    overlay_push_garbage(window, panel, NULL);
+}
+
 void pt_window_overlays_collect(pt_window *window) {
     if (!window) {
         return;
@@ -119,6 +134,10 @@ static pt_overlay *overlay_top_interactive(const pt_window *window) {
     if (menu) {
         return menu;
     }
+    pt_overlay *popup = overlay_latest(window, pt_overlay_kind_popup);
+    if (popup) {
+        return popup;
+    }
     return overlay_latest(window, pt_overlay_kind_combobox);
 }
 
@@ -132,6 +151,7 @@ static bool overlay_use_native(const pt_window *window, const pt_overlay *overla
     switch (overlay->kind) {
     case pt_overlay_kind_menu:
     case pt_overlay_kind_tooltip:
+    case pt_overlay_kind_popup:
         break;
     case pt_overlay_kind_combobox: {
         pt_widget *owner = overlay->owner;
@@ -203,6 +223,12 @@ static void overlay_detach_panel(pt_overlay *overlay) {
     pt_window *window = overlay->window;
     pt_widget *panel = overlay->panel;
     panel->window = NULL;
+    if (overlay->kind == pt_overlay_kind_popup) {
+        /* An application popup retains its panel and content tree across
+         * dismiss, so it can be shown again. The popup owns the free. */
+        overlay->actions = NULL;
+        return;
+    }
     overlay->panel = NULL;
     overlay_push_garbage(window, panel, overlay->actions);
     overlay->actions = NULL;
@@ -257,6 +283,9 @@ void pt_window_overlay_native_done(pt_overlay *overlay) {
         if (overlay->owner) {
             pt_combobox_close_popup(overlay->owner);
         }
+        break;
+    case pt_overlay_kind_popup:
+        pt_popup_dismiss((pt_popup *)overlay);
         break;
     default:
         break;
@@ -377,6 +406,10 @@ static void overlay_focus_first(pt_overlay *overlay) {
     if (first) {
         pt_widget_focus(first);
     }
+}
+
+void pt_window_overlay_focus_first(pt_overlay *overlay) {
+    overlay_focus_first(overlay);
 }
 
 pt_widget *pt_window_overlays_focus_scope(const pt_window *window) {
@@ -1180,6 +1213,9 @@ void pt_window_overlays_layout(pt_window *window, const pt_layout_ctx *ctx) {
                 pt_combobox_popup_layout(overlay->owner, overlay, ctx);
             }
             break;
+        case pt_overlay_kind_popup:
+            pt_popup_overlay_layout((pt_popup *)overlay, overlay, ctx);
+            break;
         }
         float panel_x = overlay->native ? 0.0f : overlay->rect.x;
         float panel_y = overlay->native ? 0.0f : overlay->rect.y;
@@ -1266,6 +1302,7 @@ void pt_window_overlays_paint(pt_window *window, pt_canvas *canvas) {
     overlay_paint_group(window, canvas, &ctx, pt_overlay_kind_toast);
     overlay_paint_group(window, canvas, &ctx, pt_overlay_kind_menu);
     overlay_paint_group(window, canvas, &ctx, pt_overlay_kind_combobox);
+    overlay_paint_group(window, canvas, &ctx, pt_overlay_kind_popup);
     overlay_paint_group(window, canvas, &ctx, pt_overlay_kind_dialog);
     overlay_paint_group(window, canvas, &ctx, pt_overlay_kind_tooltip);
     pt_platform_present_popups(window, &ctx);
@@ -1277,11 +1314,13 @@ pt_widget *pt_window_overlay_hit_test(pt_window *window, float x, float y) {
     if (!window) {
         return NULL;
     }
-    for (int priority = 3; priority >= 1; --priority) {
-        pt_overlay_kind kind = priority == 3
+    for (int priority = 4; priority >= 1; --priority) {
+        pt_overlay_kind kind = priority == 4
                                    ? pt_overlay_kind_dialog
-                                   : (priority == 2 ? pt_overlay_kind_menu
-                                                    : pt_overlay_kind_combobox);
+                                   : (priority == 3
+                                          ? pt_overlay_kind_menu
+                                          : (priority == 2 ? pt_overlay_kind_popup
+                                                           : pt_overlay_kind_combobox));
         for (pt_overlay *overlay = window->overlays; overlay; overlay = overlay->next) {
             if (!overlay->open || overlay->kind != kind || !overlay->panel) {
                 continue;
@@ -1375,6 +1414,34 @@ bool pt_window_overlays_pointer(pt_window *window, uint32_t button, bool pressed
         pt_window_overlays_collect(window);
         return true;
     }
+    pt_overlay *app_popup = overlay_latest(window, pt_overlay_kind_popup);
+    if (app_popup) {
+        if (pressed) {
+            pt_widget *hit = overlay_hit_test_at(app_popup, x, y);
+            if (hit) {
+                pt_widget *focusable = pt_widget_focusable_ancestor(hit);
+                if (focusable) {
+                    pt_widget_focus(focusable);
+                }
+                float local_x = x;
+                float local_y = y;
+                overlay_local_point(app_popup, &local_x, &local_y);
+                window->active_widget = hit;
+                pt_widget_pointer_down(hit, local_x, local_y);
+            } else if (!app_popup->native) {
+                /* A native popup grab turns an outside press into popup_done;
+                 * the in-window fallback sees the press directly. Either way
+                 * the dismiss callback runs once through the shared path. */
+                pt_popup_dismiss((pt_popup *)app_popup);
+            }
+            window->needs_draw = true;
+        } else {
+            overlay_release_active(window, app_popup, x, y);
+            window->active_widget = NULL;
+        }
+        pt_window_overlays_collect(window);
+        return true;
+    }
     pt_overlay *combo = overlay_latest(window, pt_overlay_kind_combobox);
     if (combo) {
         if (pressed) {
@@ -1462,6 +1529,22 @@ bool pt_window_overlays_key(pt_window *window, uint32_t keysym, uint32_t modifie
     pt_overlay *dialog = overlay_latest(window, pt_overlay_kind_dialog);
     pt_overlay *menu = overlay_latest(window, pt_overlay_kind_menu);
     if (!dialog && !menu) {
+        pt_overlay *app_popup = overlay_latest(window, pt_overlay_kind_popup);
+        if (app_popup) {
+            bool shift = (modifiers & (uint32_t)pt_key_modifier_shift) != 0;
+            if (keysym == XKB_KEY_Escape) {
+                pt_popup_dismiss((pt_popup *)app_popup);
+            } else if (keysym == XKB_KEY_Tab) {
+                pt_window_overlays_focus_next(window, shift);
+            } else {
+                /* The content widget owns ordinary typing and navigation. */
+                return false;
+            }
+            window->needs_draw = true;
+            pt_platform_window_schedule_draw(window);
+            pt_window_overlays_collect(window);
+            return true;
+        }
         pt_overlay *combo = overlay_latest(window, pt_overlay_kind_combobox);
         if (!combo || !combo->owner) {
             return false;
@@ -1594,6 +1677,16 @@ void pt_window_overlays_free(pt_window *window) {
     while (overlay) {
         pt_overlay *next = overlay->next;
         cancel_overlay_timer(overlay);
+        if (overlay->kind == pt_overlay_kind_popup) {
+            /* A popup is window-owned: destroying the window invalidates the
+             * handle and releases the content tree with it. */
+            if (overlay->popup) {
+                pt_platform_popup_destroy(overlay);
+            }
+            pt_popup_window_free((pt_popup *)overlay);
+            overlay = next;
+            continue;
+        }
         overlay->open = false;
         overlay->previous_focus = NULL;
         if (overlay->kind == pt_overlay_kind_tooltip || overlay->kind == pt_overlay_kind_toast) {

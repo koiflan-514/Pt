@@ -237,3 +237,21 @@ int main(void) {
 
     return pt_test_finish("abi");
 }
+
+/* M19: popup */
+#include <pt/popup.h>
+_Static_assert(pt_popup_placement_below == 0, "popup placement below must stay 0");
+_Static_assert(pt_popup_placement_above == 1, "popup placement above must stay 1");
+_Static_assert(pt_popup_placement_right == 2, "popup placement right must stay 2");
+_Static_assert(pt_popup_placement_left == 3, "popup placement left must stay 3");
+_Static_assert(PT_POPUP_MAX_OPEN == 16, "popup open limit must stay 16");
+_Static_assert(sizeof(((pt_popup_anchor *)0)->x) == sizeof(float), "anchor x is float");
+_Static_assert(offsetof(pt_popup_anchor, x) == 0, "anchor x first");
+_Static_assert(offsetof(pt_popup_anchor, x) < offsetof(pt_popup_anchor, y), "anchor order");
+_Static_assert(offsetof(pt_popup_anchor, y) < offsetof(pt_popup_anchor, width), "anchor order");
+_Static_assert(offsetof(pt_popup_anchor, width) < offsetof(pt_popup_anchor, height),
+               "anchor order");
+_Static_assert(sizeof(pt_popup_anchor) == 4 * sizeof(float), "anchor has four floats");
+_Static_assert(sizeof(pt_popup *) == sizeof(void *), "popup handle is a pointer");
+_Static_assert(sizeof(pt_popup_dismiss_callback) == sizeof(void (*)(void)),
+               "popup dismiss callback is a function pointer");

@@ -51,6 +51,9 @@ struct pt_wl_popup {
     int height;
     int anchor_x;
     int anchor_y;
+    int anchor_width;
+    int anchor_height;
+    pt_popup_placement placement;
     int pending_x;
     int pending_y;
     int pending_width;
@@ -299,7 +302,9 @@ static void popup_draw(pt_wl_popup *popup) {
 /* ---------- role and placement ---------- */
 
 static struct xdg_positioner *popup_make_positioner(pt_wl_popup *popup, int width, int height,
-                                                    int anchor_x, int anchor_y) {
+                                                    int anchor_x, int anchor_y,
+                                                    int anchor_width, int anchor_height,
+                                                    pt_popup_placement placement) {
     pt_platform *platform = popup->platform;
     struct xdg_positioner *positioner =
         xdg_wm_base_create_positioner(platform->wm_base);
@@ -307,9 +312,37 @@ static struct xdg_positioner *popup_make_positioner(pt_wl_popup *popup, int widt
         return NULL;
     }
     xdg_positioner_set_size(positioner, width, height);
-    xdg_positioner_set_anchor_rect(positioner, anchor_x, anchor_y, 1, 1);
-    xdg_positioner_set_anchor(positioner, XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT);
-    xdg_positioner_set_gravity(positioner, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+    xdg_positioner_set_anchor_rect(positioner, anchor_x, anchor_y,
+                                   anchor_width > 0 ? anchor_width : 1,
+                                   anchor_height > 0 ? anchor_height : 1);
+    uint32_t anchor = XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+    uint32_t gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+    if (popup->overlay && popup->overlay->kind == pt_overlay_kind_popup) {
+        /* The anchor point is a corner of the caller's anchor rectangle and the
+         * gravity is the direction in which the popup extends from it. Flip and
+         * slide are left to the compositor, which also applies its work area. */
+        switch (placement) {
+        case pt_popup_placement_above:
+            anchor = XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
+            break;
+        case pt_popup_placement_right:
+            anchor = XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+            break;
+        case pt_popup_placement_left:
+            anchor = XDG_POSITIONER_ANCHOR_TOP_LEFT;
+            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
+            break;
+        case pt_popup_placement_below:
+        default:
+            anchor = XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+            break;
+        }
+    }
+    xdg_positioner_set_anchor(positioner, anchor);
+    xdg_positioner_set_gravity(positioner, gravity);
     xdg_positioner_set_constraint_adjustment(
         positioner, XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
                         XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y |
@@ -326,6 +359,9 @@ static void popup_xdg_surface_configure(void *data, struct xdg_surface *xdg_surf
     if (popup->overlay) {
         popup->overlay->rect.x = (float)popup->pending_x;
         popup->overlay->rect.y = (float)popup->pending_y;
+        if (popup->overlay->kind == pt_overlay_kind_popup) {
+            ((pt_popup *)popup->overlay)->native_placed = true;
+        }
     }
     popup->configured = true;
     popup->needs_redraw = true;
@@ -371,6 +407,50 @@ static const struct xdg_popup_listener popup_listener = {
     .repositioned = popup_repositioned,
 };
 
+static int popup_axis_coord(float value) {
+    if (!isfinite((double)value)) {
+        return 0;
+    }
+    if (value < -32768.0f) {
+        return -32768;
+    }
+    if (value > 32767.0f) {
+        return 32767;
+    }
+    return (int)floorf(value);
+}
+
+static int popup_axis_extent(float value) {
+    if (!isfinite((double)value) || value < 1.0f) {
+        return 1;
+    }
+    if (value > 32767.0f) {
+        return 32767;
+    }
+    return (int)ceilf(value);
+}
+
+/* Resolves the positioner anchor rectangle. Menus, tooltips and comboboxes keep
+ * the 1x1 point they always used; an application popup carries its own anchor
+ * rectangle and placement. */
+static void popup_anchor_geometry(const pt_overlay *overlay, int *anchor_x, int *anchor_y,
+                                  int *anchor_width, int *anchor_height,
+                                  pt_popup_placement *placement) {
+    *anchor_x = popup_axis_coord(overlay->anchor_x);
+    *anchor_y = popup_axis_coord(overlay->anchor_y);
+    *anchor_width = 1;
+    *anchor_height = 1;
+    *placement = pt_popup_placement_below;
+    if (overlay->kind == pt_overlay_kind_popup) {
+        const pt_popup *popup = (const pt_popup *)overlay;
+        *anchor_x = popup_axis_coord(popup->anchor.x);
+        *anchor_y = popup_axis_coord(popup->anchor.y);
+        *anchor_width = popup_axis_extent(popup->anchor.width);
+        *anchor_height = popup_axis_extent(popup->anchor.height);
+        *placement = popup->placement;
+    }
+}
+
 static void popup_set_passive_input(pt_wl_popup *popup) {
     if (!popup->platform || !popup->platform->compositor || !popup->surface) {
         return;
@@ -397,8 +477,13 @@ static bool popup_create(pt_window *window, pt_overlay *overlay) {
     if (height < 1) {
         height = 1;
     }
-    int anchor_x = (int)floorf(overlay->anchor_x);
-    int anchor_y = (int)floorf(overlay->anchor_y);
+    int anchor_x = 0;
+    int anchor_y = 0;
+    int anchor_width = 1;
+    int anchor_height = 1;
+    pt_popup_placement placement = pt_popup_placement_below;
+    popup_anchor_geometry(overlay, &anchor_x, &anchor_y, &anchor_width, &anchor_height,
+                          &placement);
 
     pt_wl_popup *popup = pt_alloc_zeroed(1, sizeof(*popup));
     popup->platform = platform;
@@ -408,6 +493,9 @@ static bool popup_create(pt_window *window, pt_overlay *overlay) {
     popup->height = height;
     popup->anchor_x = anchor_x;
     popup->anchor_y = anchor_y;
+    popup->anchor_width = anchor_width;
+    popup->anchor_height = anchor_height;
+    popup->placement = placement;
     popup->surface = wl_compositor_create_surface(platform->compositor);
     if (!popup->surface) {
         free(popup);
@@ -422,7 +510,8 @@ static bool popup_create(pt_window *window, pt_overlay *overlay) {
     xdg_surface_add_listener(popup->xdg_surface, &popup_xdg_surface_listener, popup);
 
     struct xdg_positioner *positioner =
-        popup_make_positioner(popup, width, height, anchor_x, anchor_y);
+        popup_make_positioner(popup, width, height, anchor_x, anchor_y, anchor_width,
+                              anchor_height, placement);
     if (!positioner) {
         xdg_surface_destroy(popup->xdg_surface);
         wl_surface_destroy(popup->surface);
@@ -460,21 +549,33 @@ static bool popup_create(pt_window *window, pt_overlay *overlay) {
 }
 
 static void popup_reposition(pt_wl_popup *popup, int width, int height, int anchor_x,
-                             int anchor_y) {
-    bool size_changed = popup->width != width || popup->height != height;
+                             int anchor_y, int anchor_width, int anchor_height,
+                             pt_popup_placement placement) {
+    bool geometry_changed = popup->width != width || popup->height != height ||
+                            popup->anchor_x != anchor_x || popup->anchor_y != anchor_y ||
+                            popup->anchor_width != anchor_width ||
+                            popup->anchor_height != anchor_height ||
+                            popup->placement != placement;
     popup->width = width;
     popup->height = height;
     popup->anchor_x = anchor_x;
     popup->anchor_y = anchor_y;
+    popup->anchor_width = anchor_width;
+    popup->anchor_height = anchor_height;
+    popup->placement = placement;
+    if (!geometry_changed) {
+        return;
+    }
     if (xdg_popup_get_version(popup->popup) >= 3) {
         struct xdg_positioner *positioner =
-            popup_make_positioner(popup, width, height, anchor_x, anchor_y);
+            popup_make_positioner(popup, width, height, anchor_x, anchor_y, anchor_width,
+                                  anchor_height, placement);
         if (positioner) {
             uint32_t token = ++popup->reposition_token;
             xdg_popup_reposition(popup->popup, positioner, token);
             xdg_positioner_destroy(positioner);
         }
-    } else if (size_changed) {
+    } else {
         popup->needs_redraw = true;
     }
 }
@@ -500,8 +601,13 @@ void pt_platform_present_popups(pt_window *window, const pt_layout_ctx *ctx) {
         if (height < 1) {
             height = 1;
         }
-        int anchor_x = (int)floorf(overlay->anchor_x);
-        int anchor_y = (int)floorf(overlay->anchor_y);
+        int anchor_x = 0;
+        int anchor_y = 0;
+        int anchor_width = 1;
+        int anchor_height = 1;
+        pt_popup_placement placement = pt_popup_placement_below;
+        popup_anchor_geometry(overlay, &anchor_x, &anchor_y, &anchor_width, &anchor_height,
+                              &placement);
         if (!overlay->popup) {
             if (!popup_create(window, overlay)) {
                 overlay->native = false;
@@ -511,8 +617,11 @@ void pt_platform_present_popups(pt_window *window, const pt_layout_ctx *ctx) {
         }
         pt_wl_popup *popup = overlay->popup;
         if (popup->width != width || popup->height != height ||
-            popup->anchor_x != anchor_x || popup->anchor_y != anchor_y) {
-            popup_reposition(popup, width, height, anchor_x, anchor_y);
+            popup->anchor_x != anchor_x || popup->anchor_y != anchor_y ||
+            popup->anchor_width != anchor_width || popup->anchor_height != anchor_height ||
+            popup->placement != placement) {
+            popup_reposition(popup, width, height, anchor_x, anchor_y, anchor_width,
+                             anchor_height, placement);
         }
         if (popup->configured) {
             popup_draw(popup);

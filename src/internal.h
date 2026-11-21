@@ -19,6 +19,7 @@
 #include <hb.h>
 
 #include <pt/pt.h>
+#include <pt/popup.h>
 
 /* ---------- overlays ---------- */
 
@@ -41,7 +42,8 @@ typedef enum pt_overlay_kind {
     pt_overlay_kind_menu,
     pt_overlay_kind_dialog,
     pt_overlay_kind_tooltip,
-    pt_overlay_kind_combobox
+    pt_overlay_kind_combobox,
+    pt_overlay_kind_popup
 } pt_overlay_kind;
 
 typedef struct pt_wl_popup pt_wl_popup;
@@ -72,6 +74,22 @@ typedef struct pt_overlay_garbage {
     pt_overlay_action *actions;
     struct pt_overlay_garbage *next;
 } pt_overlay_garbage;
+
+/* Application-owned popup (1.2). overlay must remain the first member so the
+ * generic overlay layer can cast between the two without a side table. */
+struct pt_popup {
+    pt_overlay overlay;
+    pt_widget *content;
+    pt_popup_anchor anchor;
+    pt_popup_placement placement;
+    pt_popup_dismiss_callback on_dismiss;
+    void *on_dismiss_data;
+    bool dismissing;
+    /* Set when the compositor's xdg_popup/xdg_surface configure supplied the
+     * final native position. Until then layout computes the requested anchor
+     * position; afterwards it keeps the compositor's flip/slide result. */
+    bool native_placed;
+};
 
 /* A widget destroyed from inside a paint callback. The free is deferred until
  * the current paint pass returns so the traversal never touches freed memory. */
@@ -1395,7 +1413,14 @@ void pt_window_overlays_update_tooltip(pt_window *window);
 void pt_window_overlays_dismiss_tooltip(pt_window *window);
 pt_widget *pt_window_overlays_focus_scope(const pt_window *window);
 bool pt_window_overlays_focus_next(pt_window *window, bool backwards);
+/* Focuses the first focusable widget of an overlay panel; used when an
+ * application popup opens. */
+void pt_window_overlay_focus_first(pt_overlay *overlay);
 void pt_window_overlay_native_done(pt_overlay *overlay);
+/* Moves a detached panel/tree to the window's deferred-free list. Used by
+ * app popups so destruction from inside a callback cannot free a tree that the
+ * current widget dispatch is still walking. */
+void pt_window_overlay_defer_panel_free(pt_window *window, pt_widget *panel);
 
 /* Owner-built popup surfaces. A combo box allocates the overlay inside its own
  * state and links it here, so menus, dialogs and combo popups share focus
@@ -1405,6 +1430,15 @@ void pt_window_popup_show(pt_overlay *overlay, pt_window *window, pt_widget *own
                           pt_widget *panel);
 void pt_window_popup_hide(pt_overlay *overlay);
 void pt_window_popup_replace_panel(pt_overlay *overlay, pt_widget *panel);
+
+/* Application popups (M19). The layout helper computes the overlay rect from
+ * the anchor and placement, flipping and sliding inside the window when the
+ * popup uses the in-window fallback. The free helper releases the content tree
+ * and the popup without touching the window overlay list; the window teardown
+ * path owns that list while it iterates. */
+void pt_popup_overlay_layout(pt_popup *popup, pt_overlay *overlay,
+                             const pt_layout_ctx *ctx);
+void pt_popup_window_free(pt_popup *popup);
 
 /* ---------- damage ---------- */
 
