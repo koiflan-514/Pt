@@ -54,7 +54,7 @@ ifdef sanitize
 CPP_FLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 endif
 
-PROTO_NAMES := xdg-shell xdg-decoration-unstable-v1 viewporter fractional-scale-v1 \
+PROTO_NAMES := xdg-shell xdg-decoration-unstable-v1 xdg-toplevel-icon-v1 viewporter fractional-scale-v1 \
 	text-input-unstable-v3 pointer-gestures-unstable-v1 tablet-unstable-v2 \
 	primary-selection-unstable-v1
 PROTO_HEADERS := $(addprefix $(BUILD)/protocols/,$(addsuffix -client-protocol.h,$(PROTO_NAMES)))
