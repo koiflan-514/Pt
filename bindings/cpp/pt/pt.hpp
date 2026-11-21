@@ -13,9 +13,11 @@
 
 #include <pt/pt.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -41,6 +43,8 @@ using stylus_event = pt_stylus_event;
 using drag_data = pt_drag_data;
 using drop_stream_state = pt_drop_stream_state;
 using combo_mode = pt_combobox_mode;
+using decoration_mode = pt_decoration_mode;
+using paint_pixels_desc = pt_paint_pixels_desc;
 
 struct rect {
     float x = 0.0f;
@@ -189,6 +193,13 @@ class app {
     [[nodiscard]] uint64_t watch_fd(int fd, uint32_t events, pt_fd_callback callback,
                                     void *data = nullptr) const {
         return pt_app_watch_fd(handle_, fd, events, callback, data);
+    }
+    /* Takes ownership of `fd`: Pt closes it on unwatch or when the app is
+     * destroyed. Watching an fd that is already watched returns 0. */
+    [[nodiscard]] uint64_t watch_fd_owned(int fd, uint32_t events,
+                                          pt_fd_callback callback,
+                                          void *data = nullptr) const {
+        return pt_app_watch_fd_owned(handle_, fd, events, callback, data);
     }
     void unwatch_fd(uint64_t watch_id) const { pt_app_unwatch_fd(handle_, watch_id); }
     void set_color_scheme(pt_color_scheme scheme) const {
@@ -1449,6 +1460,21 @@ class window {
         pt_window_set_decorated(handle_, decorated);
         return *this;
     }
+    /* Decoration preference; the compositor's configure stays authoritative.
+     * The default request is pt_decoration_client. */
+    window &set_decoration_mode(pt_decoration_mode mode) {
+        pt_window_set_decoration_mode(handle_, mode);
+        return *this;
+    }
+    [[nodiscard]] pt_decoration_mode decoration_mode() const {
+        return pt_window_get_decoration_mode(handle_);
+    }
+    [[nodiscard]] pt_decoration_mode effective_decoration_mode() const {
+        return pt_window_get_effective_decoration_mode(handle_);
+    }
+    /* False when the window is not resizable or the compositor did not
+     * advertise the maximize capability. */
+    [[nodiscard]] bool maximize() const { return pt_window_maximize(handle_); }
     window &set_popup_policy(pt_popup_policy policy) {
         pt_window_set_popup_policy(handle_, policy);
         return *this;
@@ -1534,6 +1560,12 @@ class window {
         std::string value = copy_string(text);
         return pt_window_primary_set(handle_, value.c_str());
     }
+    /* Explicit serial path for a selection published from a pointer-release or
+     * key-press callback. A serial of 0 is rejected. */
+    bool set_primary_serial(std::string_view text, uint32_t serial) const {
+        std::string value = copy_string(text);
+        return pt_window_primary_set_serial(handle_, value.c_str(), serial);
+    }
     /* The C entry point cannot know the caller's buffer capacity, so reject a
      * span that cannot hold width * height pixels instead of overrunning it. */
     bool paint_pixels(std::span<uint32_t> pixels, int width, int height) const {
@@ -1545,6 +1577,41 @@ class window {
             return false;
         }
         return pt_window_paint_pixels(handle_, pixels.data(), width, height);
+    }
+    /* Extended snapshot. `desc.stride` is in pixels per row (0 means width) and
+     * must not be smaller than width; `desc.scale` is the device-pixel ratio
+     * (0 means 1.0). Only premultiplied 0xAARRGGBB is supported and every
+     * reserved word must be zero. The span must hold stride * height pixels
+     * (only the first width pixels of each row are written). */
+    bool paint_pixels_ex(std::span<uint32_t> pixels, int width, int height,
+                         const pt_paint_pixels_desc &desc = pt_paint_pixels_desc{}) const {
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        if (desc.reserved[0] != 0u || desc.reserved[1] != 0u || desc.reserved[2] != 0u) {
+            return false;
+        }
+        if (desc.format != pt_pixel_format_argb8888_premultiplied) {
+            return false;
+        }
+        if (desc.stride != 0 && desc.stride < width) {
+            return false;
+        }
+        if (desc.scale != 0.0f && !(std::isfinite(desc.scale) && desc.scale > 0.0f)) {
+            return false;
+        }
+        const size_t stride =
+            static_cast<size_t>(desc.stride == 0 ? width : desc.stride);
+        const size_t rows = static_cast<size_t>(height);
+        if (rows > 1 && stride > (std::numeric_limits<size_t>::max() - static_cast<size_t>(width)) /
+                                    (rows - 1)) {
+            return false;
+        }
+        const size_t required = stride * (rows - 1) + static_cast<size_t>(width);
+        if (pixels.size() < required) {
+            return false;
+        }
+        return pt_window_paint_pixels_ex(handle_, pixels.data(), width, height, &desc);
     }
     window &set_long_press_delay(uint32_t milliseconds) {
         pt_window_set_long_press_delay(handle_, milliseconds);

@@ -7,6 +7,7 @@
 #include <pt/pt.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 /* Internal UI-thread hooks. The C suite uses the same entry points to drive
@@ -35,6 +37,10 @@ void pt_window_input_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
 void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
                                  int32_t cursor_begin, int32_t cursor_end,
                                  uint32_t delete_before, uint32_t delete_after);
+/* Synthetic compositor capability update; used to exercise the maximize
+ * failure path without a live xdg_toplevel configure. */
+void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
+                                     bool fullscreen);
 }
 
 namespace {
@@ -1101,6 +1107,40 @@ int main() {
     check(window.set_clipboard("copied text"));
     check(window.clipboard() == "copied text");
 
+    /* ---- 1.1 extension API: decoration requests and maximize gates ---- */
+    check(window.decoration_mode() == pt_decoration_client);
+    check(window.effective_decoration_mode() == pt_decoration_client);
+    window.set_decorated(false);
+    // Header ownership only: false never requests server-side decoration.
+    check(window.decoration_mode() == pt_decoration_client);
+    check(window.effective_decoration_mode() == pt_decoration_client);
+    window.set_decorated(true);
+    window.set_decoration_mode(pt_decoration_server);
+    check(window.decoration_mode() == pt_decoration_server);
+    // Headless has no configure to wait for, so the effective mode follows.
+    check(window.effective_decoration_mode() == pt_decoration_server);
+    window.set_decoration_mode(pt_decoration_auto);
+    check(window.decoration_mode() == pt_decoration_auto);
+    check(window.effective_decoration_mode() == pt_decoration_client);
+    // An out-of-range mode is ignored by the C entry point.
+    window.set_decoration_mode(static_cast<pt_decoration_mode>(99));
+    check(window.decoration_mode() == pt_decoration_auto);
+    check(window.effective_decoration_mode() == pt_decoration_client);
+
+    check(window.maximize()); // resizable and the capability is not restricted
+    pt_window_apply_wm_capabilities(window.get(), false, true, true);
+    check(!window.maximize()); // no maximize capability
+    pt_window_apply_wm_capabilities(window.get(), true, true, true);
+    window.set_resizable(false);
+    check(!window.maximize()); // not resizable
+    window.set_resizable(true);
+    check(window.maximize());
+
+    pt::window null_window;
+    check(null_window.decoration_mode() == pt_decoration_auto);
+    check(null_window.effective_decoration_mode() == pt_decoration_auto);
+    check(!null_window.maximize());
+
     /* ---- 1.1 extension API: paint context and offscreen snapshot ---- */
     pt::window paint_window(application, "cpp paint", 320, 240);
     check(paint_window.valid());
@@ -1150,6 +1190,67 @@ int main() {
     check(!paint_window.paint_pixels(frame_span, 0, frame_height));
     check(!paint_window.paint_pixels(frame_span, frame_width, -1));
 
+    /* Extended snapshot: an explicit stride produces the same rows as a tight
+     * snapshot, a device scale changes the logical canvas, and reserved words
+     * are validated before the C call. */
+    const int ex_width = paint_window.width();
+    const int ex_height = paint_window.height();
+    const int ex_stride = ex_width + 16;
+    std::vector<uint32_t> padded(static_cast<size_t>(ex_stride) * ex_height);
+    pt::paint_pixels_desc ex_desc{ex_stride, 0.0f, pt_pixel_format_argb8888_premultiplied,
+                                  {0u, 0u, 0u}};
+    check(paint_window.paint_pixels_ex(std::span<uint32_t>(padded), ex_width, ex_height,
+                                       ex_desc));
+    std::vector<uint32_t> tight_ex(static_cast<size_t>(ex_width) * ex_height);
+    check(paint_window.paint_pixels_ex(std::span<uint32_t>(tight_ex), ex_width, ex_height,
+                                       pt::paint_pixels_desc{}));
+    bool stride_rows_match = true;
+    bool ex_marked = false;
+    for (int row = 0; row < ex_height; ++row) {
+        for (int col = 0; col < ex_width; ++col) {
+            const uint32_t value =
+                padded[static_cast<size_t>(row) * ex_stride + static_cast<size_t>(col)];
+            stride_rows_match = stride_rows_match &&
+                                value == tight_ex[static_cast<size_t>(row) * ex_width +
+                                                  static_cast<size_t>(col)];
+            ex_marked = ex_marked || value == painted_value;
+        }
+    }
+    check(stride_rows_match);
+    check(ex_marked);
+
+    std::vector<uint32_t> scaled(static_cast<size_t>(ex_width) * 2u * ex_height * 2u);
+    pt::paint_pixels_desc scale_desc{0, 2.0f, pt_pixel_format_argb8888_premultiplied,
+                                     {0u, 0u, 0u}};
+    check(paint_window.paint_pixels_ex(std::span<uint32_t>(scaled), ex_width * 2,
+                                       ex_height * 2, scale_desc));
+    check(std::find(scaled.begin(), scaled.end(), painted_value) != scaled.end());
+
+    check(!paint_window.paint_pixels_ex(std::span<uint32_t>(padded), ex_width, ex_height,
+                                        pt::paint_pixels_desc{ex_width - 1, 0.0f,
+                                                              pt_pixel_format_argb8888_premultiplied,
+                                                              {0u, 0u, 0u}}));
+    check(!paint_window.paint_pixels_ex(std::span<uint32_t>(padded), ex_width, ex_height,
+                                        pt::paint_pixels_desc{0, -1.0f,
+                                                              pt_pixel_format_argb8888_premultiplied,
+                                                              {0u, 0u, 0u}}));
+    check(!paint_window.paint_pixels_ex(std::span<uint32_t>(padded), ex_width, ex_height,
+                                        pt::paint_pixels_desc{0, 1.0f,
+                                                              static_cast<pt_pixel_format>(1),
+                                                              {0u, 0u, 0u}}));
+    check(!paint_window.paint_pixels_ex(std::span<uint32_t>(padded), ex_width, ex_height,
+                                        pt::paint_pixels_desc{0, 0.0f,
+                                                              pt_pixel_format_argb8888_premultiplied,
+                                                              {1u, 0u, 0u}}));
+    // A span that only holds width * height cannot back a wider stride.
+    std::vector<uint32_t> tight(static_cast<size_t>(ex_width) * ex_height);
+    check(!paint_window.paint_pixels_ex(std::span<uint32_t>(tight), ex_width, ex_height,
+                                        ex_desc));
+    check(!paint_window.paint_pixels_ex(std::span<uint32_t>(padded), 0, ex_height, ex_desc));
+    pt::window null_paint_window;
+    check(!null_paint_window.paint_pixels_ex(std::span<uint32_t>(padded), ex_width,
+                                             ex_height, ex_desc));
+
     painted.clear_paint_callback();
     const int cleared_calls = paint_state.calls;
     check(paint_window.paint_pixels(frame_span, frame_width, frame_height));
@@ -1182,12 +1283,18 @@ int main() {
         .pop_clip();
 
     /* ---- primary selection: copied, freed string instead of raw malloc ---- */
-    check(window.set_primary("primary payload"));
+    // A programmatic set has no triggering event serial, so it publishes
+    // nothing and returns false; the explicit serial path is the fallback.
+    check(!window.set_primary("primary payload"));
+    check(window.primary().empty());
+    check(!window.set_primary_serial("primary payload", 0));
+    check(window.primary().empty());
+    check(window.set_primary_serial("primary payload", 7));
     check(window.primary() == "primary payload");
     const std::string unicode_primary = "primary \xE4\xB8\x96 na\xC3\xAFve";
-    check(window.set_primary(unicode_primary));
+    check(window.set_primary_serial(unicode_primary, 9));
     check(window.primary() == unicode_primary);
-    check(window.set_primary(std::string_view{}));
+    check(window.set_primary_serial(std::string_view{}, 11));
     check(window.primary().empty());
     for (int i = 0; i < 8; ++i) {
         check(window.primary().empty());
@@ -1300,21 +1407,19 @@ int main() {
         check(application.run_for(40) == 0);
         check(fd_state.calls == 0);
 
-        // Two independent watches on one descriptor are allowed.
+        // One watch per descriptor: a second watch on the same fd is rejected.
         fd_capture first_watch_state;
-        fd_capture second_watch_state;
+        fd_capture duplicate_watch_state;
         const uint64_t first_watch =
             application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe, &first_watch_state);
-        const uint64_t second_watch =
-            application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe, &second_watch_state);
-        check(first_watch != 0 && second_watch != 0);
-        check(first_watch != second_watch);
+        check(first_watch != 0);
+        check(application.watch_fd(pipe_fds[0], pt_fd_event_read, fd_probe,
+                                   &duplicate_watch_state) == 0);
         check(::write(pipe_fds[1], "z", 1) == 1);
         check(application.run_for(80) == 0);
         check(first_watch_state.calls >= 1);
-        check(second_watch_state.calls >= 1);
+        check(duplicate_watch_state.calls == 0);
         application.unwatch_fd(first_watch);
-        application.unwatch_fd(second_watch);
 
         fd_self_capture self_state;
         self_state.app = application.get();
@@ -1327,6 +1432,39 @@ int main() {
         check(::write(pipe_fds[1], "w", 1) == 1);
         check(application.run_for(40) == 0);
         check(self_state.calls == 1);
+
+        fd_capture owned_state;
+        int owned_pipe[2] = {-1, -1};
+        check(::pipe(owned_pipe) == 0);
+        const uint64_t owned_watch = application.watch_fd_owned(
+            owned_pipe[0], pt_fd_event_read, fd_probe, &owned_state);
+        check(owned_watch != 0);
+        // The duplicate check covers owned descriptors too and must not close
+        // the fd that the first watch owns.
+        fd_capture owned_duplicate;
+        check(application.watch_fd(owned_pipe[0], pt_fd_event_read, fd_probe,
+                                   &owned_duplicate) == 0);
+        check(::fcntl(owned_pipe[0], F_GETFD) != -1);
+        check(::write(owned_pipe[1], "o", 1) == 1);
+        check(application.run_for(80) == 0);
+        check(owned_state.calls >= 1);
+        application.unwatch_fd(owned_watch);
+        errno = 0;
+        check(::fcntl(owned_pipe[0], F_GETFD) == -1 && errno == EBADF);
+        check(::close(owned_pipe[1]) == 0);
+
+        // Destroying the app closes every owned descriptor.
+        int destroy_pipe[2] = {-1, -1};
+        check(::pipe(destroy_pipe) == 0);
+        {
+            pt::app owned_app("pt.tests.cpp.owned");
+            check(owned_app.valid());
+            check(owned_app.watch_fd_owned(destroy_pipe[0], pt_fd_event_read, fd_probe,
+                                           &owned_state) != 0);
+        }
+        errno = 0;
+        check(::fcntl(destroy_pipe[0], F_GETFD) == -1 && errno == EBADF);
+        check(::close(destroy_pipe[1]) == 0);
 
         fd_capture hangup_state;
         const uint64_t hangup_watch =
