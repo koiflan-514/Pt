@@ -301,6 +301,57 @@ static void popup_draw(pt_wl_popup *popup) {
 
 /* ---------- role and placement ---------- */
 
+void pt_popup_positioner_spec_for(pt_overlay_kind kind, pt_popup_placement placement,
+                                  int anchor_x, int anchor_y, int anchor_width,
+                                  int anchor_height, pt_popup_positioner_spec *out) {
+    if (!out) {
+        return;
+    }
+    /* xdg-shell carries the anchor rectangle in surface-local coordinates and
+     * requires a non-empty one, so a point anchor becomes a one-pixel rect. */
+    out->anchor_x = anchor_x;
+    out->anchor_y = anchor_y;
+    out->anchor_width = anchor_width > 0 ? anchor_width : 1;
+    out->anchor_height = anchor_height > 0 ? anchor_height : 1;
+    /* Menus, tooltips and combo boxes anchor at the point's bottom-right corner
+     * and extend down-right from it, which is what they always used. */
+    out->anchor = XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+    out->gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+    if (kind == pt_overlay_kind_popup) {
+        /* Application popups snap one edge of the panel to the matching edge
+         * of the caller's anchor rectangle. The anchor point is a corner of
+         * that rectangle and the gravity is the direction in which the panel
+         * extends from it, so each pair mirrors the in-window fallback in
+         * popup.c: below grows down from the bottom edge, above grows up from
+         * the top edge, and right/left grow sideways from the top corners. */
+        switch (placement) {
+        case pt_popup_placement_above:
+            out->anchor = XDG_POSITIONER_ANCHOR_TOP_LEFT;
+            out->gravity = XDG_POSITIONER_GRAVITY_TOP_RIGHT;
+            break;
+        case pt_popup_placement_right:
+            out->anchor = XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+            out->gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+            break;
+        case pt_popup_placement_left:
+            out->anchor = XDG_POSITIONER_ANCHOR_TOP_LEFT;
+            out->gravity = XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
+            break;
+        case pt_popup_placement_below:
+        default:
+            out->anchor = XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+            out->gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+            break;
+        }
+    }
+    /* Flip and slide are left to the compositor, which also applies its work
+     * area. */
+    out->constraint = XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+                      XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y |
+                      XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
+                      XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y;
+}
+
 static struct xdg_positioner *popup_make_positioner(pt_wl_popup *popup, int width, int height,
                                                     int anchor_x, int anchor_y,
                                                     int anchor_width, int anchor_height,
@@ -311,43 +362,16 @@ static struct xdg_positioner *popup_make_positioner(pt_wl_popup *popup, int widt
     if (!positioner) {
         return NULL;
     }
+    pt_overlay_kind kind = popup->overlay ? popup->overlay->kind : pt_overlay_kind_tooltip;
+    pt_popup_positioner_spec spec;
+    pt_popup_positioner_spec_for(kind, placement, anchor_x, anchor_y, anchor_width,
+                                 anchor_height, &spec);
     xdg_positioner_set_size(positioner, width, height);
-    xdg_positioner_set_anchor_rect(positioner, anchor_x, anchor_y,
-                                   anchor_width > 0 ? anchor_width : 1,
-                                   anchor_height > 0 ? anchor_height : 1);
-    uint32_t anchor = XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
-    uint32_t gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
-    if (popup->overlay && popup->overlay->kind == pt_overlay_kind_popup) {
-        /* The anchor point is a corner of the caller's anchor rectangle and the
-         * gravity is the direction in which the popup extends from it. Flip and
-         * slide are left to the compositor, which also applies its work area. */
-        switch (placement) {
-        case pt_popup_placement_above:
-            anchor = XDG_POSITIONER_ANCHOR_TOP_RIGHT;
-            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
-            break;
-        case pt_popup_placement_right:
-            anchor = XDG_POSITIONER_ANCHOR_TOP_RIGHT;
-            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
-            break;
-        case pt_popup_placement_left:
-            anchor = XDG_POSITIONER_ANCHOR_TOP_LEFT;
-            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
-            break;
-        case pt_popup_placement_below:
-        default:
-            anchor = XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
-            gravity = XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
-            break;
-        }
-    }
-    xdg_positioner_set_anchor(positioner, anchor);
-    xdg_positioner_set_gravity(positioner, gravity);
-    xdg_positioner_set_constraint_adjustment(
-        positioner, XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
-                        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y |
-                        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
-                        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y);
+    xdg_positioner_set_anchor_rect(positioner, spec.anchor_x, spec.anchor_y,
+                                   spec.anchor_width, spec.anchor_height);
+    xdg_positioner_set_anchor(positioner, spec.anchor);
+    xdg_positioner_set_gravity(positioner, spec.gravity);
+    xdg_positioner_set_constraint_adjustment(positioner, spec.constraint);
     xdg_positioner_set_offset(positioner, 0, 0);
     return positioner;
 }

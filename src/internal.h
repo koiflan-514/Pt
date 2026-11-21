@@ -1440,6 +1440,24 @@ void pt_popup_overlay_layout(pt_popup *popup, pt_overlay *overlay,
                              const pt_layout_ctx *ctx);
 void pt_popup_window_free(pt_popup *popup);
 
+/* The xdg_positioner decision for an owner-built popup surface. anchor and
+ * gravity hold xdg_positioner enum values and the Wayland backend fills a
+ * positioner from this result. Keeping the decision pure lets tests assert the
+ * four placements against the in-window fallback without a compositor. */
+typedef struct pt_popup_positioner_spec {
+    int anchor_x;
+    int anchor_y;
+    int anchor_width;
+    int anchor_height;
+    uint32_t anchor;
+    uint32_t gravity;
+    uint32_t constraint;
+} pt_popup_positioner_spec;
+
+void pt_popup_positioner_spec_for(pt_overlay_kind kind, pt_popup_placement placement,
+                                  int anchor_x, int anchor_y, int anchor_width,
+                                  int anchor_height, pt_popup_positioner_spec *out);
+
 /* ---------- damage ---------- */
 
 void pt_window_damage_rect(pt_window *window, pt_rect rect);

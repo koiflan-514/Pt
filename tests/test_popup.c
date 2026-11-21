@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <xdg-shell-client-protocol.h>
 
 typedef struct popup_state {
     int dismissals;
@@ -47,6 +48,156 @@ static pt_widget *fixed_box(float width, float height) {
 
 static void paint(pt_window *window, pt_canvas *canvas) {
     pt_check(pt_window_paint(window, canvas));
+}
+
+/* Resolves the corner of the anchor rectangle named by the positioner anchor,
+ * then applies the gravity direction. xdg_positioner anchor/gravity values are
+ * plain enums, not bit flags, so both steps use switches. Before the compositor
+ * flips or slides the surface, this is the popup origin the request asks for. */
+static float positioner_anchor_x(const pt_popup_positioner_spec *spec) {
+    switch (spec->anchor) {
+    case XDG_POSITIONER_ANCHOR_TOP_RIGHT:
+    case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
+        return (float)(spec->anchor_x + spec->anchor_width);
+    default:
+        return (float)spec->anchor_x;
+    }
+}
+
+static float positioner_anchor_y(const pt_popup_positioner_spec *spec) {
+    switch (spec->anchor) {
+    case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT:
+    case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
+        return (float)(spec->anchor_y + spec->anchor_height);
+    default:
+        return (float)spec->anchor_y;
+    }
+}
+
+static void positioner_origin(const pt_popup_positioner_spec *spec, float width, float height,
+                              float *x, float *y) {
+    float anchor_x = positioner_anchor_x(spec);
+    float anchor_y = positioner_anchor_y(spec);
+    switch (spec->gravity) {
+    case XDG_POSITIONER_GRAVITY_TOP_LEFT:
+    case XDG_POSITIONER_GRAVITY_TOP_RIGHT:
+        *y = anchor_y - height;
+        break;
+    default:
+        *y = anchor_y;
+        break;
+    }
+    switch (spec->gravity) {
+    case XDG_POSITIONER_GRAVITY_TOP_LEFT:
+    case XDG_POSITIONER_GRAVITY_BOTTOM_LEFT:
+        *x = anchor_x - width;
+        break;
+    default:
+        *x = anchor_x;
+        break;
+    }
+}
+
+static void test_positioner_spec(void) {
+    static const struct {
+        pt_popup_placement placement;
+        uint32_t anchor;
+        uint32_t gravity;
+    } cases[] = {
+        {pt_popup_placement_below, XDG_POSITIONER_ANCHOR_BOTTOM_LEFT,
+         XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT},
+        {pt_popup_placement_above, XDG_POSITIONER_ANCHOR_TOP_LEFT,
+         XDG_POSITIONER_GRAVITY_TOP_RIGHT},
+        {pt_popup_placement_right, XDG_POSITIONER_ANCHOR_TOP_RIGHT,
+         XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT},
+        {pt_popup_placement_left, XDG_POSITIONER_ANCHOR_TOP_LEFT,
+         XDG_POSITIONER_GRAVITY_BOTTOM_LEFT},
+    };
+    const uint32_t constraint = XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+                                XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y |
+                                XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
+                                XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y;
+    for (size_t i = 0; i < pt_len(cases); ++i) {
+        pt_popup_positioner_spec spec;
+        pt_popup_positioner_spec_for(pt_overlay_kind_popup, cases[i].placement, 30, 120, 80,
+                                     24, &spec);
+        pt_check(spec.anchor_x == 30);
+        pt_check(spec.anchor_y == 120);
+        pt_check(spec.anchor_width == 80);
+        pt_check(spec.anchor_height == 24);
+        pt_check(spec.anchor == cases[i].anchor);
+        pt_check(spec.gravity == cases[i].gravity);
+        pt_check(spec.constraint == constraint);
+    }
+
+    /* Zero or negative extents become the one-pixel anchor xdg-shell requires. */
+    pt_popup_positioner_spec point;
+    pt_popup_positioner_spec_for(pt_overlay_kind_popup, pt_popup_placement_above, -4, 7, 0,
+                                 -2, &point);
+    pt_check(point.anchor == XDG_POSITIONER_ANCHOR_TOP_LEFT);
+    pt_check(point.gravity == XDG_POSITIONER_GRAVITY_TOP_RIGHT);
+    pt_check(point.anchor_width == 1);
+    pt_check(point.anchor_height == 1);
+
+    /* Menus, tooltips and combo boxes keep their point-anchored down-right
+     * placement regardless of the legacy placement value. */
+    pt_popup_positioner_spec menu;
+    pt_popup_positioner_spec_for(pt_overlay_kind_menu, pt_popup_placement_above, 10, 20, 1,
+                                 1, &menu);
+    pt_check(menu.anchor == XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT);
+    pt_check(menu.gravity == XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+    pt_check(menu.constraint == constraint);
+    /* A missing result sink is ignored rather than dereferenced. */
+    pt_popup_positioner_spec_for(pt_overlay_kind_menu, pt_popup_placement_left, 10, 20, 1, 1,
+                                 NULL);
+}
+
+/* The native decision and the in-window fallback must describe the same
+ * geometry: same edge of the anchor rectangle, same growth direction. */
+static void test_positioner_matches_fallback(pt_app *app) {
+    pt_window *window = pt_window_create(app, "popup-positioner", 400, 300);
+    pt_window_show(window);
+    pt_popup *popup = pt_popup_create(window, fixed_box(100.0f, 60.0f));
+    pt_check(popup != NULL);
+    if (!popup) {
+        pt_window_free(window);
+        return;
+    }
+    const pt_popup_anchor anchor = {150.0f, 140.0f, 80.0f, 24.0f};
+    static const pt_popup_placement placements[] = {
+        pt_popup_placement_below,
+        pt_popup_placement_above,
+        pt_popup_placement_right,
+        pt_popup_placement_left,
+    };
+    for (size_t i = 0; i < pt_len(placements); ++i) {
+        pt_popup_set_placement(popup, placements[i]);
+        pt_check(pt_popup_show(popup, anchor));
+        /* Headless: no compositor placement, so the panel rectangle comes from
+         * the in-window fallback. It must ask for the same origin the native
+         * positioner requests, or live and headless placements drift apart. */
+        pt_check(!popup->overlay.native);
+        pt_popup_positioner_spec spec;
+        pt_popup_positioner_spec_for(pt_overlay_kind_popup, popup->placement, 150, 140, 80, 24,
+                                     &spec);
+        float x = 0.0f;
+        float y = 0.0f;
+        positioner_origin(&spec, popup->overlay.rect.w, popup->overlay.rect.h, &x, &y);
+        pt_check_near(x, popup->overlay.rect.x, 0.01);
+        pt_check_near(y, popup->overlay.rect.y, 0.01);
+    }
+
+    /* Above: the popup's bottom edge sits on the anchor's top edge and its left
+     * edge on the anchor's left edge. The old TOP_RIGHT/BOTTOM_LEFT pair
+     * reported a downward, overlapping origin instead. */
+    pt_popup_set_placement(popup, pt_popup_placement_above);
+    pt_check(pt_popup_show(popup, anchor));
+    pt_check_near(popup->overlay.rect.x, 150.0f, 0.01);
+    pt_check_near(popup->overlay.rect.y + popup->overlay.rect.h, 140.0f, 0.01);
+    pt_check(popup->overlay.rect.y < 140.0f);
+
+    pt_popup_destroy(popup);
+    pt_window_free(window);
 }
 
 static void test_create_and_show(pt_app *app) {
@@ -454,6 +605,8 @@ int main(void) {
     test_create_and_show(app);
     test_headless_before_show(app);
     test_flip_and_slide(app);
+    test_positioner_spec();
+    test_positioner_matches_fallback(app);
     test_dismiss_paths(app);
     test_callback_self_destroy(app);
     test_destroy_from_content_callback(app);
