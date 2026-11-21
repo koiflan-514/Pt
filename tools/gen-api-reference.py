@@ -23,18 +23,35 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "api-reference.md"
 
-MODULES = (
-    ("base.h", "Core types, errors and memory"),
-    ("theme.h", "Theme tokens and helper functions"),
-    ("app.h", "Application lifecycle, timers and preference"),
-    ("window.h", "Windows, clipboard and input handlers"),
-    ("widget.h", "Widgets, containers and data views"),
-    ("overlay.h", "Menus, dialogs and toasts"),
-    ("a11y.h", "Accessibility model and bridge"),
-    ("dnd.h", "External drag and drop"),
-    ("interaction.h", "Gestures, momentum and stylus input"),
-    ("motion.h", "Easing and transitions"),
-)
+# Module summaries are metadata only. The set and order of modules is derived
+# from include/pt/*.h at import time so a new public header is always covered;
+# an omission cannot silently pass --check.
+MODULE_SUMMARIES = {
+    "a11y.h": "Accessibility model and bridge",
+    "app.h": "Application lifecycle, timers and preference",
+    "base.h": "Core types, errors and memory",
+    "custom.h": "Custom painting, IME, file-descriptor watches and raw input",
+    "dnd.h": "External drag and drop",
+    "interaction.h": "Gestures, momentum and stylus input",
+    "motion.h": "Easing and transitions",
+    "overlay.h": "Menus, dialogs and toasts",
+    "pt.h": "Umbrella header",
+    "theme.h": "Theme tokens and helper functions",
+    "widget.h": "Widgets, containers and data views",
+    "window.h": "Windows, clipboard and input handlers",
+}
+
+
+def public_modules() -> list[tuple[str, str]]:
+    """Enumerate every public header and pair it with its summary."""
+    headers = sorted(path.name for path in (ROOT / "include" / "pt").glob("*.h"))
+    return [
+        (filename, MODULE_SUMMARIES.get(filename, f"Public API declared by {filename}"))
+        for filename in headers
+    ]
+
+
+MODULES = public_modules()
 
 KIND_BY_PREFIX = (
     ("pt_list_view_", "`pt_widget_list`"),
@@ -503,6 +520,25 @@ def build_reference() -> str:
 _SIGNATURES: dict[tuple[str, str], str] = {}
 
 
+def coverage_errors(reference: str) -> list[str]:
+    """Fail when a public header or function is absent from the reference."""
+    errors: list[str] = []
+    discovered = sorted(path.name for path in (ROOT / "include" / "pt").glob("*.h"))
+    covered = {filename for filename, _ in MODULES}
+    for filename in discovered:
+        if filename not in covered:
+            errors.append(f"public header not enumerated: {filename}")
+        elif f"\n## {filename}\n" not in reference:
+            errors.append(f"public header missing from the reference: {filename}")
+    for filename, _ in MODULES:
+        raw = (ROOT / "include" / "pt" / filename).read_text(encoding="utf-8")
+        for match in AUDIT.FUNCTION_RE.finditer(raw):
+            name = match.group("name")
+            if f"\n### {name}\n" not in reference:
+                errors.append(f"function missing from the reference: {name} ({filename})")
+    return errors
+
+
 def signature_for(filename: str, name: str) -> str:
     key = (filename, name)
     if key not in _SIGNATURES:
@@ -524,6 +560,11 @@ def main() -> int:
     output = pathlib.Path(arguments.output)
 
     reference = build_reference()
+    errors = coverage_errors(reference)
+    if errors:
+        for error in errors:
+            print(f"api-reference: {error}", file=sys.stderr)
+        return 1
     if arguments.write:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(reference, encoding="utf-8")
