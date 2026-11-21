@@ -15,6 +15,7 @@ import gc
 import os
 import shutil
 import struct
+import sys
 import tempfile
 import time
 import unittest
@@ -2065,7 +2066,7 @@ class M19BindingTests(unittest.TestCase):
         self.assertEqual((width, height), (2, 2))
         self.assertEqual(len(raw), 16)
         self.assertEqual(
-            [int.from_bytes(raw[index:index + 4], "little")
+            [int.from_bytes(raw[index:index + 4], sys.byteorder)
              for index in range(0, 16, 4)],
             [0xFFFF0000, 0x80004000, 0x00000000, 0xFF00FF00],
         )
@@ -2551,6 +2552,10 @@ class M19BindingTests(unittest.TestCase):
         trampoline(picker.raw, pt.Date(2024, 1, 2), None)
         self.assertEqual(dates, [(picker, pt.Date(2024, 1, 2))])
         self.assertEqual(dates[0][1].year, 2024)
+        picker.set_date_picker_date(pt.Date(2025, 3, 4))
+        picker.set_date_picker_text("2025-12-31")
+        picker.date_picker_clear()
+        self.assertEqual(dates, [(picker, pt.Date(2024, 1, 2))])  # programmatic set is silent
 
         numbers: list[tuple[pt.Widget, float]] = []
         number = pt.number_picker(self.column)
@@ -2561,6 +2566,10 @@ class M19BindingTests(unittest.TestCase):
         )
         trampoline(number.raw, 2.5, None)
         self.assertEqual(numbers, [(number, 2.5)])
+        number.number_picker_value = 9.0
+        number.set_number_picker_range(0.0, 10.0)
+        number.number_picker_clear()
+        self.assertEqual(numbers, [(number, 2.5)])  # programmatic set is silent
 
         colors: list[tuple[pt.Widget, int]] = []
         color = pt.color_picker(self.column)
@@ -2571,6 +2580,11 @@ class M19BindingTests(unittest.TestCase):
         )
         trampoline(color.raw, 0xFF00FFFF, None)
         self.assertEqual(colors, [(color, 0xFF00FFFF)])
+        color.color_picker_color = 0x11223344
+        self.assertTrue(color.set_color_picker_hex("#00FF00"))
+        color.color_picker_add_preset(0x010203FF)
+        color.clear_color_picker_presets()
+        self.assertEqual(colors, [(color, 0xFF00FFFF)])  # programmatic set is silent
 
         # Clearing a callback substitutes a real NULL function pointer.
         select.on_select_change(None)

@@ -1518,8 +1518,8 @@ void pt_icon_image_destroy(pt_icon_image *image)
 
 **Header:** [`pt/icon.h`](../include/pt/icon.h)
 
-Drops a reference. NULL is accepted. The last drop frees the image. Since
-1.2.
+Drops a reference. NULL is accepted. The last drop frees the image.
+Since 1.2.
 
 **Contract**
 

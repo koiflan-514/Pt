@@ -107,8 +107,8 @@ pt_api pt_icon_image *pt_icon_image_from_name(const char *name, int size);
  * NULL. Since 1.2. */
 pt_api pt_icon_image *pt_icon_image_ref(pt_icon_image *image);
 
-/* Drops a reference. NULL is accepted. The last drop frees the image. Since
- * 1.2. */
+/* Drops a reference. NULL is accepted. The last drop frees the image.
+ * Since 1.2. */
 pt_api void pt_icon_image_destroy(pt_icon_image *image);
 
 /* Source dimensions in pixels; 0 for NULL. Since 1.2. */
