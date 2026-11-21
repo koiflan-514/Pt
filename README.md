@@ -6,16 +6,16 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **1.1.0**. The contract-hardening release: explicit client-side
-decoration by default with requested and effective modes tracked separately,
-side-effect-free offscreen snapshots with an explicit stride/scale/format
-descriptor, primary selection sourced from the triggering event's serial, and
-hardened paint, IME, fd-watch and raw-input callback contracts — an append-only
-extension surface on a 448-function C ABI wrapped in C++/Python/Java with
-binding parity enforced. The release record is written and the annotated tag is
-created after the final gate run; see [docs/release.md](docs/release.md). The API
-is tracked by a reviewed baseline, a generated function reference and a
-compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
+Status: **1.2.0**. The common-surface release: application-owned popups on
+`xdg_popup`, per-run font fallback chains, clipboard `image/png` and
+`text/uri-list` writes, persisted table column layouts, reference-counted icon
+images with best-effort toplevel icons, and searchable select, date, number and
+colour pickers — an append-only extension surface on a 554-function C ABI
+wrapped in C++/Python/Java with binding parity enforced. The release record is
+written and the annotated tag is created after the final gate run; see
+[docs/release.md](docs/release.md). The API is tracked by a reviewed baseline, a
+generated function reference and a compatibility policy; see
+[docs/api-reference.md](docs/api-reference.md),
 [docs/api-policy.md](docs/api-policy.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why Pt
@@ -59,6 +59,52 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 1.2.0
+
+1.2.0 is the first post-1.0 horizon wave: the controls and platform plumbing
+most applications had to build themselves. It keeps every 1.1 signature and
+adds 106 functions; the annotated tag is created after the final gate run
+recorded in [release.md](docs/release.md).
+
+- **Application-owned popups.** `pt_popup_create` builds a popup on the existing
+  `xdg_popup` backend from a parent window and a content widget. It shows at an
+  anchor rect in parent logical coordinates with flip/slide constrained
+  placement, repositions, and dismisses on an outside click, Escape or a broken
+  grab, reporting the dismissal through `pt_popup_set_on_dismiss`. Headless runs
+  use the same in-window fallback as menus and tooltips.
+- **Per-run font fallback.** `pt_app_set_font_fallbacks` installs an app-level
+  chain and `pt_app_set_font_fallbacks_for_family` overrides it for one primary
+  family. Text is split into HarfBuzz-script segments and each segment is shaped
+  with the first face that covers it, falling back to Fontconfig's order when no
+  chain is installed. Metrics take the tallest face in a line;
+  `pt_app_font_uncovered_count` reports codepoints that still render as tofu.
+- **Clipboard media.** `pt_window_clipboard_set_image_png` and
+  `pt_window_clipboard_get_image_png` read and write `image/png` with the
+  existing 1.5 s / 16 MiB transfer caps plus an 8192×8192 decoded-pixel cap;
+  decode failures return NULL. The conversion between premultiplied ARGB and
+  the straight-alpha PNG format is documented.
+  `pt_window_clipboard_set_uri_list` writes CRLF, percent-encoded `file://`
+  URIs with the drag-source encoder.
+- **Column-layout persistence.** `pt_table_columns_save` and
+  `pt_table_columns_restore` round-trip a versioned blob of column widths, order,
+  visibility and keys for the shared table/tree column model. The application
+  owns and stores the blob; unknown versions and corrupt input are rejected.
+- **Icon images and toplevel icons.** `pt_icon_image_load_file`,
+  `pt_icon_image_load_memory` and `pt_icon_image_from_name` create a
+  reference-counted raster image (PNG, hicolor theme lookup, per-size/scale
+  cache) for an icon button's image slot with optional tint, or for the window
+  icon. `pt_window_set_icon` publishes it through `xdg-toplevel-icon-v1` where
+  the compositor exposes that protocol; otherwise it is best-effort and the
+  application still owns the image.
+- **Pickers.** A searchable `pt_select` (popup list with item data, query
+  filtering, "no matches" and a candidate cap), `pt_date_picker` (typed date plus
+  a six-week calendar), `pt_number_picker` (spin box with range and step) and
+  `pt_color_picker` (hex field, preview and preset palette). All four are
+  editor fields with full keyboard paths, entry focus while the popup is open,
+  silent programmatic setters, and accessibility value/expanded-state
+  assertions. They are combo-box widgets at the core; the filterable combobox
+  remains the separate in-window chooser.
 
 ## What is new in 1.1.0
 
@@ -435,7 +481,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` runs headless and needs no compositor. It includes the C test
 suites, the C++/Python/Java binding suites, the exported-symbol and API
-baseline audit, the hard 448/448 binding-parity gate, the per-round 0.6–0.10
+baseline audit, the hard 554/554 binding-parity gate, the per-round 0.6–0.10
 surface audits, a check that `docs/api-reference.md` matches the headers, and
 the randomized property suite for text editing, URI parsing, data-view indices
 and damage rectangles.
@@ -625,7 +671,7 @@ migration and comparison guides also have
 release records, roadmap, performance notes and policy pages remain
 English-only.
 
-## Limitations in 1.1
+## Limitations in 1.2
 
 - Wayland only; there is no X11, Windows or macOS backend.
 - The 1.x ABI is append-only: removals require a major release and a SONAME
@@ -635,11 +681,31 @@ English-only.
 - The renderer is CPU-only. Dense full-window animation is comfortable on
   desktop-sized windows but is not a 4K/120 Hz GPU path; an accelerated backend
   is a post-1.0 candidate.
-- Menus, tooltips and select-only combobox popups use native `xdg_popup`
-  surfaces when the backend supports them; dialogs, toasts and filterable
-  combobox popups remain composited inside the window because they are modal,
-  stacked or need the editor to keep focus. Native popups still need a
-  configured xdg-shell window, so headless runs use the in-window fallback.
+- Menus, tooltips, select-only combobox popups, application-owned popups and
+  the picker popups use native `xdg_popup` surfaces when the backend supports
+  them; dialogs, toasts and filterable combobox popups remain composited inside
+  the window because they are modal, stacked or need the editor to keep focus.
+  Native popups still need a configured xdg-shell window, so headless runs use
+  the in-window fallback.
+- Icon images are raster: PNG decoding plus hicolor theme lookup with a
+  per-size/scale cache. SVG sources are deferred, so an icon theme that only
+  ships scalable SVGs is not resolved. `pt_window_set_icon` is best-effort:
+  without `xdg-toplevel-icon-v1` the compositor may show its own fallback, and
+  the application keeps ownership of the image.
+- The pickers do not read the process locale. The date format is an explicit
+  `pt_date_format`, the number field always uses `.` as the committed decimal
+  separator (both `.` and `,` are accepted on input), and the colour field is
+  hex. The select model is capped at 1024 items and 256 candidate rows, the
+  colour palette at 64 presets, and the calendar always renders six weeks, so
+  localization at the edges is the application's job.
+- Font fallback chains are process-wide because the font cache is shared. An
+  explicit chain is authoritative: a character none of its families covers
+  renders as tofu even when another installed font would have it. Installing a
+  chain applies to text laid out afterwards and repaints the calling app.
+- Table column layouts are saved as an opaque versioned blob that the
+  application stores. Widths, order, visibility and keys round-trip; there is no
+  schema migration across versions, so an unknown version is rejected and the
+  current layout stays in place.
 - The AT-SPI2 bridge is opt-in (`pt_app_enable_a11y`), requires a build with
   `dbus-1`, and exposes the widget tree rather than arbitrary painted
   content. Screen readers see Pt widgets but not custom drawing without
@@ -696,7 +762,7 @@ pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
 `pt_decoration_auto` follows the framework default, which is client-side
-decoration in 1.1. The request is never a guarantee: the mode returned by
+decoration in 1.2. The request is never a guarantee: the mode returned by
 `configure` is authoritative, and `pt_window_get_effective_decoration_mode`
 reports it separately from the requested mode returned by
 `pt_window_get_decoration_mode`. Sway forces server-side decoration on tiled

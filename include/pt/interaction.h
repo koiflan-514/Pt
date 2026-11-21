@@ -63,18 +63,20 @@ typedef struct pt_gesture_event {
 typedef void (*pt_gesture_callback)(pt_window *window, const pt_gesture_event *event,
                                     void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_window_set_gesture_callback(pt_window *window, pt_gesture_callback callback,
                                            void *user_data);
 
 /* Pt synthesizes a single-finger hold after the delay while the pointer stays
  * down. The default is 500 ms; 0 disables it. Compositor three-finger holds
- * are delivered regardless of this setting. */
+ * are delivered regardless of this setting. Since 1.0. */
 pt_api void pt_window_set_long_press_delay(pt_window *window, uint32_t milliseconds);
 
 /* Kinetic scrolling continues a finger-driven wheel or touchpad fling after
  * the last axis event. It is enabled by default and only applies to pointer
- * axis sources that report continuous motion. */
+ * axis sources that report continuous motion. Since 1.0. */
 pt_api void pt_window_set_momentum_scrolling(pt_window *window, bool enabled);
+/* Since 1.0. */
 pt_api bool pt_window_get_momentum_scrolling(const pt_window *window);
 
 /* Stylus input from tablet-v2 tools. Events are delivered in logical window
@@ -121,6 +123,7 @@ typedef struct pt_stylus_event {
 typedef void (*pt_stylus_callback)(pt_window *window, const pt_stylus_event *event,
                                    void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_window_set_stylus_callback(pt_window *window, pt_stylus_callback callback,
                                           void *user_data);
 

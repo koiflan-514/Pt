@@ -100,33 +100,39 @@ typedef struct pt_drop_target {
 
 /* Copies the target description. Passing NULL removes it. Drop targets are
  * inherited by descendants: the deepest registered ancestor under the
- * pointer receives the callbacks. */
+ * pointer receives the callbacks. Since 1.0. */
 pt_api void pt_widget_set_drop_target(pt_widget *widget, const pt_drop_target *target);
+/* Since 1.0. */
 pt_api bool pt_widget_get_drop_hover(const pt_widget *widget);
 
 /* Incoming offer introspection. An offer is valid during enter_offer and
- * drop_offer; streams opened from it outlive the callback. */
+ * drop_offer; streams opened from it outlive the callback. Since 1.0. */
 pt_api uint32_t pt_drop_offer_mime_count(const pt_drop_offer *offer);
+/* Since 1.0. */
 pt_api const char *pt_drop_offer_mime(const pt_drop_offer *offer, uint32_t index);
+/* Since 1.0. */
 pt_api bool pt_drop_offer_has_mime(const pt_drop_offer *offer, const char *mime_type);
-/* MIME type returned by enter_offer and used for the drop, or NULL. */
+/* MIME type returned by enter_offer and used for the drop, or NULL. Since 1.0. */
 pt_api const char *pt_drop_offer_selected_mime(const pt_drop_offer *offer);
-/* Bit mask of pt_drag_action values advertised by the source. */
+/* Bit mask of pt_drag_action values advertised by the source. Since 1.0. */
 pt_api uint32_t pt_drop_offer_actions(const pt_drop_offer *offer);
 
 /* Starts an asynchronous read of one offered MIME type. Returns NULL when the
  * offer is finished, the MIME type is unknown, or no read backend exists.
  * max_bytes of zero means unlimited; exceeding it ends the stream with
- * pt_drop_stream_error. Multiple reads may run concurrently. */
+ * pt_drop_stream_error. Multiple reads may run concurrently. Since 1.0. */
 pt_api pt_drop_stream *pt_drop_offer_read(pt_drop_offer *offer, const char *mime_type,
                                           size_t max_bytes,
                                           pt_drop_stream_callback callback,
                                           void *user_data);
 /* Cancels an active stream, delivering pt_drop_stream_cancelled before the
- * callback returns. Safe to call from the stream's own callback. */
+ * callback returns. Safe to call from the stream's own callback. Since 1.0. */
 pt_api void pt_drop_stream_cancel(pt_drop_stream *stream);
+/* Since 1.0. */
 pt_api const char *pt_drop_stream_mime(const pt_drop_stream *stream);
+/* Since 1.0. */
 pt_api size_t pt_drop_stream_size(const pt_drop_stream *stream);
+/* Since 1.0. */
 pt_api bool pt_drop_stream_active(const pt_drop_stream *stream);
 
 /* Starts a structured drag offering several MIME types. Each entry carries a
@@ -139,6 +145,7 @@ typedef struct pt_drag_data {
     size_t size;
 } pt_drag_data;
 
+/* Since 1.0. */
 pt_api bool pt_window_begin_drag(pt_window *window, const pt_drag_data *types,
                                  uint32_t count);
 
@@ -148,42 +155,47 @@ pt_api bool pt_window_begin_drag(pt_window *window, const pt_drag_data *types,
 typedef void (*pt_drag_finished_callback)(pt_window *window, bool dropped,
                                           pt_drag_action action, void *user_data);
 
+/* Since 1.0. */
 pt_api void pt_window_set_drag_finished_callback(pt_window *window,
                                                  pt_drag_finished_callback callback,
                                                  void *user_data);
-/* Action performed by the last finished drag, or pt_drag_action_none. */
+/* Action performed by the last finished drag, or pt_drag_action_none. Since 1.0. */
 pt_api pt_drag_action pt_window_get_drag_result(const pt_window *window);
 
 /* Replaces the built-in drag thumbnail for subsequent drags with RGBA pixels
  * (0xRRGGBBAA, top row first). Pt copies the pixels. Passing a zero size or
- * clearing restores the built-in thumbnail. */
+ * clearing restores the built-in thumbnail. Since 1.0. */
 pt_api void pt_window_set_drag_image(pt_window *window, const pt_color *pixels, int width,
                                      int height);
+/* Since 1.0. */
 pt_api void pt_window_clear_drag_image(pt_window *window);
 
-/* True while a drag started by this window is awaiting a drop. */
+/* True while a drag started by this window is awaiting a drop. Since 1.0. */
 pt_api bool pt_window_get_drag_active(const pt_window *window);
 
 /* Cancels the active drag source, hiding its thumbnail and clearing any
- * pending entry drag. Safe to call when no drag is active. */
+ * pending entry drag. Safe to call when no drag is active. Since 1.0. */
 pt_api void pt_window_cancel_drag(pt_window *window);
 
 /* Optional watchdog for source drags. A non-zero timeout cancels a drag that
  * has not finished within that many milliseconds; zero (the default) leaves
- * cancellation to the compositor. */
+ * cancellation to the compositor. Since 1.0. */
 pt_api void pt_window_set_drag_timeout(pt_window *window, uint32_t milliseconds);
+/* Since 1.0. */
 pt_api uint32_t pt_window_get_drag_timeout(const pt_window *window);
 
 /* text/uri-list helpers for drop callbacks. Comments (#...) and blank lines
  * are ignored and CRLF is accepted. pt_uri_list_get returns a newly allocated
  * copy of the URI at index, freed with pt_free; out-of-range indices return
- * NULL. */
+ * NULL. Since 1.0. */
 pt_api uint32_t pt_uri_list_count(const char *text);
+/* Since 1.0. */
 pt_api char *pt_uri_list_get(const char *text, uint32_t index);
 
 /* Entries support dragging the selected text once the pointer moves a few
- * pixels. Enabled by default. */
+ * pixels. Enabled by default. Since 1.0. */
 pt_api void pt_entry_set_drag_enabled(pt_widget *entry, bool enabled);
+/* Since 1.0. */
 pt_api bool pt_entry_get_drag_enabled(const pt_widget *entry);
 
 #ifdef __cplusplus

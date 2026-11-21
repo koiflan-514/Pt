@@ -121,6 +121,7 @@ pt_api void pt_popup_set_on_dismiss(pt_popup *popup, pt_popup_dismiss_callback c
 /* Placement for the next show/reposition. Invalid values select below. A change
  * while open takes effect at the next layout or reposition. Since 1.2. */
 pt_api void pt_popup_set_placement(pt_popup *popup, pt_popup_placement placement);
+/* Since 1.2. */
 pt_api pt_popup_placement pt_popup_get_placement(const pt_popup *popup);
 
 #ifdef __cplusplus

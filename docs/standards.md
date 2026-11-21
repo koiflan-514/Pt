@@ -341,30 +341,43 @@ fixes regressions only and adds no feature.
 
 ## Current deviations
 
-The 1.1.0 tree closes the gaps this page was written around: the generated
-reference derives its module list from `include/pt/*.h`, the baseline and
-reference agree on the 448-function surface, all three bindings report 448/448
-with empty allowlists, the bilingual pairs are in sync, the version is 1.1.0
-everywhere, and the ABI pins cover the new enums and structs. The remaining
-deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under M18:
+The 1.2.0 tree closes the gaps this page was written around for the shared C
+surface: the generated reference derives its module list from `include/pt/*.h`,
+the baseline and reference agree on the 554-function / 907-entry surface, every
+declaration carries a since marker, the bilingual pairs are in sync, the version
+is 1.2.0 everywhere, and the ABI pins cover the new enums, structs and limits.
+The three-language wrappers and their dispatch tests are the parallel
+integration change in flight; the reviewed allowlist stays empty and the parity
+gate is `make check`, not a report. The remaining deviations are explicit and
+tracked in [ROADMAP.md](ROADMAP.md) under M19:
 
 - **No fake-compositor replay facility.** Protocol sequences are covered by
   headless state tests plus the live niri run. The in-process fake compositor
-  that standards section 6 asks for is not in the tree; M18 records it as open
-  rather than silently claiming coverage.
-- **Two IME items are deferred.** `preedit_hint` visual presentation and
-  `show_input_panel`/`hide_input_panel` move to 1.2; the event surface,
-  full-state resend and empty-`done` acknowledgement are implemented and
-  tested.
+  that standards section 6 asks for is still not in the tree; M18/M19 record it
+  as open rather than silently claiming coverage.
+- **Two IME items remain deferred.** `preedit_hint` visual presentation and
+  `show_input_panel`/`hide_input_panel` were moved to 1.2 and did not land; the
+  event surface, full-state resend and empty-`done` acknowledgement are
+  implemented and tested.
 - **Binding raw-callback dispatch tests are partial.** Registration and
   callback-free paths are tested in Python, C++ and Java; an actual raw key or
   pointer event needs a live seat, so dispatch-level assertions remain a live
   suite item rather than a headless one.
-- **`Makefile` VERSION is updated by the sibling release change.** The header
-  macros, README status and release record already say 1.1.0; SONAME stays
-  `libpt.so.1`. Until that one-line change lands, the version-agreement gate is
-  red by construction.
+- **The number picker has no spin role.** It exposes the combo-box role and no
+  expandable state; adding a spin-box role is an append-only accessibility enum
+  addition for a later minor.
+- **The pickers are locale-independent.** The date picture is explicit, the
+  committed number separator is `.`, and the process locale is never read. This
+  is a documented contract, not an unfinished translation path.
+- **Icon SVG and live toplevel-icon evidence are open.** `pt_icon_image` decodes
+  PNG only. The reference runs (niri/Sway/Weston) do not advertise
+  `xdg-toplevel-icon-v1`, so submission is recorded headless and only the no-op
+  path is live; a real recording needs one of the compositors the matrix lists
+  as exposing the global.
 
 The 1.1.0 work-in-progress also violated the section 2 landing rule (headers,
 bindings, reference and tests did not land atomically). That history is kept in
-M18 so the rule is not quietly forgotten; it is not a current exception.
+M18 so the rule is not quietly forgotten; it is not a current exception. M19
+kept the rule: each wave workstream landed header, implementation, C tests and
+ABI pins together, and the integration phase owned the baseline, reference,
+version and guides.

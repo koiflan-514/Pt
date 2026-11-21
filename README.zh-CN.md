@@ -6,14 +6,14 @@
 应用可以使用 C、C++、Python 或 Java 编写，面向同一套扁平 C ABI。
 这个名字是铂的化学符号：小而致密、不易反应。
 
-状态：**1.1.0**。契约加固版本：默认显式客户端装饰，并分别跟踪请求模式
-与生效模式；离屏快照无副作用，并提供显式的 stride/scale/format 描述符；
-主选区使用触发事件的 serial；绘制、输入法、描述符监视和原始输入回调契约
-均已加固——这套只追加式扩展表面构建于包含 448 个函数的 C ABI 之上，由
-C++/Python/Java 封装，并强制要求绑定功能对等。发布记录已写好，带注释的标签
-将在最终门禁运行后创建；参见 [docs/release.md](docs/release.md)。API 由
-经审阅的基线、生成的函数参考和兼容性策略共同跟踪；参见
-[docs/api-reference.md](docs/api-reference.md)、
+状态：**1.2.0**。常用表面版本：基于 `xdg_popup` 的应用自有弹出层、
+逐字形段的字体回退链、剪贴板 `image/png` 与 `text/uri-list` 写入、
+可持久化的表格列布局、引用计数的图标图像以及尽力而为的顶层窗口图标，
+还有可搜索选择、日期、数字和颜色选择器——这套只追加式扩展表面构建于包含
+554 个函数的 C ABI 之上，由 C++/Python/Java 封装，并强制要求绑定功能对等。
+发布记录已写好，带注释的标签将在最终门禁运行后创建；参见
+[docs/release.md](docs/release.md)。API 由经审阅的基线、生成的函数参考和
+兼容性策略共同跟踪；参见 [docs/api-reference.md](docs/api-reference.md)、
 [docs/api-policy.md](docs/api-policy.md) 和 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 为什么选择 Pt
@@ -49,6 +49,44 @@ C++/Python/Java 封装，并强制要求绑定功能对等。发布记录已写�
 - 基于 `wl_shm` 的软件渲染：冷启动快，窗口未获焦时空闲占用不到单核的 0.3%，
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
+
+## 1.2.0 的新特性
+
+1.2.0 是 1.0 之后的第一个常用表面波次：应用原本需要自行实现的控件与平台管线。
+它保留全部 1.1 签名并新增 106 个函数；带注释的标签将在最终门禁运行后创建，
+记录见 [release.md](docs/release.md)。
+
+- **应用自有弹出层。** `pt_popup_create` 基于现有的 `xdg_popup` 后端，
+  从父窗口和内容控件创建弹出层。它按父窗口逻辑坐标中的锚点矩形显示，
+  采用翻转/滑动约束定位，可重新定位，并在外部点击、Escape 或抓取中断时
+  关闭，通过 `pt_popup_set_on_dismiss` 报告关闭原因。无头运行使用与菜单和
+  工具提示相同的窗口内回退方案。
+- **逐字形段字体回退。** `pt_app_set_font_fallbacks` 安装应用级回退链，
+  `pt_app_set_font_fallbacks_for_family` 为某个主字体族覆盖它。文本被拆分为
+  HarfBuzz 字形段，每段使用第一个覆盖它的字体面整形；未安装回退链时使用
+  Fontconfig 自身的排序。行度量取该行最高字体面；
+  `pt_app_font_uncovered_count` 报告仍显示为豆腐块的码点。
+- **剪贴板媒体。** `pt_window_clipboard_set_image_png` 和
+  `pt_window_clipboard_get_image_png` 读写 `image/png`，沿用现有的
+  1.5 秒 / 16 MiB 传输上限，并增加 8192×8192 解码像素上限；解码失败返回
+  NULL。预乘 ARGB 与直通 alpha PNG 格式之间的转换已写入文档。
+  `pt_window_clipboard_set_uri_list` 使用拖动源编码器写入 CRLF、
+  百分号编码的 `file://` URI。
+- **列布局持久化。** `pt_table_columns_save` 和 `pt_table_columns_restore`
+  为共享的表格/树列模型往返读写带版本的 blob，包含列宽、顺序、可见性和键。
+  应用拥有并存储该 blob；未知版本和损坏输入会被拒绝。
+- **图标图像与顶层窗口图标。** `pt_icon_image_load_file`、
+  `pt_icon_image_load_memory` 和 `pt_icon_image_from_name` 创建引用计数的
+  栅格图像（PNG、hicolor 主题查找、按尺寸/缩放缓存），可用于图标按钮的图像
+  槽位并可选着色，或用于窗口图标。在合成器暴露相应协议时，
+  `pt_window_set_icon` 通过 `xdg-toplevel-icon-v1` 发布它；否则为尽力而为，
+  图像仍由应用拥有。
+- **选择器。** 可搜索的 `pt_select`（带项数据、查询过滤、“无匹配”和候选上限
+  的弹出列表）、`pt_date_picker`（可键入日期加六周日历）、
+  `pt_number_picker`（带范围和步长的微调框）以及 `pt_color_picker`
+  （十六进制输入、预览和预设调色板）。四者都是编辑器字段，拥有完整键盘路径、
+  弹出层打开时输入框保持焦点、静默的程序化设置函数，以及无障碍值/展开状态
+  断言。它们在核心上是组合框控件；可过滤组合框仍是独立的窗口内选择器。
 
 ## 1.1.0 的新特性
 
@@ -362,7 +400,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` 以无头方式运行，不需要合成器。它包含 C 测试套件、
 C++/Python/Java 绑定测试套件、导出符号和 API 基线审计、
-硬性的 448/448 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
+硬性的 554/554 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
 `docs/api-reference.md` 与头文件一致的检查，以及针对文本编辑、URI 解析、
 数据视图索引和损坏矩形的随机属性测试套件。
 实时 Wayland 冒烟测试不属于 `make check`。`make check-wayland`
@@ -542,7 +580,7 @@ pkg-config --modversion pt
 
 <a id="limitations-in-11"></a>
 
-## 1.1 中的限制
+## 1.2 中的限制
 
 - 仅支持 Wayland；没有 X11、Windows 或 macOS 后端。
 - 1.x ABI 为只追加：移除需要主版本发布和 SONAME 提升。
@@ -550,10 +588,24 @@ pkg-config --modversion pt
   布局、绘制和事件循环仅在调用线程上运行。
 - 渲染器仅使用 CPU。密集的全窗口动画在桌面尺寸窗口上表现舒适，
   但不是 4K/120 Hz 的 GPU 路径；加速后端是 1.0 之后的候选。
-- 后端支持时，菜单、工具提示和仅选择组合框弹出层使用原生 `xdg_popup` 表面；
-  对话框、通知和可过滤组合框弹出层仍合成在窗口内，因为它们是模态的、堆叠的，
-  或需要编辑器保持焦点。原生弹出层仍需要一个已配置的 xdg-shell 窗口，
-  因此无头运行使用窗口内回退方案。
+- 后端支持时，菜单、工具提示、仅选择组合框弹出层、应用自有弹出层和选择器
+  弹出层使用原生 `xdg_popup` 表面；对话框、通知和可过滤组合框弹出层仍合成
+  在窗口内，因为它们是模态的、堆叠的，或需要编辑器保持焦点。原生弹出层仍
+  需要一个已配置的 xdg-shell 窗口，因此无头运行使用窗口内回退方案。
+- 图标图像是栅格的：PNG 解码加 hicolor 主题查找，并带按尺寸/缩放缓存。
+  SVG 源被推迟，因此只提供可缩放 SVG 的图标主题无法解析。
+  `pt_window_set_icon` 是尽力而为：没有 `xdg-toplevel-icon-v1` 时合成器可能
+  显示自己的回退图标，图像仍由应用拥有。
+- 选择器不读取进程 locale。日期格式是显式的 `pt_date_format`，
+  数字字段提交时始终使用 `.` 作为小数分隔符（输入时 `.` 和 `,` 都接受），
+  颜色字段为十六进制。选择模型上限为 1024 项和 256 个候选行，
+  颜色调色板上限为 64 个预设，日历始终渲染六周，因此边缘处的本地化由应用负责。
+- 字体回退链是进程范围的，因为字体缓存是共享的。显式回退链是权威的：
+  若其中没有任何字体族覆盖某字符，该字符会渲染为豆腐块，即使其他已安装字体
+  能够覆盖。安装回退链会影响之后布局的文本，并重绘调用方应用。
+- 表格列布局保存为不透明的带版本 blob，由应用存储。列宽、顺序、可见性和键
+  可往返读写；不同版本之间没有架构迁移，因此未知版本会被拒绝，
+  当前布局保持不变。
 - AT-SPI2 桥是可选的（`pt_app_enable_a11y`），需要以 `dbus-1` 构建，
   并暴露控件树而不是任意绘制内容。屏幕阅读器可以看到 Pt 控件，
   但看不到没有无障碍元数据的自定义绘制。
@@ -599,7 +651,7 @@ Pt 在首次提交时向 `xdg-decoration` 请求客户端模式，因为它的�
 pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求
+`pt_decoration_auto` 遵循框架默认策略，在 1.2 中即客户端装饰。请求
 从来不是保证：`configure` 返回的模式才是权威结果，
 `pt_window_get_effective_decoration_mode` 会单独报告它，而
 `pt_window_get_decoration_mode` 返回请求模式。Sway 即使收到客户端

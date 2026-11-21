@@ -304,6 +304,8 @@ _Static_assert(pt_date_format_mdy == 2, "mdy format must stay 2");
 _Static_assert(offsetof(pt_date, year) == 0, "date year first");
 _Static_assert(offsetof(pt_date, year) < offsetof(pt_date, month), "date field order");
 _Static_assert(offsetof(pt_date, month) < offsetof(pt_date, day), "date field order");
+_Static_assert(offsetof(pt_date, month) == 4, "date month follows the year slot");
+_Static_assert(offsetof(pt_date, day) == 5, "date day follows the month byte");
 _Static_assert(sizeof(((pt_date *)0)->year) == 4, "date year is int32");
 _Static_assert(sizeof(((pt_date *)0)->month) == 1, "date month is uint8");
 _Static_assert(sizeof(((pt_date *)0)->day) == 1, "date day is uint8");

@@ -387,6 +387,164 @@ offers one, so the list can overflow the window edge, and a filterable box stays
 inside the window so the editor keeps focus. In-window placement flips above the
 field or clamps to the edges when it would not fit below.
 
+## Popups and pickers
+
+### Application-owned popups
+
+`pt_popup` opens application content on the same `xdg_popup` backend as menus
+and tooltips. The popup adopts the content tree, so do not destroy or reuse the
+content after handing it over. The anchor is in parent-window logical pixels;
+the compositor flips and slides the native surface to stay visible, and the
+headless fallback does the same inside the window.
+
+```c
+static void on_popup_dismiss(pt_popup *popup, void *data) {
+    (void)popup;
+    (void)data;
+}
+
+pt_widget *panel = pt_card_create(NULL);
+pt_label_create(panel, "Popup content");
+
+pt_popup *popup = pt_popup_create(window, panel);
+pt_popup_set_on_dismiss(popup, on_popup_dismiss, NULL);
+pt_popup_anchor anchor = {.x = 24.0f, .y = 96.0f, .width = 160.0f, .height = 32.0f};
+pt_popup_show(popup, anchor);
+```
+
+A dismissal through an outside click, Escape or a broken grab calls the
+callback after `pt_popup_is_open` has become false. `pt_popup_destroy` closes the
+popup and frees the content without calling the callback. The parent window owns
+the popup, so destroying the window invalidates the handle.
+
+### Searchable select and pickers
+
+The four 1.2 pickers are editor fields with the same focus, keyboard and
+accessibility model. They report `pt_widget_combobox` as their kind, but only the
+functions in `pt/picker.h` apply; calling the `pt_combobox_*` item API is a
+no-op. Programmatic setters are silent and invalid text commits return false,
+leave the previous value in place and record `pt_get_last_error`.
+
+```c
+pt_widget *city = pt_select_create(card);
+pt_select_set_placeholder(city, "Choose a city");
+pt_select_add_item_with_data(city, "Berlin", &berlin);
+pt_select_add_item_with_data(city, "Lisbon", &lisbon);
+pt_select_set_max_popup_rows(city, 6);
+
+pt_widget *deadline = pt_date_picker_create(card);
+pt_date date = {.year = 2026, .month = 11, .day = 22};
+pt_date_picker_set_date(deadline, date);
+pt_date_picker_set_format(deadline, pt_date_format_iso);
+
+pt_widget *retries = pt_number_picker_create(card);
+pt_number_picker_set_range(retries, 0.0, 10.0);
+pt_number_picker_set_step(retries, 1.0);
+pt_number_picker_set_value(retries, 3.0);
+
+pt_widget *accent = pt_color_picker_create(card);
+pt_color_picker_set_hex(accent, "#336699");
+```
+
+Typing filters a select by ASCII-case-insensitive substring; Down, Up, F4 and
+Alt+Down/Alt+Up open it, Enter commits, Escape restores the committed value and
+Delete on an empty query clears it. The date field parses the chosen picture
+(ISO always accepted) and the popup is a fixed six-week calendar. The number
+field clamps into its range and uses `.` as the committed decimal separator.
+The colour field accepts `#RRGGBB` and `#RRGGBBAA` and its palette starts with 24
+common colours. The accessible value is the selected index, `YYYYMMDD`, the
+number or normalised RGB respectively.
+
+## Media, icons and persistence
+
+### Icon images
+
+`pt_icon_image` is a reference-counted raster image loaded from a PNG file,
+memory, or a hicolor theme name. Widgets take their own reference, so the load
+handle can be released immediately.
+
+```c
+pt_icon_image *image = pt_icon_image_from_name("document-open", 18);
+if (image) {
+    pt_widget *open = pt_icon_button_create(card, pt_icon_none, "Open");
+    pt_button_set_icon_image(open, image);
+    pt_button_set_icon_tint(open, 0xFF3366FFu);
+    pt_window_set_icon(window, image);
+    pt_icon_image_destroy(image);
+}
+```
+
+The window icon is best-effort through `xdg-toplevel-icon-v1`; a compositor
+without the global ignores it without recording an error. SVG sources are not
+part of 1.2.
+
+### Clipboard images and URI lists
+
+`pt_window_clipboard_set_image_png` takes premultiplied `0xAARRGGBB` pixels and
+writes `image/png`; the getter returns caller-owned pixels of the same layout.
+Both directions are bounded by the text transfer caps and an 8192×8192
+decoded-pixel cap, and a decode failure returns NULL.
+
+```c
+pt_color pixels[4] = {0xFF336699u, 0xFF336699u, 0xFF336699u, 0xFF336699u};
+if (pt_window_clipboard_set_image_png(window, pixels, 2, 2)) {
+    int width = 0;
+    int height = 0;
+    pt_color *copy = pt_window_clipboard_get_image_png(window, &width, &height);
+    pt_free(copy);
+}
+
+const char *files[] = {"/home/user/notes.txt"};
+pt_window_clipboard_set_uri_list(window, files, 1);
+```
+
+`pt_window_clipboard_set_uri_list` writes CRLF lines with percent-encoded
+`file://` URIs. Setting one clipboard type replaces the previous one.
+
+### Font fallback chains
+
+`pt_app_set_font_fallbacks` installs the app-wide chain;
+`pt_app_set_font_fallbacks_for_family` overrides it for one primary family. Text
+is split into script runs and each run uses the first family that covers it.
+The chain is process-wide, and an explicit chain is authoritative.
+
+```c
+const char *fallbacks[] = {"Noto Sans", "Noto Sans CJK SC", "Noto Sans Arabic"};
+pt_app_set_font_fallbacks(app, fallbacks, 3);
+
+const char *mono[] = {"Noto Sans Mono", "Noto Sans Mono CJK SC"};
+pt_app_set_font_fallbacks_for_family(app, "monospace", mono, 2);
+
+int missing = pt_app_font_uncovered_count(app, NULL, mixed_text, strlen(mixed_text));
+```
+
+`pt_app_font_uncovered_count` returns the number of codepoints that still render
+as tofu. Passing NULL for the family means the app's configured default family.
+
+### Column layout persistence
+
+Give each column a stable key, then save and restore the versioned layout blob.
+The application owns the blob; titles, alignment and resizability are model
+configuration and are not part of it.
+
+```c
+pt_table_set_column_key(table, 0, "name");
+pt_table_set_column_key(table, 1, "size");
+
+char *layout = pt_table_columns_save(table);
+if (layout) {
+    /* store layout where the application keeps configuration */
+    pt_table_columns_restore(table, layout);
+    pt_free(layout);
+}
+```
+
+`pt_table_columns_save` records display order, widths, hidden flags and the
+multi-column sort state. `pt_table_columns_restore` validates the whole blob
+before changing anything and rejects unknown versions, malformed lines, missing
+or duplicate keys and a column-count mismatch, leaving the current layout
+untouched.
+
 ## Text editing
 
 Entries are single-line editors with UTF-8 byte-offset selections. Mouse drag
@@ -1088,7 +1246,7 @@ pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
 `pt_decoration_auto` follows the framework default, which is client-side
-decoration in 1.1. The request is a preference: Pt tracks the requested and
+decoration in 1.2. The request is a preference: Pt tracks the requested and
 effective modes separately, `pt_window_get_decoration_mode` reports the request
 and `pt_window_get_effective_decoration_mode` reports what `configure` decided,
 and the window is laid out for the effective mode. Sway forces server-side

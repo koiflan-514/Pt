@@ -34,27 +34,30 @@ extern "C" {
 #endif
 
 /* Creates an application and connects to the compositor. Returns NULL on
- * failure; see pt_get_last_error(). All API calls are main-thread only. */
+ * failure; see pt_get_last_error(). All API calls are main-thread only. Since 1.0. */
 pt_api pt_app *pt_app_create(const char *app_id);
 
-/* Destroys all windows and disconnects. */
+/* Destroys all windows and disconnects. Since 1.0. */
 pt_api void pt_app_destroy(pt_app *app);
 
 /* Runs until pt_app_quit() is called or the last window closes. Returns 0 on
- * success, -1 if the connection fails. */
+ * success, -1 if the connection fails. Since 1.0. */
 pt_api int pt_app_run(pt_app *app);
 
 /* Runs for at most timeout_ms, useful for tests and embedded event pumps.
- * Returns 0 on timeout or normal shutdown, -1 on connection failure. */
+ * Returns 0 on timeout or normal shutdown, -1 on connection failure. Since 1.0. */
 pt_api int pt_app_run_for(pt_app *app, uint32_t timeout_ms);
 
+/* Since 1.0. */
 pt_api void pt_app_quit(pt_app *app);
+/* Since 1.0. */
 pt_api bool pt_app_is_running(const pt_app *app);
 
 /* One-shot timer. The returned id can be cancelled; it is also forfeited when
- * the callback fires. */
+ * the callback fires. Since 1.0. */
 pt_api uint64_t pt_app_add_timeout(pt_app *app, uint32_t milliseconds,
                                    pt_timer_callback callback, void *user_data);
+/* Since 1.0. */
 pt_api void pt_app_cancel_timeout(pt_app *app, uint64_t timer_id);
 
 /* File-descriptor watches integrate application descriptors into Pt's poll
@@ -81,24 +84,33 @@ typedef enum pt_fd_event {
 
 typedef void (*pt_fd_callback)(pt_app *app, uint32_t events, void *user_data);
 
+/* Since 1.1. */
 pt_api uint64_t pt_app_watch_fd(pt_app *app, int fd, uint32_t events,
                                 pt_fd_callback callback, void *user_data);
 /* Takes ownership of `fd`; Pt closes it on unwatch or app destroy. Same
  * duplicate-fd and error rules as pt_app_watch_fd. Since 1.1. */
 pt_api uint64_t pt_app_watch_fd_owned(pt_app *app, int fd, uint32_t events,
                                       pt_fd_callback callback, void *user_data);
+/* Since 1.1. */
 pt_api void pt_app_unwatch_fd(pt_app *app, uint64_t watch_id);
 
+/* Since 1.0. */
 pt_api void pt_app_set_color_scheme(pt_app *app, pt_color_scheme scheme);
+/* Since 1.0. */
 pt_api pt_color_scheme pt_app_get_color_scheme(const pt_app *app);
+/* Since 1.0. */
 pt_api void pt_app_set_accent_color(pt_app *app, pt_color color);
+/* Since 1.0. */
 pt_api void pt_app_set_theme_color(pt_app *app, pt_theme_token token, pt_color color);
+/* Since 1.0. */
 pt_api pt_color pt_app_get_theme_color(const pt_app *app, pt_theme_token token);
 /* Geometric tokens shared by the built-in paints. Negative values are
  * clamped to zero; radius_pill may be large because it is clamped to the
- * shorter side of each shape. */
+ * shorter side of each shape. Since 1.0. */
 pt_api void pt_app_set_theme_metric(pt_app *app, pt_theme_metric metric, float value);
+/* Since 1.0. */
 pt_api float pt_app_get_theme_metric(const pt_app *app, pt_theme_metric metric);
+/* Since 1.0. */
 pt_api void pt_app_set_font_family(pt_app *app, const char *family);
 
 /* Per-run font fallback (since 1.2)
@@ -149,21 +161,29 @@ pt_api void pt_app_set_font_family(pt_app *app, const char *family);
 #define PT_FONT_FALLBACK_MAX_FAMILIES 8
 #define PT_FONT_FALLBACK_MAX_OVERRIDES 16
 
+/* Since 1.2. */
 pt_api void pt_app_set_font_fallbacks(pt_app *app, const char *const *families,
                                       int count);
+/* Since 1.2. */
 pt_api int pt_app_get_font_fallback_count(const pt_app *app);
+/* Since 1.2. */
 pt_api const char *pt_app_get_font_fallback(const pt_app *app, int index);
+/* Since 1.2. */
 pt_api void pt_app_set_font_fallbacks_for_family(pt_app *app, const char *family,
                                                  const char *const *families,
                                                  int count);
+/* Since 1.2. */
 pt_api int pt_app_get_font_fallback_count_for_family(const pt_app *app,
                                                       const char *family);
+/* Since 1.2. */
 pt_api const char *pt_app_get_font_fallback_for_family(const pt_app *app,
                                                         const char *family,
                                                         int index);
+/* Since 1.2. */
 pt_api int pt_app_font_uncovered_count(const pt_app *app, const char *family,
                                        const char *text, size_t length);
 
+/* Since 1.0. */
 pt_api void pt_app_set_quit_on_last_window_close(pt_app *app, bool enabled);
 
 #ifdef __cplusplus

@@ -61,9 +61,11 @@ typedef void (*pt_paint_callback)(pt_widget *widget, pt_paint_context *context,
 
 /* Installs or removes a paint callback on any widget. Passing NULL clears it.
  * The callback data must stay valid until it is replaced or the widget is
- * destroyed. Calling this requests a redraw. The callback rules above apply. */
+ * destroyed. Calling this requests a redraw. The callback rules above apply.
+ * Since 1.1. */
 pt_api void pt_widget_set_paint_callback(pt_widget *widget, pt_paint_callback callback,
                                          void *user_data);
+/* Since 1.1. */
 pt_api void pt_widget_clear_paint_callback(pt_widget *widget);
 
 /* Paints one full frame of `window` into `pixels` at a scale of 1.0 with a
@@ -73,7 +75,7 @@ pt_api void pt_widget_clear_paint_callback(pt_widget *widget);
  * overlays, so calling it on a mapped window never swallows the next live
  * frame. It must not be called from a paint callback (the call is rejected and
  * records an error). Returns false for a NULL window, NULL buffer or
- * non-positive size. */
+ * non-positive size. Since 1.1. */
 pt_api bool pt_window_paint_pixels(pt_window *window, uint32_t *pixels, int width,
                                    int height);
 
@@ -100,64 +102,71 @@ pt_api bool pt_window_paint_pixels_ex(pt_window *window, uint32_t *pixels, int w
                                       int height, const pt_paint_pixels_desc *desc);
 
 /* Requests a repaint of this widget and its subtree. Unlike a window-level
- * redraw this damages the widget rectangle only. */
+ * redraw this damages the widget rectangle only. Since 1.1. */
 pt_api void pt_widget_request_redraw(pt_widget *widget);
 
 /* Requests a repaint of a sub-rectangle. Coordinates are widget-local logical
  * pixels and are clamped to the widget. Use this for small updates such as a
  * caret or cursor so the paint callback only needs to touch the visible
- * damage. */
+ * damage. Since 1.1. */
 pt_api void pt_widget_request_redraw_rect(pt_widget *widget, float x, float y,
                                           float width, float height);
 
-/* Geometry of the paint target, in logical pixels. */
+/* Geometry of the paint target, in logical pixels. Since 1.1. */
 pt_api float pt_paint_width(const pt_paint_context *context);
+/* Since 1.1. */
 pt_api float pt_paint_height(const pt_paint_context *context);
+/* Since 1.1. */
 pt_api float pt_paint_scale(const pt_paint_context *context);
 
 /* Returns the current damage clip in widget-local logical pixels. The paint
  * callback may be invoked once per damaged tile; callers can use this to skip
- * work outside the clip. Returns false when the clip is empty. */
+ * work outside the clip. Returns false when the clip is empty. Since 1.1. */
 pt_api bool pt_paint_clip_rect(const pt_paint_context *context, float *x, float *y,
                                float *width, float *height);
 
 /* Clip helpers: coordinates are widget-local and intersect with the widget
- * rectangle and every enclosing clip. Each push must have a matching pop. */
+ * rectangle and every enclosing clip. Each push must have a matching pop. Since 1.1. */
 pt_api void pt_paint_push_clip(pt_paint_context *context, float x, float y, float width,
                                float height);
+/* Since 1.1. */
 pt_api void pt_paint_pop_clip(pt_paint_context *context);
 
-/* Primitive drawing. */
+/* Primitive drawing. Since 1.1. */
 pt_api void pt_paint_fill_rect(pt_paint_context *context, float x, float y, float width,
                                float height, pt_color color);
+/* Since 1.1. */
 pt_api void pt_paint_fill_rounded_rect(pt_paint_context *context, float x, float y,
                                        float width, float height, float radius,
                                        pt_color color);
+/* Since 1.1. */
 pt_api void pt_paint_stroke_rect(pt_paint_context *context, float x, float y, float width,
                                  float height, float line_width, pt_color color);
+/* Since 1.1. */
 pt_api void pt_paint_draw_line(pt_paint_context *context, float x0, float y0, float x1,
                                float y1, float line_width, pt_color color);
 
 /* Draw a single line of UTF-8 text. `baseline` is the text baseline. The run is
  * not truncated; clip it with pt_paint_push_clip when needed. `size` is logical
- * pixels. Weight is a pt_font_weight value and slant a pt_font_slant value. */
+ * pixels. Weight is a pt_font_weight value and slant a pt_font_slant value.
+ * Since 1.1. */
 pt_api void pt_paint_draw_text(pt_paint_context *context, const char *family, float size,
                                int weight, int slant, float x, float baseline,
                                const char *text, size_t length, pt_color color);
 
 /* Returns true when the resolved font has a glyph for a Unicode code point.
- * Useful for selecting a fallback family per character. */
+ * Useful for selecting a fallback family per character. Since 1.1. */
 pt_api bool pt_paint_font_has_glyph(pt_paint_context *context, const char *family,
                                    float size, uint32_t codepoint);
 
-/* Measures a UTF-8 run in logical pixels. Returns 0 for empty text. */
+/* Measures a UTF-8 run in logical pixels. Returns 0 for empty text. Since 1.1. */
 pt_api float pt_paint_measure_text(pt_paint_context *context, const char *family,
                                    float size, int weight, int slant, const char *text,
                                    size_t length);
 
 /* Returns logical font metrics. cell_width is the advance of "M", useful for
  * monospace grids. Any out pointer may be NULL. Returns false when the font
- * cannot be resolved. */
+ * cannot be resolved. Since 1.1. */
 pt_api bool pt_paint_font_metrics(pt_paint_context *context, const char *family,
                                   float size, int weight, int slant, float *ascent,
                                   float *descent, float *line_height, float *cell_width);
@@ -201,11 +210,14 @@ typedef void (*pt_ime_commit_callback)(pt_window *window, const char *text, void
 typedef void (*pt_ime_preedit_callback)(pt_window *window, const char *text,
                                         int32_t cursor_begin, int32_t cursor_end,
                                         void *user_data);
+/* Since 1.1. */
 pt_api void pt_window_set_ime_callbacks(pt_window *window,
                                         pt_ime_commit_callback commit_callback,
                                         pt_ime_preedit_callback preedit_callback,
                                         void *user_data);
+/* Since 1.1. */
 pt_api void pt_window_set_ime_enabled(pt_window *window, bool enabled);
+/* Since 1.1. */
 pt_api void pt_window_set_ime_cursor_rect(pt_window *window, int x, int y, int width,
                                           int height);
 

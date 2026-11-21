@@ -37,7 +37,7 @@ Before tagging a release:
 
 - a clean `werror=1` build of the library, C/C++ examples and every C test;
 - `make check` (C suites, C++/Python/Java binding suites, exported-symbol and
-  API-baseline audit, 448/448 binding parity, the 0.6-0.10 surface audits,
+  API-baseline audit, 554/554 binding parity, the 0.6-0.10 surface audits,
   generated reference check);
 - `make perf-check` (dense, startup, data-view and guard benchmarks);
 - `tools/install-check.sh` (staged install, relocatable pkg-config, SONAME,
@@ -991,6 +991,146 @@ with libabigail before publishing if a type-level comparison is wanted.
   pointer event needs a live seat.
 - KWin/fcitx5 `commit_string` loss is mitigated by full-state resend, not a
   confirmed root cause. The live KWin/Mutter IME matrix remains to be recorded.
+
+The annotated tag is created from the final gate tree after the pending items
+close; this record is inside the release archive, so it does not quote a digest.
+
+## 1.2.0 validation record (2026-11-22)
+
+Environment: the integrated `m19/integration` tree at `a5179a1` on the reference
+machine (CachyOS, Wayland, niri 26.04) with the 1.0 toolchain (GCC 16.2.1,
+Python 3.14.8, OpenJDK 25.0.2), plus the docs branch that carries the version
+bump, the generated reference and the bilingual guides. The four wave-1
+branches, the wave-2 picker and icon branches and the stub generator were merged
+before this record; the three-language wrappers, their tests, the 1.2 examples
+and the final gate are the parallel integration work that closes the tag.
+
+The shared C surface, tests and documentation are complete on this tree. Figures
+marked `pending final gate run` are deliberately not quoted from an earlier
+release; they are filled in by the final gate pass.
+
+### Scope
+
+1.2.0 keeps every 1.1 signature and adds an append-only common-surface wave of
+106 functions:
+
+- Application-owned popups: `pt_popup_create`, `pt_popup_destroy`,
+  `pt_popup_show`, `pt_popup_reposition`, `pt_popup_dismiss`,
+  `pt_popup_is_open`, `pt_popup_content`, `pt_popup_set_on_dismiss`,
+  `pt_popup_set_placement`, `pt_popup_get_placement`, the
+  `pt_popup_anchor`/`pt_popup_placement` types and `PT_POPUP_MAX_OPEN`.
+- Per-run font fallback: the app chain and per-family override setters/getters,
+  `pt_app_font_uncovered_count` and the two chain bounds.
+- Clipboard media: `pt_window_clipboard_set_image_png`,
+  `pt_window_clipboard_get_image_png`, `pt_window_clipboard_set_uri_list` and
+  `pt_clipboard_image_max_dimension`.
+- Column persistence: `pt_table_set_column_key`, `pt_table_get_column_key`,
+  `pt_table_columns_save`, `pt_table_columns_restore` and the column/key/blob
+  limits.
+- Icon images: `pt_icon_image_load_file`, `_load_memory`, `_from_name`, `_ref`,
+  `_destroy`, `_width`, `_height`, `pt_button_set_icon_image`,
+  `pt_button_get_icon_image`, `pt_button_set_icon_tint`,
+  `pt_window_set_icon` and `pt_window_get_icon`.
+- Pickers: the 70 `pt_select_*`, `pt_date_*`/`pt_date_picker_*`,
+  `pt_number_picker_*` and `pt_color_picker_*` functions, the `pt_date` struct,
+  `pt_date_format` and the three picker callbacks.
+
+The public surface is **554 functions** in **907 baseline entries**
+(554 `func`, 281 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`, 6 `define`,
+1 `type`). The diff against the 785-entry 1.1 baseline is 106 additions and no
+removals, renames or signature changes; SONAME stays `libpt.so.1`. Every
+declaration carries a since marker (412 × 1.0, 36 × 1.1, 106 × 1.2) and the
+generated reference shows it per entry.
+
+### Behaviour changes
+
+The C ABI change is additive; no existing signature or enum value moved. The
+one interaction with an existing control was checked explicitly:
+
+- A picker is a new control that reports `pt_widget_combobox` as its kind so the
+  shipped dispatch hooks apply. `src/combobox.c` forwards to `src/picker.c` only
+  when the state carries a picker, so an ordinary combobox never takes the
+  forwarding path; the 203-check `test_combobox` suite and the 274-check
+  `test_selection` suite still pass unchanged. Calling the `pt_combobox_*` item
+  or mode API on a picker is a documented no-op.
+- Picker programmatic setters are silent, matching every other `set_selected`
+  and setter in the API; only user input fires the change callback. Invalid
+  text commits return false, keep the previous value and text, and record
+  `pt_get_last_error`.
+- Setting one clipboard type replaces the previous one, so a successful image
+  set makes the text getter return NULL. Image pixels are premultiplied
+  `0xAARRGGBB` on both sides, with the documented straight-alpha PNG conversion.
+- Font fallback chains are process-wide; an explicit chain is authoritative and
+  an uncovered codepoint stays tofu.
+- The pickers do not read the process locale: the date picture is explicit, the
+  committed decimal separator is `.` and the colour field is hex. This is new
+  control behaviour, not a change to an existing one.
+
+Anything that later changes an existing signature or an existing control's
+observable behaviour must be listed here before the tag.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass: `include/pt/base.h`, `Makefile` `VERSION`, README and the generated reference all say 1.2.0; SONAME `libpt.so.1` |
+| API baseline | pass: `api/pt.api` 554 functions / 907 entries; the reference names all 554 baseline functions |
+| Since audit | pass: 554/554 declarations carry Since 1.0/1.1/1.2; generated entries expose them |
+| C suites (headless) | pass: 34 suites, 6,913 checks; `test_popup` 314, `test_font_fallback` 131, `test_clipboard_media` 871, `test_column_persist` 1,390, `test_picker` 550, `test_icon` 178 |
+| ABI pins | pass: `tests/test_abi.c` 13 checks, including the new popup/icon/picker limits and `pt_date` offsets |
+| Bilingual documentation | pass: 9 public guides, no structural drift; code blocks byte-identical |
+| Binding parity | pending final gate run: target 554/554 in C++/Python/Java with an empty allowlist |
+| `make check` / `make check-bindings` | pending final gate run |
+| `make perf-check` | pending final gate run |
+| Live Wayland / live typing | pending final gate run |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pending final gate run |
+| `tools/release-check.sh --full` | pending final gate run; on this tree the non-full report passes version, baseline, reference, examples and bilingual gates and reports the in-flight parity gap (106 functions per language) plus the two human items |
+
+### ABI statement
+
+The 1.2.0 change is append-only within `libpt.so.1`: 106 new functions, three
+callback typedefs, two enum types (`pt_date_format`, `pt_popup_placement`) with
+appended constants, two public structs (`pt_date`, `pt_popup_anchor`) and two
+opaque handles (`pt_popup`, `pt_icon_image`), plus the documented limit macros.
+No existing enum value, struct field order or signature changed.
+`tests/test_abi.c` pins the new caps, the date field offsets, the popup
+placement values, the anchor layout and the callback pointer widths.
+`abidiff` (libabigail) is still not installed on the reference machine, so the
+release-time comparison is symbol-level: `nm -D --defined-only` on the 1.1.0 tag
+build and the 1.2.0 build is expected to show 448 → 554 exported `pt_*` symbols,
+**0 removed, 106 added**, and `readelf -d` keeps SONAME `libpt.so.1`. The actual
+counts and output belong to the final gate record; run `abidiff` where libabigail
+is available.
+
+### Known issues
+
+- The fake-compositor wire-replay facility still does not exist. Popup event
+  order, font fallback selection and clipboard media paths are covered by
+  headless state tests and the live niri run; the in-process fake compositor is
+  the inherited M18 open item.
+- SVG icons are deferred. `pt_icon_image` decodes PNG only; a theme that ships
+  scalable SVGs only does not resolve.
+- The number picker reports the combo-box accessibility role and no expandable
+  state; a dedicated spin-box role would be an append-only enum addition in a
+  later minor.
+- The toplevel-icon submission path has no live compositor recording. The
+  matrix records KWin/Labwc/Muffin/Jay/Pila as exposing
+  `xdg-toplevel-icon-v1`, but none of them was run in this pass; headless
+  submission and the niri/Sway/Weston no-op path are tested.
+- Pickers are locale-independent by design (explicit date picture, `.` decimal
+  separator, hex colour). Localized month and group separators are the
+  application's responsibility.
+- The 1.2 examples are not in the tree yet; no example exercises popups,
+  pickers, icon images, clipboard media, font fallback or column persistence.
+  The Java demos are the explicit gap for the final integration.
+- The three-language wrappers and their dispatch tests are in flight. The
+  parity target is 554/554 with an empty allowlist; `make check` is the
+  authority.
+- M18's `preedit_hint` presentation and
+  `show_input_panel`/`hide_input_panel` remain deferred; the custom IME event
+  surface and full-state resend are unchanged.
+- Binding raw-callback dispatch assertions still need a live seat; registration
+  and callback-free paths are headless-tested for all three bindings.
 
 The annotated tag is created from the final gate tree after the pending items
 close; this record is inside the release archive, so it does not quote a digest.
