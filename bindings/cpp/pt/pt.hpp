@@ -403,6 +403,76 @@ class drop_offer {
     pt_drop_offer *handle_ = nullptr;
 };
 
+/* Reference-counted raster icon. An icon_image owns exactly one reference;
+ * copy/move follows the reference count rather than duplicating pixels. Use
+ * ref() to share the image and reset()/the destructor to drop this handle's
+ * reference. Loaders return an invalid handle on failure, leaving the reason in
+ * pt::last_error(). */
+class icon_image {
+  public:
+    icon_image() = default;
+    explicit icon_image(pt_icon_image *handle) : handle_(handle) {}
+    ~icon_image() { reset(); }
+    icon_image(const icon_image &other) : handle_(pt_icon_image_ref(other.handle_)) {}
+    icon_image &operator=(const icon_image &other) {
+        if (this != &other) {
+            pt_icon_image *next = pt_icon_image_ref(other.handle_);
+            reset();
+            handle_ = next;
+        }
+        return *this;
+    }
+    icon_image(icon_image &&other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
+    icon_image &operator=(icon_image &&other) noexcept {
+        if (this != &other) {
+            reset();
+            handle_ = std::exchange(other.handle_, nullptr);
+        }
+        return *this;
+    }
+
+    /* Loads a PNG file. The returned handle owns one reference. */
+    [[nodiscard]] static icon_image load_file(std::string_view path) {
+        std::string value = copy_string(path);
+        return icon_image(pt_icon_image_load_file(value.c_str()));
+    }
+    /* Copies and decodes PNG bytes from memory. */
+    [[nodiscard]] static icon_image load_memory(std::span<const uint8_t> data) {
+        return icon_image(
+            pt_icon_image_load_memory(data.empty() ? nullptr : data.data(), data.size()));
+    }
+    /* Looks a name up in the hicolor theme. `size` is the preferred logical
+     * size; passing 0 keeps Pt's default size selection. */
+    [[nodiscard]] static icon_image from_name(std::string_view name, int size = 0) {
+        std::string value = copy_string(name);
+        return icon_image(pt_icon_image_from_name(value.c_str(), size));
+    }
+
+    [[nodiscard]] pt_icon_image *get() const { return handle_; }
+    [[nodiscard]] bool valid() const { return handle_ != nullptr; }
+    [[nodiscard]] int width() const { return pt_icon_image_width(handle_); }
+    [[nodiscard]] int height() const { return pt_icon_image_height(handle_); }
+
+    /* Returns another owner of the same image, or an invalid handle for an
+     * invalid source. */
+    [[nodiscard]] icon_image ref() const { return icon_image(pt_icon_image_ref(handle_)); }
+    /* Drops this handle's reference and becomes invalid. */
+    void reset() {
+        if (handle_) {
+            pt_icon_image_destroy(handle_);
+            handle_ = nullptr;
+        }
+    }
+    /* Releases this handle's reference without destroying it. The caller then
+     * owns the raw handle and must destroy it exactly once. */
+    [[nodiscard]] pt_icon_image *release() {
+        return std::exchange(handle_, nullptr);
+    }
+
+  private:
+    pt_icon_image *handle_ = nullptr;
+};
+
 class widget {
   public:
     widget() = default;
@@ -881,6 +951,36 @@ class widget {
         return *this;
     }
     [[nodiscard]] float icon_size() const { return pt_icon_get_size(handle_); }
+
+    /* Raster icon slot for buttons. The button takes its own reference, so the
+     * caller may reset `image` immediately after setting. An invalid handle
+     * clears the slot and falls back to the built-in vector glyph. */
+    widget &set_icon_image(const icon_image &image) {
+        pt_button_set_icon_image(handle_, image.get());
+        return *this;
+    }
+    widget &set_icon_image(pt_icon_image *image) {
+        pt_button_set_icon_image(handle_, image);
+        return *this;
+    }
+    widget &clear_icon_image() {
+        pt_button_set_icon_image(handle_, nullptr);
+        return *this;
+    }
+    /* Borrowed slot pointer; invalidated when the slot is replaced or the
+     * widget is destroyed. */
+    [[nodiscard]] pt_icon_image *icon_image_raw() const {
+        return pt_button_get_icon_image(handle_);
+    }
+    /* Owning copy of the slot (one extra reference), or an invalid handle. */
+    [[nodiscard]] icon_image icon_image_ref() const {
+        return icon_image(pt_icon_image_ref(pt_button_get_icon_image(handle_)));
+    }
+    /* 0xRRGGBBAA tint for the raster slot; 0 restores the image's colours. */
+    widget &set_icon_tint(pt_color tint) {
+        pt_button_set_icon_tint(handle_, tint);
+        return *this;
+    }
 
     widget &set_column_count(uint32_t count) {
         pt_table_set_column_count(handle_, count);
@@ -1878,6 +1978,77 @@ class window {
 
   private:
     pt_window *handle_ = nullptr;
+};
+
+/* Application-owned popup surface. The wrapper owns the popup and, through it,
+ * the adopted content tree: do not free or use `content` after the popup is
+ * destroyed. A popup is destroyed automatically with its parent window; the
+ * wrapper must not be destroyed twice in that case, so it is intended for a
+ * popup whose window outlives it. The dismiss callback may destroy or re-show
+ * the popup through the C API, but must not reset this wrapper from inside the
+ * callback. */
+class popup {
+  public:
+    popup() = default;
+    explicit popup(pt_window *owner, pt_widget *content)
+        : handle_(pt_popup_create(owner, content)) {}
+    popup(const window &owner, widget content) : popup(owner.get(), content.get()) {}
+    ~popup() { reset(); }
+    popup(const popup &) = delete;
+    popup &operator=(const popup &) = delete;
+    popup(popup &&other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
+    popup &operator=(popup &&other) noexcept {
+        if (this != &other) {
+            reset();
+            handle_ = std::exchange(other.handle_, nullptr);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] pt_popup *get() const { return handle_; }
+    [[nodiscard]] bool valid() const { return handle_ != nullptr; }
+
+    /* Opens with an anchor in parent-window logical pixels. Returns false on a
+     * failed anchor or when the per-window open limit is reached. */
+    bool show(popup_anchor anchor) const { return pt_popup_show(handle_, anchor); }
+    bool show(float x, float y, float width, float height) const {
+        return show(popup_anchor{x, y, width, height});
+    }
+    bool show(rect area) const { return show(area.x, area.y, area.width, area.height); }
+    /* Updates an open popup; false when closed or the anchor is invalid. */
+    bool reposition(popup_anchor anchor) const { return pt_popup_reposition(handle_, anchor); }
+    bool reposition(float x, float y, float width, float height) const {
+        return reposition(popup_anchor{x, y, width, height});
+    }
+    bool reposition(rect area) const {
+        return reposition(area.x, area.y, area.width, area.height);
+    }
+    /* Closes and then runs the dismiss callback. Safe in any state. */
+    void dismiss() const { pt_popup_dismiss(handle_); }
+    [[nodiscard]] bool is_open() const { return pt_popup_is_open(handle_); }
+    /* Borrowed content widget; invalid once the popup is destroyed. */
+    [[nodiscard]] widget content() const { return widget(pt_popup_content(handle_)); }
+    popup &on_dismiss(pt_popup_dismiss_callback callback, void *data = nullptr) {
+        pt_popup_set_on_dismiss(handle_, callback, data);
+        return *this;
+    }
+    popup &set_placement(popup_placement placement) {
+        pt_popup_set_placement(handle_, placement);
+        return *this;
+    }
+    [[nodiscard]] popup_placement placement() const {
+        return pt_popup_get_placement(handle_);
+    }
+    /* Destroys early without running the dismiss callback. */
+    void reset() {
+        if (handle_) {
+            pt_popup_destroy(handle_);
+            handle_ = nullptr;
+        }
+    }
+
+  private:
+    pt_popup *handle_ = nullptr;
 };
 
 class menu {
