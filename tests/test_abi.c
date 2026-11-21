@@ -297,3 +297,4 @@ _Static_assert(sizeof(pt_number_callback) == sizeof(void (*)(void)),
                "number callback is a function pointer");
 _Static_assert(sizeof(pt_color_callback) == sizeof(void (*)(void)),
                "colour callback is a function pointer");
+_Static_assert(sizeof(pt_date) == 8, "date padding stays explicit in the layout");

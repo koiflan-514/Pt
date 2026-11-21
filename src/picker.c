@@ -47,6 +47,7 @@ static void pt_date_today_click(pt_widget *button, void *user_data);
 static void pt_number_up_click(pt_widget *button, void *user_data);
 static void pt_number_down_click(pt_widget *button, void *user_data);
 static void color_rebuild_popup(pt_widget *host, pt_picker *picker);
+static void date_rebuild_popup(pt_widget *host, pt_picker *picker);
 
 pt_picker *pt_picker_of(const pt_widget *widget) {
     if (!widget || widget->kind != pt_widget_combobox) {
@@ -127,6 +128,13 @@ static pt_rect picker_anchor(const pt_widget *host) {
     float h = 0.0f;
     pt_widget_get_bounds(host, &x, &y, &w, &h);
     return (pt_rect){x, y, pt_max_float(1.0f, w), pt_max_float(1.0f, h)};
+}
+
+/* The one anchor every show and reposition uses, so rebuilding a list does not
+ * make the panel jump by the gap between the field and the surface. */
+static pt_popup_anchor picker_popup_anchor(const pt_widget *host) {
+    pt_rect rect = picker_anchor(host);
+    return (pt_popup_anchor){rect.x, rect.y + rect.h + picker_popup_gap, rect.w, rect.h};
 }
 
 /* ---------- civil date arithmetic ---------- */
@@ -643,6 +651,9 @@ static void date_commit(pt_widget *host, pt_picker *picker, pt_date date, bool n
     picker->focus_date = date;
     date_sync_view(picker);
     date_refresh_text(host, picker);
+    if (picker->popup && pt_popup_is_open(picker->popup)) {
+        date_rebuild_popup(host, picker);
+    }
     pt_widget_a11y_emit(host, pt_a11y_event_selection_changed);
     if (changed) {
         pt_widget_a11y_emit(host, pt_a11y_event_value_changed);
@@ -672,7 +683,6 @@ static void date_rebuild_popup(pt_widget *host, pt_picker *picker) {
         return;
     }
     pt_widget_clear_children(picker->content);
-    pt_date first = date_first_of_month(picker->view_year, picker->view_month);
     pt_date grid_start = date_grid_start(picker->view_year, picker->view_month);
 
     pt_widget *header = pt_row_create(picker->content);
@@ -757,7 +767,6 @@ static void date_rebuild_popup(pt_widget *host, pt_picker *picker) {
         pt_widget_set_font_size(cell, 12.0f);
         pt_widget_append(grid, cell);
     }
-    (void)first;
 
     picker->content->requested_width = 7.0f * 32.0f + 6.0f * 2.0f;
     picker->content->requested_height = 234.0f;
@@ -775,9 +784,7 @@ static void date_focus_set(pt_widget *host, pt_picker *picker, pt_date date) {
         pt_window_invalidate_layout(window, NULL);
     }
     if (picker->popup && pt_popup_is_open(picker->popup)) {
-        pt_rect anchor = picker_anchor(host);
-        pt_popup_reposition(picker->popup,
-                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+        pt_popup_reposition(picker->popup, picker_popup_anchor(host));
     }
     pt_widget_mark_dirty(host, false);
     pt_widget_a11y_emit(host, pt_a11y_event_state_changed);
@@ -1427,9 +1434,7 @@ static void picker_rebuild_popup(pt_widget *host, pt_picker *picker) {
         pt_window_invalidate_layout(window, NULL);
     }
     if (picker->popup && pt_popup_is_open(picker->popup)) {
-        pt_rect anchor = picker_anchor(host);
-        pt_popup_reposition(picker->popup,
-                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+        pt_popup_reposition(picker->popup, picker_popup_anchor(host));
     }
     pt_widget_mark_dirty(host, false);
 }
@@ -1445,10 +1450,7 @@ static void picker_popup_show(pt_widget *host, pt_picker *picker) {
         return;
     }
     picker_rebuild_popup(host, picker);
-    pt_rect anchor = picker_anchor(host);
-    if (!pt_popup_show(picker->popup,
-                       (pt_popup_anchor){anchor.x, anchor.y + anchor.h + picker_popup_gap,
-                                         anchor.w, anchor.h})) {
+    if (!pt_popup_show(picker->popup, picker_popup_anchor(host))) {
         pt_popup *failed = picker->popup;
         picker->popup = NULL;
         picker->content = NULL;
@@ -1472,8 +1474,15 @@ void pt_picker_open(pt_widget *host) {
     }
     if (picker->kind == pt_picker_kind_select) {
         /* Opening without typing starts from the whole model, committed item
-         * highlighted, exactly like the combo-box list. */
+         * highlighted, exactly like the combo-box list. With a filter already
+         * in the field, the committed item may not be a candidate, so the
+         * first match takes the highlight instead. */
+        select_rebuild_visible(picker);
         picker->highlighted = picker->selected;
+        if (select_position_of(picker, picker->highlighted) < 0) {
+            picker->highlighted =
+                picker->visible_count > 0 ? picker->visible[0] : pt_list_index_none;
+        }
     } else if (picker->kind == pt_picker_kind_date) {
         pt_date focus = pt_date_is_valid(picker->date) ? picker->date : pt_date_today();
         if (!pt_date_is_valid(focus)) {
@@ -2090,8 +2099,9 @@ void pt_select_add_item_with_data(pt_widget *select, const char *text, void *dat
     if (!picker) {
         return;
     }
+    uint32_t before = picker->option_count;
     pt_select_add_item(select, text);
-    if (picker->option_count > 0 && picker->options[picker->option_count - 1u].text) {
+    if (picker->option_count == before + 1u) {
         picker->options[picker->option_count - 1u].data = data;
     }
 }
@@ -2223,9 +2233,15 @@ void pt_select_set_max_popup_rows(pt_widget *select, uint32_t rows) {
         rows = PT_PICKER_MAX_CANDIDATES;
     }
     picker->max_rows = rows;
-    if (picker->selected != pt_list_index_none &&
-        !(picker->query && picker->query[0])) {
-        picker->highlighted = picker->selected;
+    select_rebuild_visible(picker);
+    if (select_position_of(picker, picker->highlighted) < 0) {
+        if (picker->selected != pt_list_index_none &&
+            select_position_of(picker, picker->selected) >= 0) {
+            picker->highlighted = picker->selected;
+        } else {
+            picker->highlighted =
+                picker->visible_count > 0 ? picker->visible[0] : pt_list_index_none;
+        }
     }
     if (pt_picker_is_open(select)) {
         picker_rebuild_popup(select, picker);
@@ -2329,8 +2345,9 @@ void pt_date_picker_set_format(pt_widget *picker_widget, pt_date_format format) 
     picker->format = format;
     date_refresh_text(picker_widget, picker);
     if (pt_picker_is_open(picker_widget)) {
-        pt_widget_mark_dirty(picker_widget, false);
+        date_rebuild_popup(picker_widget, picker);
     }
+    pt_widget_mark_dirty(picker_widget, false);
     pt_widget_a11y_emit(picker_widget, pt_a11y_event_text_changed);
 }
 
@@ -2676,9 +2693,7 @@ void pt_color_picker_add_preset(pt_widget *picker_widget, pt_color color) {
     }
     if (pt_picker_is_open(picker_widget)) {
         color_rebuild_popup(picker_widget, picker);
-        pt_rect anchor = picker_anchor(picker_widget);
-        pt_popup_reposition(picker->popup,
-                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+        pt_popup_reposition(picker->popup, picker_popup_anchor(picker_widget));
         pt_window *window = pt_widget_window(picker_widget);
         if (window) {
             pt_window_invalidate_layout(window, NULL);
@@ -2696,9 +2711,7 @@ void pt_color_picker_clear_presets(pt_widget *picker_widget) {
     picker->highlighted = 0u;
     if (pt_picker_is_open(picker_widget)) {
         color_rebuild_popup(picker_widget, picker);
-        pt_rect anchor = picker_anchor(picker_widget);
-        pt_popup_reposition(picker->popup,
-                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+        pt_popup_reposition(picker->popup, picker_popup_anchor(picker_widget));
     }
     pt_widget_mark_dirty(picker_widget, false);
 }
@@ -2778,4 +2791,15 @@ bool pt_picker_a11y_value(const pt_widget *widget, float *value) {
 bool pt_picker_a11y_has_popup(const pt_widget *widget) {
     pt_picker *picker = pt_picker_of(widget);
     return !picker || picker->kind != pt_picker_kind_number;
+}
+
+bool pt_picker_a11y_has_value(const pt_widget *widget) {
+    pt_picker *picker = pt_picker_of(widget);
+    if (!picker) {
+        return false;
+    }
+    if (picker->kind == pt_picker_kind_number) {
+        return picker->has_value;
+    }
+    return true;
 }

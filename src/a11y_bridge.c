@@ -572,6 +572,10 @@ static bool a11y_obj_has_value(const pt_a11y_obj *obj) {
     case pt_widget_radio:
     case pt_widget_segmented:
         return true;
+    case pt_widget_combobox:
+        /* Only the 1.2 pickers expose a Value interface; a plain combo box has
+         * no numeric value to report. */
+        return pt_picker_a11y_has_value(obj->widget);
     default:
         return false;
     }

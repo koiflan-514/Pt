@@ -207,6 +207,13 @@ static void test_select_model(void) {
     }
     pt_check(pt_select_get_item_count(select) == PT_SELECT_MAX_ITEMS);
     pt_check(pt_get_last_error()[0] != '\0');
+    /* An add beyond the cap must not rewrite the existing last item's data. */
+    int kept = 9;
+    int rejected = 10;
+    pt_select_set_item_data(select, picker_of(select)->option_count - 1u, &kept);
+    pt_select_add_item_with_data(select, "Overflow", &rejected);
+    pt_check(pt_select_get_item_count(select) == PT_SELECT_MAX_ITEMS);
+    pt_check(pt_select_get_item_data(select, PT_SELECT_MAX_ITEMS - 1u) == &kept);
 
     pt_widget_destroy(select);
 }
@@ -234,10 +241,16 @@ static void test_select_keyboard(pt_app *app) {
     pt_check(strcmp(pt_select_get_query(fx.select), "n") == 0);
     pt_check(pt_widget_get_a11y_state(fx.select) & pt_a11y_state_expanded);
 
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    float popup_y = picker_of(fx.select)->popup->overlay.rect.y;
     type(fx.window, XKB_KEY_o, "o");
     type(fx.window, XKB_KEY_r, "r");
     pt_check(pt_select_get_match_count(fx.select) == 2u);
     pt_check(log.changes == 0);
+    /* Rebuilding the candidate rows does not move the surface by the anchor
+     * gap; show and reposition share one anchor. */
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_check_near(picker_of(fx.select)->popup->overlay.rect.y, popup_y, 0.01);
 
     /* A space filters like any character and can empty the candidate set. */
     type(fx.window, XKB_KEY_space, " ");
@@ -430,6 +443,8 @@ static void test_select_limits_and_a11y(pt_app *app) {
     pt_select_set_max_popup_rows(fx.select, 5000u);
     pt_check(pt_select_get_max_popup_rows(fx.select) == PT_PICKER_MAX_CANDIDATES);
     pt_select_set_max_popup_rows(fx.select, 2u);
+    /* The candidate view is rebuilt even while the popup is closed. */
+    pt_check(pt_select_get_match_count(fx.select) == 2u);
     pt_select_set_selected(fx.select, 1u);
     pt_select_open(fx.select);
     pt_check(pt_select_get_match_count(fx.select) == 2u);
@@ -457,6 +472,16 @@ static void test_select_limits_and_a11y(pt_app *app) {
 
     pt_select_close(fx.select);
     pt_check(!(pt_widget_get_a11y_state(fx.select) & pt_a11y_state_expanded));
+
+    /* Opening with a filter whose committed item is not a candidate lands the
+     * highlight on the first match instead of a hidden item. */
+    pt_select_set_selected(fx.select, 3u);
+    pt_select_set_query(fx.select, "option 5");
+    pt_select_open(fx.select);
+    pt_check(pt_select_get_match_count(fx.select) == 1u);
+    pt_check(picker_of(fx.select)->highlighted == 5u);
+    pt_select_close(fx.select);
+    pt_select_set_query(fx.select, "");
     fixture_close(&fx);
 }
 
@@ -764,6 +789,20 @@ static void test_date_keyboard(pt_app *app) {
     pt_widget_set_text(field, "nonsense");
     type(fx.window, XKB_KEY_Escape, NULL);
     pt_check(strcmp(pt_widget_get_text(field), "2027-03-04") == 0);
+
+    /* A programmatic date or picture change while the calendar is open keeps
+     * the grid in sync. */
+    pt_check(pt_date_picker_set_date(picker, (pt_date){2026, 12, 15}));
+    pt_date_picker_open(picker);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_widget *moved = find_named(picker_of(picker)->content, "2026-12-15");
+    pt_check(moved != NULL);
+    pt_check(moved && moved->row_selected);
+    pt_date_picker_set_format(picker, pt_date_format_dmy);
+    pt_check(count_kind(picker_of(picker)->content, pt_widget_list_row) == 42u);
+    pt_check(strcmp(pt_widget_get_text(field), "15/12/2026") == 0);
+    pt_date_picker_set_format(picker, pt_date_format_iso);
+    pt_date_picker_close(picker);
 
     /* Tab closes a calendar popup and continues focus order. */
     type(fx.window, XKB_KEY_F4, NULL);

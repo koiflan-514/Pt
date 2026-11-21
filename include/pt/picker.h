@@ -68,10 +68,12 @@
  * box role, the expanded state while its popup is open (number pickers have no
  * popup and report no expandable state) and a numeric value: select exposes the
  * selected item index (-1 for none), date exposes YYYYMMDD (0 when empty),
- * number exposes the value (only while it has one) and colour exposes the
- * packed 0xRRGGBBAA value. Popup rows and calendar/palette cells expose names
- * and the selected state; a select row that carries the committed value also
- * exposes the current state through the built-in check glyph.
+ * number exposes the value (only while it has one) and colour exposes its RGB
+ * part normalised to [0, 1], because the accessibility Value interface carries
+ * one float and alpha would not survive it. Popup rows and calendar/palette
+ * cells expose names and the selected state; a select row that carries the
+ * committed value also exposes the current state through the built-in check
+ * glyph.
  *
  * Limits. The select model is capped at PT_SELECT_MAX_ITEMS items and a popup
  * exposes at most PT_PICKER_MAX_CANDIDATES matching rows. The colour palette is
@@ -211,8 +213,9 @@ pt_api bool pt_date_is_valid(pt_date date);
  * Since 1.2. */
 pt_api pt_widget *pt_date_picker_create(pt_widget *parent);
 
-/* Sets the committed date. A zero or invalid date clears the value and returns
- * true; an otherwise invalid date returns false and changes nothing. Silent. */
+/* Sets the committed date. A zero-initialized date clears the value and returns
+ * true; a structural error (bad month, day or year) returns false and changes
+ * nothing. Silent. */
 pt_api bool pt_date_picker_set_date(pt_widget *picker, pt_date date);
 pt_api pt_date pt_date_picker_get_date(const pt_widget *picker);
 pt_api void pt_date_picker_clear(pt_widget *picker);

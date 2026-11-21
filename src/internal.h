@@ -754,6 +754,9 @@ bool pt_picker_popup_tab(pt_widget *host, bool shift);
 /* Accessibility hooks used by a11y.c for the host widget. */
 bool pt_picker_a11y_value(const pt_widget *widget, float *value);
 bool pt_picker_a11y_has_popup(const pt_widget *widget);
+/* True when the picker currently exposes a Value interface (a number picker
+ * only once it has a value). Used by the AT-SPI bridge's interface gating. */
+bool pt_picker_a11y_has_value(const pt_widget *widget);
 
 /* ---------- widgets ---------- */
 
