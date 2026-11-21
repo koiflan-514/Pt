@@ -112,12 +112,6 @@ _Static_assert(pt_text_align_end == 2, "text align end must stay 2");
 _Static_assert(pt_font_weight_regular == 400, "regular weight must stay 400");
 _Static_assert(pt_font_weight_bold == 700, "bold weight must stay 700");
 _Static_assert(pt_font_slant_oblique == 2, "oblique must stay 2");
-
-/* M19: font-fallback
- * The chain bounds size application arrays and are part of the public contract;
- * increasing one changes the documented ceiling, so it is pinned like an enum. */
-_Static_assert(PT_FONT_FALLBACK_MAX_FAMILIES == 8, "fallback chain cap must stay 8");
-_Static_assert(PT_FONT_FALLBACK_MAX_OVERRIDES == 16, "fallback override cap must stay 16");
 _Static_assert(pt_text_span_underline == (1u << 0), "underline span bit");
 _Static_assert(pt_text_span_has_size == (1u << 5), "size span bit");
 _Static_assert(pt_key_modifier_shift == (1u << 0), "shift modifier bit");
@@ -128,12 +122,6 @@ _Static_assert(pt_list_index_none == (uint32_t)-1, "list none sentinel");
 _Static_assert(pt_table_column_none == (uint32_t)-1, "column none sentinel");
 _Static_assert(pt_row_key_none == (uint64_t)-1, "row key none sentinel");
 _Static_assert(PT_TABLE_MAX_SORT_COLUMNS == 4, "four sort columns");
-
-/* M19: column-persist */
-_Static_assert(PT_TABLE_MAX_COLUMNS == 1024u, "1024 column limit");
-_Static_assert(PT_TABLE_COLUMN_KEY_MAX == 64u, "64 byte column key limit");
-_Static_assert(PT_TABLE_COLUMN_LAYOUT_MAX == 262144u, "256 KiB layout blob cap");
-
 _Static_assert(PT_STYLUS_BUTTON_BARREL == 0x1u, "barrel button bit");
 _Static_assert(PT_STYLUS_BUTTON_SECONDARY == 0x2u, "secondary button bit");
 _Static_assert(PT_STYLUS_BUTTON_TERTIARY == 0x4u, "tertiary button bit");
@@ -221,12 +209,6 @@ _Static_assert(sizeof(((pt_pointer_event *)0)->click_count) == sizeof(uint32_t),
                "click count is 32-bit");
 _Static_assert(sizeof(((pt_pointer_event *)0)->pressed) == sizeof(bool), "pressed is bool");
 
-/* M19: clipboard-media. The decoded-pixel cap is part of the public contract
- * and is pinned like the other sentinels so a later lowering cannot silently
- * reject images an application was promised. */
-_Static_assert(pt_clipboard_image_max_dimension == 8192,
-               "clipboard image cap must stay 8192");
-
 /* Runtime invariants that cannot be expressed as an offset comparison. */
 int main(void) {
     char version[32];
@@ -273,3 +255,20 @@ _Static_assert(sizeof(pt_popup_anchor) == 4 * sizeof(float), "anchor has four fl
 _Static_assert(sizeof(pt_popup *) == sizeof(void *), "popup handle is a pointer");
 _Static_assert(sizeof(pt_popup_dismiss_callback) == sizeof(void (*)(void)),
                "popup dismiss callback is a function pointer");
+
+/* M19: font-fallback
+ * The chain bounds size application arrays and are part of the public contract;
+ * increasing one changes the documented ceiling, so it is pinned like an enum. */
+_Static_assert(PT_FONT_FALLBACK_MAX_FAMILIES == 8, "fallback chain cap must stay 8");
+_Static_assert(PT_FONT_FALLBACK_MAX_OVERRIDES == 16, "fallback override cap must stay 16");
+
+/* M19: clipboard-media. The decoded-pixel cap is part of the public contract
+ * and is pinned like the other sentinels so a later lowering cannot silently
+ * reject images an application was promised. */
+_Static_assert(pt_clipboard_image_max_dimension == 8192,
+               "clipboard image cap must stay 8192");
+
+/* M19: column-persist */
+_Static_assert(PT_TABLE_MAX_COLUMNS == 1024u, "1024 column limit");
+_Static_assert(PT_TABLE_COLUMN_KEY_MAX == 64u, "64 byte column key limit");
+_Static_assert(PT_TABLE_COLUMN_LAYOUT_MAX == 262144u, "256 KiB layout blob cap");

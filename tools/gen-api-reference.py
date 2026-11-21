@@ -132,6 +132,15 @@ OWNED_COPIES = {
     "pt_uri_list_get": "the caller owns the returned string and releases it with `pt_free`",
 }
 
+# Functions whose header contract promises a non-NULL pointer result. The
+# generic "Returns NULL ..." note is suppressed so the header, which is
+# authoritative, is not contradicted. `pt_table_get_column_key` shares its doc
+# block with the preceding setter, so an explicit list is more reliable than
+# scanning the attached comment.
+NEVER_NULL_RETURNS = {
+    "pt_table_get_column_key",
+}
+
 
 def load_audit():
     path = ROOT / "tools" / "api-audit.py"
@@ -305,7 +314,11 @@ def contract_notes(name: str, return_type: str) -> list[str]:
                              "pt_a11y_role", "pt_a11y_state", "pt_color_scheme",
                              "pt_popup_policy", "pt_a11y_status", "pt_sort_direction",
                              "pt_widget_kind") and "*" in return_type:
-        if name not in BORROWED_POINTERS and name not in OWNED_COPIES:
+        if (
+            name not in BORROWED_POINTERS
+            and name not in OWNED_COPIES
+            and name not in NEVER_NULL_RETURNS
+        ):
             notes.append("Returns NULL for invalid arguments or when no value is available.")
 
     return notes
