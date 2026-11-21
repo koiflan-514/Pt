@@ -8,7 +8,7 @@ PYTHON ?= python3
 JAVA ?= java
 JAVAC ?= javac
 
-VERSION := 1.0.0
+VERSION := 1.1.0
 SONAME := libpt.so.1
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 1767225600)
 .DEFAULT_GOAL := all
@@ -86,6 +86,10 @@ CPP_EXAMPLES := $(patsubst examples/cpp/%.cpp,$(EXAMPLES)/cpp/%,$(wildcard examp
 	run-gallery run-notes run-counter run-interaction run-data run-a11y perf-check \
 	run-python run-java run-cpp-workspace run-python-workspace run-java-workspace \
 	run-combobox run-cpp-combobox run-python-combobox run-java-combobox dist \
+	run-custom-paint run-primary-selection run-fd-watch \
+	run-cpp-custom-paint run-cpp-primary-selection \
+	run-python-custom-paint run-python-primary-selection \
+	run-java-custom-paint run-java-primary-selection run-java-fd-watch \
 	api-check api-update api-docs
 
 all: lib examples
@@ -287,16 +291,51 @@ run-data: all
 run-a11y: all
 	$(EXAMPLES)/c/accessibility
 
+run-custom-paint: $(EXAMPLES)/c/custom_paint
+	$(EXAMPLES)/c/custom_paint
+
+run-primary-selection: $(EXAMPLES)/c/primary_selection
+	$(EXAMPLES)/c/primary_selection
+
+run-fd-watch: $(EXAMPLES)/c/fd_watch
+	$(EXAMPLES)/c/fd_watch
+
 run-counter: all
 	$(EXAMPLES)/cpp/counter
+
+run-cpp-custom-paint: $(EXAMPLES)/cpp/custom_paint
+	$(EXAMPLES)/cpp/custom_paint
+
+run-cpp-primary-selection: $(EXAMPLES)/cpp/primary_selection
+	$(EXAMPLES)/cpp/primary_selection
 
 run-python: lib
 	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
 		$(PYTHON) examples/python/counter.py
 
+run-python-custom-paint: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/custom_paint.py
+
+run-python-primary-selection: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/primary_selection.py
+
 run-java: java-example
 	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
 		-cp $(BUILD)/java HelloPt
+
+run-java-custom-paint: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
+		-cp $(BUILD)/java CustomPaint
+
+run-java-primary-selection: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
+		-cp $(BUILD)/java PrimarySelection
+
+run-java-fd-watch: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
+		-cp $(BUILD)/java FdWatch
 
 run-cpp-workspace: all
 	$(EXAMPLES)/cpp/workspace
