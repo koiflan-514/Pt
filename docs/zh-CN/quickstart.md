@@ -1022,10 +1022,13 @@ pt_window_set_decoration_mode(window, pt_decoration_mode_server);
 ```
 
 `pt_decoration_mode_auto` 遵循框架默认策略，在 1.1 中即客户端装饰。请求只是
-偏好：Pt 分别跟踪请求模式和生效模式，并按 `configure` 返回的模式布局窗口。
-Sway 会对平铺窗口强制服务端装饰，而 Mutter 和 Weston 不提供装饰管理器，
-因此客户端请求仍可能得到合成器绘制的边框，或得到 Pt 的标题栏。全屏会在
-任何模式下隐藏标题栏。各合成器的行为记录在
+偏好：Pt 分别跟踪请求模式和生效模式，`pt_window_get_decoration_mode` 报告
+请求，`pt_window_get_effective_decoration_mode` 报告 `configure` 最终决定的
+模式，窗口按生效模式布局。Sway 会对平铺窗口强制服务端装饰，而 Mutter 和
+Weston 不提供装饰管理器，因此客户端请求仍可能得到合成器绘制的边框，或得到
+Pt 的标题栏。全屏会在任何模式下隐藏标题栏。窗口不可调整大小，或合成器未
+声明最大化能力时，`pt_window_maximize` 返回 false，标题栏的最大化按钮也会
+同时禁用。各合成器的行为记录在
 [compositor-matrix.md](../compositor-matrix.md) 中。
 
 关闭回调返回 `false` 以否决关闭：
@@ -1445,9 +1448,10 @@ pt_app_unwatch_fd(app, watch); /* also safe from inside the callback */
 `pt_fd_event_hangup`。`POLLHUP`、`POLLERR` 和 `POLLNVAL` 以错误事件到达，
 并且回调至少会触发一次。回调在 UI 线程上运行且不得阻塞；回调可以取消自身
 的监视，Pt 会将释放推迟到分发返回之后。描述符是借用的——Pt 从不关闭它——
-并且每个应用对同一描述符只监视一次；重复监视会被拒绝并返回 0。监视像
-定时器一样计入 `pt_app_run_for` 的超时，因此即使没有其他事件，运行也会为
-它们唤醒。
+并且每个应用对同一描述符只监视一次；重复监视会被拒绝并返回 0。需要由应用
+接管描述符时使用 `pt_app_watch_fd_owned`：它在取消监视或应用销毁时关闭
+描述符，并遵循相同的重复拒绝规则。监视像定时器一样计入
+`pt_app_run_for` 的超时，因此即使没有其他事件，运行也会为它们唤醒。
 
 ## 尺寸、缩放与绘制
 
@@ -1497,8 +1501,11 @@ pt_widget_set_paint_callback(gauge, paint_gauge, &level);
 上下文仅在本次调用内有效。绘制回调是纯函数且幂等：同一控件每帧可能被绘制
 0..N 次（每个损坏瓦片一次），并且无论瓦片顺序或数量如何都必须产生相同像素。
 它不得更改树或触发布局，必须平衡 `pt_paint_push_clip` 和
-`pt_paint_pop_clip`，并且不得重入 `pt_window_paint_pixels`。使用
-`pt_widget_request_redraw` 或 `pt_widget_request_redraw_rect` 排队下一帧；
+`pt_paint_pop_clip`，并且不得重入 `pt_window_paint_pixels`。这些守卫始终
+开启，而不是藏在调试开关后面：重入快照会失败、设置线程局部错误并保持实时
+帧不变；不平衡的裁剪会在帧继续之前被纠正，并通过 `pt_get_last_error` 与
+警告记录下来。使用 `pt_widget_request_redraw` 或
+`pt_widget_request_redraw_rect` 排队下一帧；
 矩形形式只损坏控件局部子矩形，适合光标或插入符。`pt_paint_scale` 是设备
 像素比，`pt_paint_clip_rect` 报告当前损坏瓦片，使回调可以跳过其外的工作。
 自定义绘制不会自动产生无障碍语义：请通过常规控件 API 声明角色、名称和
@@ -1507,7 +1514,24 @@ pt_widget_set_paint_callback(gauge, paint_gauge, &level);
 `pt_window_paint_pixels` 将完整一帧以 1.0 缩放渲染到调用方拥有的 `uint32_t`
 缓冲区（预乘 `0xAARRGGBB`，行优先，每行 `width` 像素）。它是纯快照：不会
 损坏窗口、清除 `needs_draw`/`redraw_scheduled`、触碰上次绘制时间或收集延迟
-覆盖层，因此在已映射窗口上调用它不会吞掉下一帧实时画面。自定义绘制和黄金
+覆盖层，因此在已映射窗口上调用它不会吞掉下一帧实时画面。
+
+`pt_window_paint_pixels_ex` 接受相同的窗口和缓冲区，另加一个
+`pt_paint_pixels_desc`：
+
+```c
+pt_paint_pixels_desc desc = {
+    .stride = buffer_width,   /* pixels per row; 0 means width */
+    .scale = 1.5f,            /* device-pixel ratio; 0 means 1.0 */
+    .format = pt_pixel_format_argb8888_premultiplied,
+};
+pt_window_paint_pixels_ex(window, pixels, device_width, device_height, &desc);
+```
+
+`width` 和 `height` 是设备像素，因此 1.5 的缩放需要逻辑尺寸的 1.5 倍；
+大于 `width` 的 stride 会保持填充像素不变。目前只定义预乘 `argb8888`，
+`reserved` 必须为零。stride、scale、format 或缓冲区无效时返回 false。
+两个快照入口都会拒绝从绘制回调内部发起的调用。自定义绘制和分数缩放黄金
 图像就是这样在没有合成器的情况下测试的。
 
 ## 错误

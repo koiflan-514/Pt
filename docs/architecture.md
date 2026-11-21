@@ -38,7 +38,8 @@ The public C ABI is flat and opaque: no structs with platform handles are
 exposed, callbacks carry `void *user_data`, and colors are packed integers.
 This keeps ctypes and the Java Foreign Function & Memory API bindings small.
 The library is built with `-fvisibility=hidden`; only functions marked `pt_api`
-are exported (412 in the frozen 1.0 ABI; 1.1 appends to it). Internal headers
+are exported (412 in the frozen 1.0 ABI, 448 in 1.1; later minors append to the
+same SONAME). Internal headers
 live in `src/` and are not
 installed.
 
@@ -304,7 +305,8 @@ the same in a headless run. A selection set from a pointer drag uses the
 button-release serial and a keyboard selection uses the last key-press serial; a
 programmatic set with no triggering event does not send to the compositor and
 reports failure, and an application that mirrors a selection created outside its
-own input callback passes the serial explicitly. Primary reads are bounded by
+own input callback passes the serial explicitly with
+`pt_window_primary_set_serial`. Primary reads are bounded by
 the same 1.5 s / 16 MiB limits as the clipboard, and the getter returns malloc'd
 UTF-8 owned by the caller. The two buffers stay separate: the clipboard serves
 Ctrl+C/Ctrl+V, the primary selection serves middle-click paste, and Pt applies
@@ -424,14 +426,23 @@ identical pixels regardless of tile order or count, must not mutate the tree or
 trigger layout, must balance `push_clip`/`pop_clip`, and must not call
 `pt_window_paint_pixels` re-entrantly. A context is valid only inside the call;
 `pt_widget_request_redraw` and `pt_widget_request_redraw_rect` queue work for the
-next frame instead. A debug build (`PT_DEBUG_CALLBACKS=1`) rejects reentrancy,
-unbalanced clips and use of a context after its callback returned.
+next frame instead. The guards are always compiled in, not selected by an
+environment variable: a reentrant snapshot fails and sets the thread-local
+error, and a callback that leaves the clip stack unbalanced has the depth and
+clip restored before the frame continues, with a warning and an error string.
+Using the context after the callback returns is a caller bug rather than a
+detectable state, so the header forbids it; the context owns no storage.
 
 `pt_window_paint_pixels` renders one frame into a caller-owned buffer in
 premultiplied `0xAARRGGBB`, row-major, scale 1.0. It is a pure snapshot: it does
 not damage, clear `needs_draw`/`redraw_scheduled`, touch the last paint time or
 collect deferred overlays, so a snapshot of a mapped window leaves the next live
-frame intact. Custom paint and golden images are therefore testable headless.
+frame intact. `pt_window_paint_pixels_ex` takes a `pt_paint_pixels_desc` with
+stride, scale and `pt_pixel_format`; width and height are device pixels, a
+zero stride means `width`, a zero scale means 1.0, only premultiplied ARGB8888
+is defined, and the padding pixels of an oversized stride are left untouched.
+Custom paint and golden images, including fractional scales, are therefore
+testable headless.
 
 The title bar, cards, buttons, entries, toggles, checkboxes, radios, sliders,
 progress bars, spinners, segmented controls, tabs, sidebars, tables, trees,
@@ -590,11 +601,12 @@ from widget or window callbacks. The last accepted close quits the loop unless
 display and the AT-SPI bridge. The mask is
 `pt_fd_event_read`/`write`/`error`/`hangup`, the callback runs on the UI thread,
 and `POLLHUP`, `POLLERR` and `POLLNVAL` surface as the error event with at least
-one callback. Watches are borrowed (Pt never closes the descriptor), may be
-removed from inside their own callback because the free is deferred, reject a
-duplicate watch of the same descriptor, and shorten the `pt_app_run_for` timeout
-exactly like a timer. Sanitizer runs assert that repeated create/destroy cycles
-do not grow the descriptor or memory count.
+one callback. `pt_app_watch_fd` borrows the descriptor (Pt never closes it)
+while `pt_app_watch_fd_owned` takes it and closes it on unwatch or app destroy.
+Watches may be removed from inside their own callback because the free is
+deferred, reject a duplicate watch of the same descriptor, and shorten the
+`pt_app_run_for` timeout exactly like a timer. Sanitizer runs assert that
+repeated create/destroy cycles do not grow the descriptor or memory count.
 
 ### Bindings
 
@@ -712,8 +724,8 @@ the API.
 | Accessibility model and event callback | UI thread | Events are delivered synchronously |
 | Drag/drop, gesture and stylus state | UI thread | Callback pointers are borrowed for the call |
 | Framework callbacks and `pt_app_add_timeout` timers | UI thread | Must not block; user_data stays valid until replaced |
-| Paint callbacks and `pt_window_paint_pixels` | UI thread | Context borrowed for the call; a snapshot has no side effects |
-| fd watch callbacks (`pt_app_watch_fd`) | UI thread | Descriptor stays borrowed; must not block |
+| Paint callbacks and `pt_window_paint_pixels`/`_ex` | UI thread | Context borrowed for the call; a snapshot has no side effects |
+| fd watch callbacks (`pt_app_watch_fd`, `_owned`) | UI thread | Borrowed, or transferred and closed by Pt; must not block |
 | `pt_ease`, `pt_ease_value`, `pt_transition_*` | any thread | Operate only on caller-owned storage |
 | `pt_rgba`, `pt_rgb`, `pt_color_alpha` | any thread | Pure value helpers |
 | `pt_uri_list_count`, `pt_uri_list_get` | any thread | Parse caller-owned input; the get allocates and reports through the thread-local error |

@@ -35,8 +35,8 @@ application code (C / C++ / Python / Java)
 公共 C ABI 扁平且不透明：不暴露任何包含平台句柄的结构体，回调携带
 `void *user_data`，颜色是打包整数。这使 ctypes 和 Java Foreign Function &
 Memory API 绑定保持小巧。库以 `-fvisibility=hidden` 构建；只有标记为
-`pt_api` 的函数会被导出（冻结的 1.0 ABI 为 412 个；1.1 以只追加方式扩展）。
-内部头文件位于 `src/`，不会被安装。
+`pt_api` 的函数会被导出（冻结的 1.0 ABI 为 412 个，1.1 为 448 个；
+后续次版本向同一 SONAME 只追加）。内部头文件位于 `src/`，不会被安装。
 
 ## 设计决策
 
@@ -240,7 +240,8 @@ enter 回调选择是否接受提供的 MIME 类型，motion 和 leave 回调跟
 因此 `pt_window_primary_set/get` 在无头运行中行为一致。由指针拖动设置的选区
 使用按钮释放的 serial，键盘选择使用最后一次按键的 serial；没有触发事件的
 编程设置不会发送给合成器并报告失败，而在自身输入回调之外镜像选区的应用会
-显式传入 serial。主选区读取与剪贴板一样受 1.5 秒 / 16 MiB 上限约束，获取
+通过 `pt_window_primary_set_serial` 显式传入 serial。主选区读取与剪贴板一样
+受 1.5 秒 / 16 MiB 上限约束，获取
 函数返回由调用方拥有的 malloc 分配的 UTF-8 字符串。两个缓冲区彼此独立：
 剪贴板服务 Ctrl+C/Ctrl+V，主选区服务鼠标中键粘贴，而 Pt 不会自行应用任何
 一种策略。
@@ -329,14 +330,19 @@ AT-SPI 事件；Escape 分离而不写入。树对节点使用相同的形态：
 相同像素，不得更改树或触发布局，必须平衡 `push_clip`/`pop_clip`，并且不得
 重入 `pt_window_paint_pixels`。上下文仅在调用内有效；
 `pt_widget_request_redraw` 和 `pt_widget_request_redraw_rect` 改为排队下一帧的
-工作。调试构建（`PT_DEBUG_CALLBACKS=1`）会拒绝重入、未平衡的裁剪以及在回调
-返回后使用上下文。
+工作。这些守卫始终编译在内，而不是由环境变量选择：重入快照会失败并设置
+线程局部错误；回调留下不平衡裁剪栈时，深度和裁剪会在帧继续之前恢复，并
+记录警告和错误字符串。在回调返回后使用上下文属于调用方错误，而不是可检测的
+状态，因此头文件禁止这样做；上下文本身不拥有存储。
 
 `pt_window_paint_pixels` 将一帧渲染到调用方拥有的缓冲区，格式为预乘
 `0xAARRGGBB`、行优先、缩放 1.0。它是纯快照：不会损坏、清除
 `needs_draw`/`redraw_scheduled`、触碰上次绘制时间或收集延迟覆盖层，因此对
-已映射窗口的快照会保持下一帧实时画面完整。自定义绘制和黄金图像因此可以在
-无头环境中测试。
+已映射窗口的快照会保持下一帧实时画面完整。`pt_window_paint_pixels_ex`
+接受带 stride、scale 和 `pt_pixel_format` 的 `pt_paint_pixels_desc`；width
+和 height 是设备像素，stride 为 0 表示 `width`，scale 为 0 表示 1.0，目前
+只定义预乘 ARGB8888，超出 width 的填充像素保持不变。自定义绘制和黄金图像
+（包括分数缩放）因此可以在无头环境中测试。
 
 标题栏、卡片、按钮、输入框、切换开关、复选框、单选框、滑块、进度条、旋转
 指示器、分段控件、标签页、侧边栏、表格、树、滚动条和焦点环使用抗锯齿圆角
@@ -458,11 +464,12 @@ AT-SPI 事件。仅当 `dbus-1` 可用时才编译桥接层。当构建或会话
 
 `pt_app_watch_fd` 将应用描述符加入与显示和 AT-SPI 桥相同的 poll 集合。掩码
 为 `pt_fd_event_read`/`write`/`error`/`hangup`，回调在 UI 线程上运行，
-`POLLHUP`、`POLLERR` 和 `POLLNVAL` 以错误事件出现且至少触发一次回调。监视
-描述符是借用的（Pt 从不关闭它），可以在自身回调内部移除，因为释放被推迟；
-对同一描述符的重复监视会被拒绝，并且它会像定时器一样缩短
-`pt_app_run_for` 的超时。Sanitizer 运行会断言重复创建/销毁循环不会增长
-描述符或内存计数。
+`POLLHUP`、`POLLERR` 和 `POLLNVAL` 以错误事件出现且至少触发一次回调。
+`pt_app_watch_fd` 借用描述符（Pt 从不关闭它），而
+`pt_app_watch_fd_owned` 接管描述符，并在取消监视或应用销毁时关闭它。监视
+可以在自身回调内部移除，因为释放被推迟；对同一描述符的重复监视会被拒绝，
+并且它会像定时器一样缩短 `pt_app_run_for` 的超时。Sanitizer 运行会断言
+重复创建/销毁循环不会增长描述符或内存计数。
 
 ### 绑定
 
@@ -556,8 +563,8 @@ Pt 没有内部锁。创建应用的 UI 线程是唯一可以接触应用、窗�
 | 无障碍模型和事件回调 | UI 线程 | 事件同步交付 |
 | 拖放、手势和触控笔状态 | UI 线程 | 回调指针在调用期间借用 |
 | 框架回调和 `pt_app_add_timeout` 定时器 | UI 线程 | 不得阻塞；user_data 在被替换前保持有效 |
-| 绘制回调和 `pt_window_paint_pixels` | UI 线程 | 上下文在调用期间借用；快照没有副作用 |
-| fd 监视回调（`pt_app_watch_fd`） | UI 线程 | 描述符保持借用；不得阻塞 |
+| 绘制回调和 `pt_window_paint_pixels`/`_ex` | UI 线程 | 上下文在调用期间借用；快照没有副作用 |
+| fd 监视回调（`pt_app_watch_fd`、`_owned`） | UI 线程 | 借用，或转移给 Pt 并由其关闭；不得阻塞 |
 | `pt_ease`、`pt_ease_value`、`pt_transition_*` | 任意线程 | 仅操作调用方拥有的存储 |
 | `pt_rgba`、`pt_rgb`、`pt_color_alpha` | 任意线程 | 纯值辅助函数 |
 | `pt_uri_list_count`、`pt_uri_list_get` | 任意线程 | 解析调用方拥有的输入；get 会分配并通过线程局部错误报告 |

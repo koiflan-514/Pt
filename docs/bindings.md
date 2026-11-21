@@ -1505,6 +1505,11 @@ the header is the source of truth.
 | fd watch | `app::watch_fd` / `unwatch_fd` | `App.watch_fd` / `unwatch_fd` | `Pt.app_watch_fd` / `app_unwatch_fd` |
 | Raw input | `window::on_focus`, `on_key_event`, `on_pointer` | `Window.on_focus`, `on_key_event`, `on_pointer` | `Pt.window_set_focus_callback`, `Pt.window_set_key_event_callback`, `Pt.window_set_pointer_callback` |
 | Decoration | `window::set_decorated`, `set_decoration_mode` | `Window.set_decorated`, `set_decoration_mode` | `Pt.window_set_decorated`, `Pt.window_set_decoration_mode` |
+| Decoration getters | `window::decoration_mode`, `effective_decoration_mode` | `Window.decoration_mode`, `effective_decoration_mode` | `Pt.window_get_decoration_mode`, `Pt.window_get_effective_decoration_mode` |
+| Maximize | `window::maximize` | `Window.maximize` | `Pt.window_maximize` |
+| Snapshot descriptor | `window::paint_pixels_ex` | `pt.paint_window_pixels_ex` | `Pt.window_paint_pixels_ex` |
+| Primary serial | `window::set_primary_serial` | `Window.set_primary_serial` | `Pt.window_primary_set_serial` |
+| Owned fd watch | `app::watch_fd_owned` | `App.watch_fd_owned` | `Pt.app_watch_fd_owned` |
 
 Callback wrappers follow the same ownership rules as the rest of the surface:
 
@@ -1529,6 +1534,14 @@ Callback wrappers follow the same ownership rules as the rest of the surface:
   `paint_window_pixels(window, width, height)` returns a `list[int]` of
   `0xAARRGGBB` values; C++ takes a `std::span<uint32_t>` and Java a
   `MemorySegment` sized `width * height`.
+- **The descriptor snapshot follows the same rule.** The `_ex` form takes the
+  binding's `pt_paint_pixels_desc` equivalent (stride, scale and format) and
+  still writes only into caller memory; width and height are device pixels, and
+  an invalid descriptor returns false rather than raising.
+- **An owned fd watch transfers the descriptor.** `watch_fd_owned` closes it on
+  unwatch or app destroy and keeps the same duplicate-rejection and
+  callback-deferral rules as the borrowed form; a binding must not also close
+  the descriptor.
 - **fd watch callbacks run on the UI thread** and the descriptor stays owned by
   the application. Unwatching from inside the callback is safe, and the binding
   keeps the trampoline alive until the watch is removed.
