@@ -700,6 +700,17 @@ typedef struct pt_picker {
 
     pt_index_callback on_select;
     void *select_data;
+
+    /* Date picker. */
+    pt_date date;
+    pt_date focus_date;
+    int32_t view_year;
+    uint32_t view_month;
+    pt_date_format format;
+    /* Committed display text; also the value Escape restores. */
+    char display[64];
+    pt_date_callback on_date;
+    void *date_data;
 } pt_picker;
 
 /* The picker behind a widget, or NULL for anything else (including a plain

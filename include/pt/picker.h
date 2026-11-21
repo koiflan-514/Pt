@@ -168,6 +168,77 @@ pt_api bool pt_select_is_open(const pt_widget *select);
 pt_api void pt_select_set_on_change(pt_widget *select, pt_index_callback callback,
                                     void *user_data);
 
+/* ---------- date picker ---------- */
+
+/* A civil date. year 1..9999, month 1..12, day 1..days_in_month(year, month).
+ * A zero-initialized value (year == 0) is the empty value; there is no time of
+ * day and no time zone anywhere in this control. Since 1.2. */
+typedef struct pt_date {
+    int32_t year;
+    uint8_t month;
+    uint8_t day;
+} pt_date;
+
+/* How the field writes a date. The control does not read the process locale;
+ * the application picks the picture and may localize around the control.
+ * pt_date_format_iso is YYYY-MM-DD, dmy is DD/MM/YYYY and mdy is MM/DD/YYYY.
+ * Parsing accepts the chosen picture and ISO as a fallback. Since 1.2. */
+typedef enum pt_date_format {
+    pt_date_format_iso = 0,
+    pt_date_format_dmy,
+    pt_date_format_mdy
+} pt_date_format;
+
+/* Fires after the committed date changes; date is the new value and is the
+ * empty date after a clear. The callback may destroy the picker. Since 1.2. */
+typedef void (*pt_date_callback)(pt_widget *picker, pt_date date, void *user_data);
+
+/* Today's local civil date. This is the one place the control reads the clock;
+ * the stored value stays a plain y/m/d. Returns an empty date when the local
+ * date is outside the 1..9999 range. Since 1.2. */
+pt_api pt_date pt_date_today(void);
+
+/* True for a real civil date. Since 1.2. */
+pt_api bool pt_date_is_valid(pt_date date);
+
+/* Creates a date picker: an entry showing the formatted date and a popup
+ * calendar. Typing edits the text; Enter parses it (an invalid date is rejected
+ * and the previous value and text stay), Escape restores the committed text.
+ * F4 or Alt+Down opens the calendar, where Left/Right move one day, Up/Down one
+ * week, Page Up/Page Down one month, Home/End the month edges, T selects today
+ * and Enter commits the focused day. A press on a day commits it. The calendar
+ * always renders six weeks (42 cells), with adjacent-month cells disabled.
+ * Since 1.2. */
+pt_api pt_widget *pt_date_picker_create(pt_widget *parent);
+
+/* Sets the committed date. A zero or invalid date clears the value and returns
+ * true; an otherwise invalid date returns false and changes nothing. Silent. */
+pt_api bool pt_date_picker_set_date(pt_widget *picker, pt_date date);
+pt_api pt_date pt_date_picker_get_date(const pt_widget *picker);
+pt_api void pt_date_picker_clear(pt_widget *picker);
+
+/* Picture used by the field. Changing it rewrites the current text. Since 1.2. */
+pt_api void pt_date_picker_set_format(pt_widget *picker, pt_date_format format);
+pt_api pt_date_format pt_date_picker_get_format(const pt_widget *picker);
+
+/* Parses and commits text. An empty string clears the date. Returns false and
+ * records pt_get_last_error on an invalid date; the previous value and field
+ * text are then untouched. Silent on success (callbacks report user input, not
+ * programmatic changes). Since 1.2. */
+pt_api bool pt_date_picker_set_text(pt_widget *picker, const char *text);
+/* Borrowed committed display text, "" when empty. Since 1.2. */
+pt_api const char *pt_date_picker_get_text(const pt_widget *picker);
+
+pt_api void pt_date_picker_set_placeholder(pt_widget *picker, const char *text);
+pt_api const char *pt_date_picker_get_placeholder(const pt_widget *picker);
+
+pt_api void pt_date_picker_open(pt_widget *picker);
+pt_api void pt_date_picker_close(pt_widget *picker);
+pt_api bool pt_date_picker_is_open(const pt_widget *picker);
+
+pt_api void pt_date_picker_set_on_change(pt_widget *picker, pt_date_callback callback,
+                                         void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

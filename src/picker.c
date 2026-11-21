@@ -19,8 +19,11 @@
 #include "internal.h"
 
 #include <float.h>
+#include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -38,6 +41,9 @@
 
 static void picker_field_changed(pt_widget *field, const char *text, void *user_data);
 static void picker_on_dismiss(pt_popup *popup, void *user_data);
+static void pt_date_prev_click(pt_widget *button, void *user_data);
+static void pt_date_next_click(pt_widget *button, void *user_data);
+static void pt_date_today_click(pt_widget *button, void *user_data);
 
 pt_picker *pt_picker_of(const pt_widget *widget) {
     if (!widget || widget->kind != pt_widget_combobox) {
@@ -118,6 +124,243 @@ static pt_rect picker_anchor(const pt_widget *host) {
     float h = 0.0f;
     pt_widget_get_bounds(host, &x, &y, &w, &h);
     return (pt_rect){x, y, pt_max_float(1.0f, w), pt_max_float(1.0f, h)};
+}
+
+/* ---------- civil date arithmetic ---------- */
+
+#define picker_date_max_year 9999
+
+static const char *const picker_month_names[12] = {
+    "January", "February", "March",     "April",   "May",      "June",
+    "July",    "August",   "September", "October", "November", "December",
+};
+
+static const char *const picker_weekday_names[7] = {"Mo", "Tu", "We", "Th",
+                                                   "Fr", "Sa", "Su"};
+
+static bool date_is_leap(int32_t year) {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+static uint32_t date_month_length(int32_t year, uint32_t month) {
+    static const uint8_t lengths[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1u || month > 12u) {
+        return 0u;
+    }
+    return month == 2u && date_is_leap(year) ? 29u : lengths[month - 1u];
+}
+
+static bool date_equal(pt_date a, pt_date b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+pt_date pt_date_today(void) {
+    time_t now = time(NULL);
+    struct tm local;
+    if (now == (time_t)-1 || !localtime_r(&now, &local)) {
+        return (pt_date){0, 0, 0};
+    }
+    int32_t year = local.tm_year + 1900;
+    uint32_t month = (uint32_t)local.tm_mon + 1u;
+    uint32_t day = (uint32_t)local.tm_mday;
+    if (year < 1 || year > picker_date_max_year) {
+        return (pt_date){0, 0, 0};
+    }
+    return (pt_date){year, (uint8_t)month, (uint8_t)day};
+}
+
+bool pt_date_is_valid(pt_date date) {
+    if (date.year < 1 || date.year > picker_date_max_year || date.month < 1u ||
+        date.month > 12u || date.day < 1u) {
+        return false;
+    }
+    return (uint32_t)date.day <= date_month_length(date.year, date.month);
+}
+
+/* Howard Hinnant's civil calendar algorithms; the epoch itself is irrelevant,
+ * only the difference in days matters and no time zone is involved. */
+static int64_t date_days_from_civil(int32_t year, uint32_t month, uint32_t day) {
+    int32_t y = year - (month <= 2u);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    uint32_t yoe = (uint32_t)(y - (int32_t)era * 400);
+    uint32_t doy = (153u * (month + (month > 2u ? (uint32_t)-3 : 9u)) + 2u) / 5u + day - 1u;
+    uint32_t doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+static pt_date date_from_days(int64_t days) {
+    int64_t z = days + 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    uint32_t doe = (uint32_t)(z - era * 146097);
+    uint32_t yoe = (doe - doe / 1460u + doe / 36524u - doe / 146096u) / 365u;
+    int64_t year = (int64_t)yoe + era * 400;
+    uint32_t doy = doe - (365u * yoe + yoe / 4u - yoe / 100u);
+    uint32_t mp = (5u * doy + 2u) / 153u;
+    uint32_t day = doy - (153u * mp + 2u) / 5u + 1u;
+    uint32_t month = mp + (mp < 10u ? 3u : (uint32_t)-9);
+    year += month <= 2u;
+    if (year < 1) {
+        year = 1;
+    }
+    if (year > picker_date_max_year) {
+        year = picker_date_max_year;
+    }
+    return (pt_date){(int32_t)year, (uint8_t)month, (uint8_t)day};
+}
+
+static pt_date date_clamp(pt_date date) {
+    if (date.year < 1) {
+        return (pt_date){1, 1, 1};
+    }
+    if (date.year > picker_date_max_year) {
+        return (pt_date){picker_date_max_year, 12, 31};
+    }
+    if (date.month < 1u) {
+        date.month = 1;
+    }
+    if (date.month > 12u) {
+        date.month = 12;
+    }
+    uint32_t length = date_month_length(date.year, date.month);
+    if (date.day < 1u) {
+        date.day = 1;
+    }
+    if ((uint32_t)date.day > length) {
+        date.day = (uint8_t)length;
+    }
+    return date;
+}
+
+/* 0 = Monday, matching ISO 8601 and the calendar header. */
+static int date_weekday(pt_date date) {
+    int64_t days = date_days_from_civil(date.year, date.month, date.day);
+    int sunday = (int)((days >= -4 ? (days + 4) % 7 : (days + 5) % 7 + 6));
+    return (sunday + 6) % 7;
+}
+
+static pt_date date_add_days(pt_date date, int days) {
+    int64_t value = date_days_from_civil(date.year, date.month, date.day) + days;
+    return date_clamp(date_from_days(value));
+}
+
+static pt_date date_add_months(pt_date date, int months) {
+    int32_t total = date.year * 12 + (int32_t)date.month - 1 + months;
+    int32_t year = total / 12;
+    int32_t month = total % 12;
+    if (month < 0) {
+        month += 12;
+        --year;
+    }
+    if (year < 1) {
+        year = 1;
+        month = 0;
+    }
+    if (year > picker_date_max_year) {
+        year = picker_date_max_year;
+        month = 11;
+    }
+    pt_date shifted = {(int32_t)year, (uint8_t)(month + 1), date.day};
+    return date_clamp(shifted);
+}
+
+static pt_date date_first_of_month(int32_t year, uint32_t month) {
+    return (pt_date){year, (uint8_t)month, 1};
+}
+
+/* The Monday on or before the first of the viewed month. */
+static pt_date date_grid_start(int32_t year, uint32_t month) {
+    pt_date first = date_first_of_month(year, month);
+    return date_add_days(first, -date_weekday(first));
+}
+
+/* ---------- date text ---------- */
+
+static void date_format_into(char *buffer, size_t size, pt_date date,
+                             pt_date_format format) {
+    switch (format) {
+    case pt_date_format_dmy:
+        snprintf(buffer, size, "%02u/%02u/%04d", (unsigned)date.day,
+                 (unsigned)date.month, date.year);
+        break;
+    case pt_date_format_mdy:
+        snprintf(buffer, size, "%02u/%02u/%04d", (unsigned)date.month,
+                 (unsigned)date.day, date.year);
+        break;
+    case pt_date_format_iso:
+    default:
+        snprintf(buffer, size, "%04d-%02u-%02u", date.year, (unsigned)date.month,
+                 (unsigned)date.day);
+        break;
+    }
+}
+
+static bool date_tail_ok(const char *text, int consumed) {
+    if (consumed <= 0) {
+        return false;
+    }
+    for (const char *cursor = text + consumed; *cursor; ++cursor) {
+        if (!isspace((unsigned char)*cursor)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool date_parse_with(const char *text, pt_date_format format, pt_date *out) {
+    if (!text || !text[0] || !out) {
+        return false;
+    }
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    int consumed = 0;
+    char extra = '\0';
+    int fields = 0;
+    if (format == pt_date_format_dmy) {
+        fields = sscanf(text, "%d/%d/%d%n%c", &a, &b, &c, &consumed, &extra);
+        if (fields < 3) {
+            fields = sscanf(text, "%d-%d-%d%n%c", &a, &b, &c, &consumed, &extra);
+        }
+        pt_date date = {(int32_t)c, (uint8_t)b, (uint8_t)a};
+        if (fields >= 3 && date_tail_ok(text, consumed) && pt_date_is_valid(date)) {
+            *out = date;
+            return true;
+        }
+        return false;
+    }
+    if (format == pt_date_format_mdy) {
+        fields = sscanf(text, "%d/%d/%d%n%c", &a, &b, &c, &consumed, &extra);
+        if (fields < 3) {
+            fields = sscanf(text, "%d-%d-%d%n%c", &a, &b, &c, &consumed, &extra);
+        }
+        pt_date date = {(int32_t)c, (uint8_t)a, (uint8_t)b};
+        if (fields >= 3 && date_tail_ok(text, consumed) && pt_date_is_valid(date)) {
+            *out = date;
+            return true;
+        }
+        return false;
+    }
+    fields = sscanf(text, "%d-%d-%d%n%c", &a, &b, &c, &consumed, &extra);
+    if (fields < 3) {
+        fields = sscanf(text, "%d/%d/%d%n%c", &a, &b, &c, &consumed, &extra);
+    }
+    pt_date date = {(int32_t)a, (uint8_t)b, (uint8_t)c};
+    if (fields >= 3 && date_tail_ok(text, consumed) && pt_date_is_valid(date)) {
+        *out = date;
+        return true;
+    }
+    return false;
+}
+
+static bool date_parse(const char *text, pt_date_format format, pt_date *out) {
+    if (date_parse_with(text, format, out)) {
+        return true;
+    }
+    /* ISO is always accepted, so a pasted value works in every picture. */
+    if (format != pt_date_format_iso) {
+        return date_parse_with(text, pt_date_format_iso, out);
+    }
+    return false;
 }
 
 /* ---------- searchable select model ---------- */
@@ -220,6 +463,13 @@ static pt_widget *picker_content_create(pt_picker *picker, pt_widget *host) {
         content->radius = picker_row_radius;
         content->a11y_role = pt_a11y_role_list_box;
         pt_widget_set_a11y_name(content, "Options");
+        picker->content = content;
+    } else if (picker->kind == pt_picker_kind_date) {
+        content = pt_column_create(NULL);
+        content->gap = 4.0f;
+        content->align_items = pt_align_stretch;
+        content->a11y_role = pt_a11y_role_group;
+        pt_widget_set_a11y_name(content, "Calendar");
         picker->content = content;
     }
     return content;
@@ -357,6 +607,240 @@ static void select_rebuild_popup(pt_widget *host, pt_picker *picker) {
     select_reveal_highlight(host, picker);
 }
 
+/* ---------- date picker internals ---------- */
+
+static void date_refresh_text(pt_widget *host, pt_picker *picker) {
+    if (picker->date.year == 0) {
+        picker->display[0] = '\0';
+    } else {
+        date_format_into(picker->display, sizeof(picker->display), picker->date,
+                         picker->format);
+    }
+    picker_set_field_text(host, picker, picker->display);
+}
+
+static void date_sync_view(pt_picker *picker) {
+    picker->view_year = picker->focus_date.year;
+    picker->view_month = picker->focus_date.month;
+}
+
+static void date_commit(pt_widget *host, pt_picker *picker, pt_date date, bool notify) {
+    if (!pt_date_is_valid(date)) {
+        return;
+    }
+    bool changed = !date_equal(picker->date, date);
+    picker->date = date;
+    picker->focus_date = date;
+    date_sync_view(picker);
+    date_refresh_text(host, picker);
+    pt_widget_a11y_emit(host, pt_a11y_event_selection_changed);
+    if (changed) {
+        pt_widget_a11y_emit(host, pt_a11y_event_value_changed);
+    }
+    pt_widget_mark_dirty(host, false);
+    if (changed && notify && picker->on_date) {
+        picker->on_date(host, date, picker->date_data);
+    }
+}
+
+static void date_clear_value(pt_widget *host, pt_picker *picker) {
+    bool had = picker->date.year != 0;
+    picker->date = (pt_date){0, 0, 0};
+    picker->display[0] = '\0';
+    picker_set_field_text(host, picker, "");
+    if (had) {
+        pt_widget_a11y_emit(host, pt_a11y_event_selection_changed);
+        pt_widget_a11y_emit(host, pt_a11y_event_value_changed);
+    }
+    pt_widget_mark_dirty(host, false);
+}
+
+/* Rebuilds the whole calendar for the viewed month. Six weeks are always
+ * materialized so a month change cannot grow the tree without bound. */
+static void date_rebuild_popup(pt_widget *host, pt_picker *picker) {
+    if (!picker || !picker->content) {
+        return;
+    }
+    pt_widget_clear_children(picker->content);
+    pt_date first = date_first_of_month(picker->view_year, picker->view_month);
+    pt_date grid_start = date_grid_start(picker->view_year, picker->view_month);
+
+    pt_widget *header = pt_row_create(picker->content);
+    header->align_items = pt_align_center;
+    header->gap = 4.0f;
+    pt_widget_set_height(header, 30.0f);
+
+    pt_widget *previous = pt_button_create(header, "");
+    previous->button_variant = pt_button_ghost;
+    previous->focusable = false;
+    pt_widget_set_icon(previous, pt_icon_chevron_left);
+    pt_widget_set_size(previous, 26.0f, 26.0f);
+    pt_widget_set_padding(previous, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_a11y_name(previous, "Previous month");
+    pt_button_set_on_click(previous, pt_date_prev_click, host);
+
+    char title[64];
+    snprintf(title, sizeof(title), "%s %d", picker_month_names[picker->view_month - 1u],
+             (int)picker->view_year);
+    pt_widget *label = pt_label_create(header, title);
+    label->grow = 1.0f;
+    pt_widget_set_text_align(label, pt_text_align_center);
+    pt_widget_set_font_size(label, 13.0f);
+    pt_widget_set_font_weight(label, pt_font_weight_medium);
+
+    pt_widget *next = pt_button_create(header, "");
+    next->button_variant = pt_button_ghost;
+    next->focusable = false;
+    pt_widget_set_icon(next, pt_icon_chevron_right);
+    pt_widget_set_size(next, 26.0f, 26.0f);
+    pt_widget_set_padding(next, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_a11y_name(next, "Next month");
+    pt_button_set_on_click(next, pt_date_next_click, host);
+
+    pt_widget *today = pt_button_create(header, "Today");
+    today->button_variant = pt_button_ghost;
+    today->focusable = false;
+    pt_widget_set_height(today, 26.0f);
+    pt_widget_set_padding(today, 4.0f, 8.0f, 4.0f, 8.0f);
+    pt_widget_set_font_size(today, 12.0f);
+    pt_button_set_on_click(today, pt_date_today_click, host);
+
+    pt_widget *weekday = pt_row_create(picker->content);
+    weekday->align_items = pt_align_center;
+    weekday->gap = 2.0f;
+    pt_widget_set_height(weekday, 18.0f);
+    for (uint32_t i = 0; i < 7u; ++i) {
+        pt_widget *day = pt_label_create(weekday, picker_weekday_names[i]);
+        day->grow = 1.0f;
+        pt_widget_set_text_align(day, pt_text_align_center);
+        pt_widget_set_font_size(day, 11.0f);
+        day->a11y_role = pt_a11y_role_label;
+    }
+
+    pt_widget *grid = pt_grid_create(picker->content, 7u);
+    grid->gap = 2.0f;
+    grid->row_gap = 2.0f;
+    pt_grid_set_gap(grid, 2.0f, 2.0f);
+    grid->a11y_role = pt_a11y_role_table;
+    pt_widget_set_a11y_name(grid, "Calendar days");
+    for (uint32_t i = 0; i < 42u; ++i) {
+        pt_date day = date_add_days(grid_start, (int)i);
+        bool in_month = day.year == picker->view_year && day.month == picker->view_month;
+        pt_widget *cell = pt_widget_new(NULL, pt_widget_list_row);
+        char number[8];
+        snprintf(number, sizeof(number), "%u", (unsigned)day.day);
+        cell->text = pt_strdup(in_month ? number : "");
+        cell->list_index = i;
+        cell->popup_owner = host;
+        cell->enabled = in_month;
+        cell->row_selected = in_month && date_equal(day, picker->focus_date);
+        cell->row_current = in_month && date_equal(day, picker->date);
+        cell->radius = 6.0f;
+        cell->a11y_role = pt_a11y_role_table_cell;
+        char name[24];
+        snprintf(name, sizeof(name), "%04d-%02u-%02u", day.year, (unsigned)day.month,
+                 (unsigned)day.day);
+        cell->a11y_name = pt_strdup(name);
+        pt_widget_set_height(cell, 28.0f);
+        pt_widget_set_padding(cell, 0.0f, 0.0f, 0.0f, 0.0f);
+        pt_widget_set_text_align(cell, pt_text_align_center);
+        pt_widget_set_font_size(cell, 12.0f);
+        pt_widget_append(grid, cell);
+    }
+    (void)first;
+
+    picker->content->requested_width = 7.0f * 32.0f + 6.0f * 2.0f;
+    picker->content->requested_height = 234.0f;
+}
+
+static void date_focus_set(pt_widget *host, pt_picker *picker, pt_date date) {
+    if (!pt_date_is_valid(date)) {
+        return;
+    }
+    picker->focus_date = date;
+    date_sync_view(picker);
+    date_rebuild_popup(host, picker);
+    pt_window *window = pt_widget_window(host);
+    if (window) {
+        pt_window_invalidate_layout(window, NULL);
+    }
+    if (picker->popup && pt_popup_is_open(picker->popup)) {
+        pt_rect anchor = picker_anchor(host);
+        pt_popup_reposition(picker->popup,
+                            (pt_popup_anchor){anchor.x, anchor.y, anchor.w, anchor.h});
+    }
+    pt_widget_mark_dirty(host, false);
+    pt_widget_a11y_emit(host, pt_a11y_event_state_changed);
+}
+
+static void date_view_shift(pt_widget *host, pt_picker *picker, int months) {
+    pt_date focus = picker->focus_date;
+    if (focus.year == 0) {
+        focus = pt_date_today();
+        if (!pt_date_is_valid(focus)) {
+            focus = (pt_date){1970, 1, 1};
+        }
+    }
+    date_focus_set(host, picker, date_add_months(focus, months));
+}
+
+static void pt_date_prev_click(pt_widget *button, void *user_data) {
+    pt_unused(button);
+    pt_widget *host = user_data;
+    pt_picker *picker = pt_picker_of_kind(host, pt_picker_kind_date);
+    if (picker) {
+        date_view_shift(host, picker, -1);
+    }
+}
+
+static void pt_date_next_click(pt_widget *button, void *user_data) {
+    pt_unused(button);
+    pt_widget *host = user_data;
+    pt_picker *picker = pt_picker_of_kind(host, pt_picker_kind_date);
+    if (picker) {
+        date_view_shift(host, picker, 1);
+    }
+}
+
+static void pt_date_today_click(pt_widget *button, void *user_data) {
+    pt_unused(button);
+    pt_widget *host = user_data;
+    pt_picker *picker = pt_picker_of_kind(host, pt_picker_kind_date);
+    if (!picker) {
+        return;
+    }
+    pt_date today = pt_date_today();
+    if (!pt_date_is_valid(today)) {
+        return;
+    }
+    pt_window *window = pt_widget_window(host);
+    date_commit(host, picker, today, true);
+    if (pt_widget_attached(window, host)) {
+        pt_picker_close(host);
+    }
+}
+
+static bool date_commit_text(pt_widget *host, pt_picker *picker, const char *text,
+                             bool notify) {
+    const char *value = text ? text : "";
+    if (value[0] == '\0') {
+        bool had = picker->date.year != 0;
+        date_clear_value(host, picker);
+        if (had && notify && picker->on_date) {
+            picker->on_date(host, (pt_date){0, 0, 0}, picker->date_data);
+        }
+        return true;
+    }
+    pt_date parsed = {0, 0, 0};
+    if (!date_parse(value, picker->format, &parsed)) {
+        pt_set_error("pt_date_picker: '%s' is not a valid date", value);
+        picker_set_field_text(host, picker, picker->display);
+        return false;
+    }
+    date_commit(host, picker, parsed, notify);
+    return true;
+}
+
 /* ---------- popup lifecycle ---------- */
 
 static void picker_restore_display(pt_widget *host, pt_picker *picker) {
@@ -368,6 +852,8 @@ static void picker_restore_display(pt_widget *host, pt_picker *picker) {
     picker->highlighted = pt_list_index_none;
     if (picker->kind == pt_picker_kind_select) {
         picker_set_field_text(host, picker, select_item_text(picker, picker->selected));
+    } else if (picker->kind == pt_picker_kind_date) {
+        picker_set_field_text(host, picker, picker->display);
     }
 }
 
@@ -394,6 +880,8 @@ static void picker_rebuild_popup(pt_widget *host, pt_picker *picker) {
     if (picker->kind == pt_picker_kind_select) {
         select_rebuild_visible(picker);
         select_rebuild_popup(host, picker);
+    } else if (picker->kind == pt_picker_kind_date) {
+        date_rebuild_popup(host, picker);
     }
     pt_window *window = pt_widget_window(host);
     if (window) {
@@ -443,6 +931,13 @@ void pt_picker_open(pt_widget *host) {
         /* Opening without typing starts from the whole model, committed item
          * highlighted, exactly like the combo-box list. */
         picker->highlighted = picker->selected;
+    } else if (picker->kind == pt_picker_kind_date) {
+        pt_date focus = pt_date_is_valid(picker->date) ? picker->date : pt_date_today();
+        if (!pt_date_is_valid(focus)) {
+            focus = (pt_date){1970, 1, 1};
+        }
+        picker->focus_date = focus;
+        date_sync_view(picker);
     }
     picker_popup_show(host, picker);
 }
@@ -553,6 +1048,23 @@ static void select_highlight_edge(pt_widget *host, pt_picker *picker, bool first
 void pt_picker_choose(pt_widget *host, uint32_t position) {
     pt_picker *picker = pt_picker_of(host);
     if (!picker) {
+        return;
+    }
+    if (picker->kind == pt_picker_kind_date) {
+        if (position >= 42u || picker->view_month < 1u || picker->view_month > 12u) {
+            return;
+        }
+        pt_date start = date_grid_start(picker->view_year, picker->view_month);
+        pt_date day = date_add_days(start, (int)position);
+        if (day.year != picker->view_year || day.month != picker->view_month ||
+            !pt_date_is_valid(day)) {
+            return;
+        }
+        pt_window *window = pt_widget_window(host);
+        date_commit(host, picker, day, true);
+        if (pt_widget_attached(window, host)) {
+            pt_picker_close(host);
+        }
         return;
     }
     if (picker->kind != pt_picker_kind_select) {
@@ -698,6 +1210,110 @@ static bool select_key(pt_widget *host, pt_picker *picker, uint32_t keysym,
     return false;
 }
 
+static bool date_key(pt_widget *host, pt_picker *picker, uint32_t keysym,
+                     uint32_t modifiers, const char *utf8) {
+    bool open = picker->popup && pt_popup_is_open(picker->popup);
+    bool alt = (modifiers & (uint32_t)pt_key_modifier_alt) != 0;
+    const char *field_text = picker->field ? pt_widget_get_text(picker->field) : "";
+    bool dirty = strcmp(field_text, picker->display) != 0;
+
+    if (keysym == XKB_KEY_Escape) {
+        if (open) {
+            pt_picker_close(host);
+            return true;
+        }
+        if (dirty) {
+            picker_set_field_text(host, picker, picker->display);
+            return true;
+        }
+        return false;
+    }
+    if (keysym == XKB_KEY_Tab || keysym == XKB_KEY_ISO_Left_Tab) {
+        if (open) {
+            pt_picker_close(host);
+        }
+        return false;
+    }
+    if (keysym == XKB_KEY_F4 || (alt && (keysym == XKB_KEY_Down || keysym == XKB_KEY_Up))) {
+        if (open) {
+            pt_picker_close(host);
+        } else {
+            pt_picker_open(host);
+        }
+        return true;
+    }
+    if (!open) {
+        if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
+            if (dirty) {
+                date_commit_text(host, picker, field_text, true);
+                return true;
+            }
+            pt_picker_open(host);
+            return pt_picker_is_open(host);
+        }
+        return false;
+    }
+
+    pt_date focus = picker->focus_date;
+    if (focus.year == 0) {
+        focus = pt_date_today();
+    }
+    if (keysym == XKB_KEY_Left) {
+        date_focus_set(host, picker, date_add_days(focus, -1));
+        return true;
+    }
+    if (keysym == XKB_KEY_Right) {
+        date_focus_set(host, picker, date_add_days(focus, 1));
+        return true;
+    }
+    if (keysym == XKB_KEY_Up) {
+        date_focus_set(host, picker, date_add_days(focus, -7));
+        return true;
+    }
+    if (keysym == XKB_KEY_Down) {
+        date_focus_set(host, picker, date_add_days(focus, 7));
+        return true;
+    }
+    if (keysym == XKB_KEY_Page_Up || keysym == XKB_KEY_Page_Down) {
+        date_focus_set(host, picker,
+                       date_add_months(focus, keysym == XKB_KEY_Page_Up ? -1 : 1));
+        return true;
+    }
+    if (keysym == XKB_KEY_Home || keysym == XKB_KEY_End) {
+        pt_date edge = focus;
+        uint32_t length = date_month_length(edge.year, edge.month);
+        edge.day = keysym == XKB_KEY_Home ? 1 : (uint8_t)length;
+        date_focus_set(host, picker, edge);
+        return true;
+    }
+    if (utf8 && (utf8[0] == 't' || utf8[0] == 'T') && !alt &&
+        !(modifiers & ((uint32_t)pt_key_modifier_ctrl | (uint32_t)pt_key_modifier_logo))) {
+        pt_date today = pt_date_today();
+        if (!pt_date_is_valid(today)) {
+            return false;
+        }
+        pt_window *window = pt_widget_window(host);
+        date_commit(host, picker, today, true);
+        if (pt_widget_attached(window, host)) {
+            pt_picker_close(host);
+        }
+        return true;
+    }
+    if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
+        pt_window *window = pt_widget_window(host);
+        if (dirty) {
+            date_commit_text(host, picker, field_text, true);
+        } else {
+            date_commit(host, picker, focus, true);
+        }
+        if (pt_widget_attached(window, host)) {
+            pt_picker_close(host);
+        }
+        return true;
+    }
+    return false;
+}
+
 bool pt_picker_key(pt_widget *host, uint32_t keysym, uint32_t modifiers, const char *utf8) {
     pt_picker *picker = pt_picker_of(host);
     if (!picker) {
@@ -705,6 +1321,9 @@ bool pt_picker_key(pt_widget *host, uint32_t keysym, uint32_t modifiers, const c
     }
     if (picker->kind == pt_picker_kind_select) {
         return select_key(host, picker, keysym, modifiers, utf8);
+    }
+    if (picker->kind == pt_picker_kind_date) {
+        return date_key(host, picker, keysym, modifiers, utf8);
     }
     return false;
 }
@@ -1056,15 +1675,173 @@ void pt_select_set_on_change(pt_widget *select, pt_index_callback callback, void
     picker->select_data = user_data;
 }
 
+/* ---------- public API: date picker ---------- */
+
+pt_widget *pt_date_picker_create(pt_widget *parent) {
+    pt_widget *host = pt_combobox_create(parent);
+    if (!host) {
+        return NULL;
+    }
+    pt_combobox_state *state = host->extra;
+    pt_picker *picker = pt_alloc_zeroed(1, sizeof(*picker));
+    picker->kind = pt_picker_kind_date;
+    picker->host = host;
+    picker->format = pt_date_format_iso;
+    state->picker = picker;
+    state->mode = pt_combobox_filterable;
+    host->focusable = false;
+    free(host->placeholder);
+    host->placeholder = pt_strdup("Date");
+    picker_field_create(host, picker, "Date");
+    state->field = picker->field;
+    picker_set_field_text(host, picker, "");
+    pt_widget_set_a11y_role(host, pt_a11y_role_combo_box);
+    pt_widget_set_a11y_name(host, "Date");
+    return host;
+}
+
+bool pt_date_picker_set_date(pt_widget *picker_widget, pt_date date) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    if (!picker) {
+        return false;
+    }
+    if (date.year == 0) {
+        date_clear_value(picker_widget, picker);
+        return true;
+    }
+    if (!pt_date_is_valid(date)) {
+        pt_set_error("pt_date_picker: invalid date %d-%u-%u", (int)date.year,
+                     (unsigned)date.month, (unsigned)date.day);
+        return false;
+    }
+    date_commit(picker_widget, picker, date, false);
+    return true;
+}
+
+pt_date pt_date_picker_get_date(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    return picker ? picker->date : (pt_date){0, 0, 0};
+}
+
+void pt_date_picker_clear(pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    if (picker) {
+        date_clear_value(picker_widget, picker);
+    }
+}
+
+void pt_date_picker_set_format(pt_widget *picker_widget, pt_date_format format) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    if (!picker) {
+        return;
+    }
+    if (format != pt_date_format_iso && format != pt_date_format_dmy &&
+        format != pt_date_format_mdy) {
+        format = pt_date_format_iso;
+    }
+    if (picker->format == format) {
+        return;
+    }
+    picker->format = format;
+    date_refresh_text(picker_widget, picker);
+    if (pt_picker_is_open(picker_widget)) {
+        pt_widget_mark_dirty(picker_widget, false);
+    }
+    pt_widget_a11y_emit(picker_widget, pt_a11y_event_text_changed);
+}
+
+pt_date_format pt_date_picker_get_format(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    return picker ? picker->format : pt_date_format_iso;
+}
+
+bool pt_date_picker_set_text(pt_widget *picker_widget, const char *text) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    if (!picker) {
+        return false;
+    }
+    if (!text || !text[0]) {
+        date_clear_value(picker_widget, picker);
+        return true;
+    }
+    pt_date parsed = {0, 0, 0};
+    if (!date_parse(text, picker->format, &parsed)) {
+        pt_set_error("pt_date_picker: '%s' is not a valid date", text);
+        picker_set_field_text(picker_widget, picker, picker->display);
+        return false;
+    }
+    date_commit(picker_widget, picker, parsed, false);
+    return true;
+}
+
+const char *pt_date_picker_get_text(const pt_widget *picker_widget) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    return picker ? picker->display : "";
+}
+
+void pt_date_picker_set_placeholder(pt_widget *picker_widget, const char *text) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    if (!picker) {
+        return;
+    }
+    char *copy = pt_strdup(text ? text : "");
+    free(picker_widget->placeholder);
+    picker_widget->placeholder = copy;
+    if (picker->field) {
+        pt_entry_set_placeholder(picker->field, text);
+    }
+    pt_widget_mark_dirty(picker_widget, false);
+}
+
+const char *pt_date_picker_get_placeholder(const pt_widget *picker_widget) {
+    return picker_widget
+               ? (picker_widget->placeholder ? picker_widget->placeholder : "")
+               : "";
+}
+
+void pt_date_picker_open(pt_widget *picker_widget) {
+    pt_picker_open(picker_widget);
+}
+
+void pt_date_picker_close(pt_widget *picker_widget) {
+    pt_picker_close(picker_widget);
+}
+
+bool pt_date_picker_is_open(const pt_widget *picker_widget) {
+    return pt_picker_is_open(picker_widget);
+}
+
+void pt_date_picker_set_on_change(pt_widget *picker_widget, pt_date_callback callback,
+                                  void *user_data) {
+    pt_picker *picker = pt_picker_of_kind(picker_widget, pt_picker_kind_date);
+    if (!picker) {
+        return;
+    }
+    picker->on_date = callback;
+    picker->date_data = user_data;
+}
+
 /* ---------- accessibility hooks ---------- */
 
 bool pt_picker_a11y_value(const pt_widget *widget, float *value) {
     pt_picker *picker = pt_picker_of(widget);
-    if (!picker || !value || picker->kind != pt_picker_kind_select) {
+    if (!picker || !value) {
         return false;
     }
-    *value = picker->selected == pt_list_index_none ? -1.0f : (float)picker->selected;
-    return true;
+    if (picker->kind == pt_picker_kind_select) {
+        *value = picker->selected == pt_list_index_none ? -1.0f : (float)picker->selected;
+        return true;
+    }
+    if (picker->kind == pt_picker_kind_date) {
+        if (picker->date.year == 0) {
+            *value = 0.0f;
+        } else {
+            *value = (float)(picker->date.year * 10000 + (int32_t)picker->date.month * 100 +
+                             (int32_t)picker->date.day);
+        }
+        return true;
+    }
+    return false;
 }
 
 bool pt_picker_a11y_has_popup(const pt_widget *widget) {

@@ -279,3 +279,17 @@ _Static_assert(PT_TABLE_COLUMN_LAYOUT_MAX == 262144u, "256 KiB layout blob cap")
 _Static_assert(PT_SELECT_MAX_ITEMS == 1024u, "select model cap must stay 1024");
 _Static_assert(PT_PICKER_MAX_CANDIDATES == 256u, "candidate row cap must stay 256");
 _Static_assert(PT_COLOR_MAX_PRESETS == 64u, "colour preset cap must stay 64");
+/* The civil date is a plain y/m/d; offsets and field widths are part of the
+ * ABI even though the control never exposes a time zone or clock value. */
+_Static_assert(pt_date_format_iso == 0, "iso format must stay 0");
+_Static_assert(pt_date_format_dmy == 1, "dmy format must stay 1");
+_Static_assert(pt_date_format_mdy == 2, "mdy format must stay 2");
+_Static_assert(offsetof(pt_date, year) == 0, "date year first");
+_Static_assert(offsetof(pt_date, year) < offsetof(pt_date, month), "date field order");
+_Static_assert(offsetof(pt_date, month) < offsetof(pt_date, day), "date field order");
+_Static_assert(sizeof(((pt_date *)0)->year) == 4, "date year is int32");
+_Static_assert(sizeof(((pt_date *)0)->month) == 1, "date month is uint8");
+_Static_assert(sizeof(((pt_date *)0)->day) == 1, "date day is uint8");
+_Static_assert(sizeof(pt_date) == 8, "date is two 4-byte slots");
+_Static_assert(sizeof(pt_date_callback) == sizeof(void (*)(void)),
+               "date callback is a function pointer");
