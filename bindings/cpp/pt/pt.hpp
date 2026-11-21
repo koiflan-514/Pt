@@ -37,6 +37,8 @@ class widget;
 class menu;
 class dialog;
 class toast;
+class popup;
+class icon_image;
 
 using tree_node = pt_tree_node;
 using stylus_event = pt_stylus_event;
@@ -45,6 +47,17 @@ using drop_stream_state = pt_drop_stream_state;
 using combo_mode = pt_combobox_mode;
 using decoration_mode = pt_decoration_mode;
 using paint_pixels_desc = pt_paint_pixels_desc;
+using popup_anchor = pt_popup_anchor;
+using popup_placement = pt_popup_placement;
+using date = pt_date;
+
+/* Premultiplied 0xAARRGGBB pixels copied out of the clipboard image slot. The
+ * vector owns the copy; the native buffer has already been released. */
+struct clipboard_image {
+    std::vector<pt_color> pixels;
+    int width = 0;
+    int height = 0;
+};
 
 struct rect {
     float x = 0.0f;
@@ -228,6 +241,58 @@ class app {
         std::string value = copy_string(family);
         pt_app_set_font_family(handle_, value.c_str());
     }
+    /* Process-wide per-run fallback chain. An empty list restores Fontconfig's
+     * sort order; entries are copied and the count is clamped by Pt. Returned
+     * families borrow chain storage, so the getters copy them into std::string
+     * and report std::nullopt for an out-of-range index. */
+    void set_font_fallbacks(std::span<const std::string_view> families) const {
+        inst_font_fallbacks(handle_, nullptr, families);
+    }
+    void set_font_fallbacks(std::initializer_list<std::string_view> families) const {
+        set_font_fallbacks(std::span<const std::string_view>(families.begin(), families.size()));
+    }
+    [[nodiscard]] int font_fallback_count() const {
+        return pt_app_get_font_fallback_count(handle_);
+    }
+    [[nodiscard]] std::optional<std::string> font_fallback(int index) const {
+        const char *value = pt_app_get_font_fallback(handle_, index);
+        if (!value) {
+            return std::nullopt;
+        }
+        return std::string(value);
+    }
+    /* Per-family override for an exact primary family string. An empty list
+     * removes the override; the app default is untouched. */
+    void set_font_fallbacks_for_family(
+        std::string_view family, std::span<const std::string_view> families) const {
+        std::string name = copy_string(family);
+        inst_font_fallbacks(handle_, name.c_str(), families);
+    }
+    void set_font_fallbacks_for_family(std::string_view family,
+                                       std::initializer_list<std::string_view> families) const {
+        set_font_fallbacks_for_family(
+            family, std::span<const std::string_view>(families.begin(), families.size()));
+    }
+    [[nodiscard]] int font_fallback_count_for_family(std::string_view family) const {
+        std::string name = copy_string(family);
+        return pt_app_get_font_fallback_count_for_family(handle_, name.c_str());
+    }
+    [[nodiscard]] std::optional<std::string> font_fallback_for_family(
+        std::string_view family, int index) const {
+        std::string name = copy_string(family);
+        const char *value = pt_app_get_font_fallback_for_family(handle_, name.c_str(), index);
+        if (!value) {
+            return std::nullopt;
+        }
+        return std::string(value);
+    }
+    /* Codepoints in `text` that no installed fallback face covers (tofu count).
+     * An empty family selects the app's configured family. */
+    [[nodiscard]] int font_uncovered_count(std::string_view family,
+                                           std::string_view text) const {
+        std::string name = copy_string(family);
+        return pt_app_font_uncovered_count(handle_, name.c_str(), text.data(), text.size());
+    }
     void set_reduced_motion(bool reduced) const {
         pt_app_set_reduced_motion(handle_, reduced);
     }
@@ -242,6 +307,27 @@ class app {
     }
 
   private:
+    static void inst_font_fallbacks(pt_app *handle, const char *family,
+                                    std::span<const std::string_view> families) {
+        std::vector<std::string> owned;
+        owned.reserve(families.size());
+        for (std::string_view item : families) {
+            owned.emplace_back(item);
+        }
+        std::vector<const char *> pointers;
+        pointers.reserve(owned.size());
+        for (const std::string &item : owned) {
+            pointers.push_back(item.c_str());
+        }
+        const char *const *list = pointers.empty() ? nullptr : pointers.data();
+        if (family) {
+            pt_app_set_font_fallbacks_for_family(handle, family, list,
+                                                 static_cast<int>(pointers.size()));
+        } else {
+            pt_app_set_font_fallbacks(handle, list, static_cast<int>(pointers.size()));
+        }
+    }
+
     pt_app *handle_ = nullptr;
 };
 
@@ -1003,6 +1089,36 @@ class widget {
         pt_table_set_on_row_drag(handle_, callback, data);
         return *this;
     }
+    /* Stable application-owned column key (UTF-8, truncated by Pt above
+     * PT_TABLE_COLUMN_KEY_MAX). An empty key means "match by position". */
+    widget &set_column_key(uint32_t column, std::string_view key) {
+        std::string value = copy_string(key);
+        pt_table_set_column_key(handle_, column, value.c_str());
+        return *this;
+    }
+    /* Owned copy; never NULL from the C API, "" for a missing key or column. */
+    [[nodiscard]] std::string column_key(uint32_t column) const {
+        const char *value = pt_table_get_column_key(handle_, column);
+        return value ? value : "";
+    }
+    /* Versioned layout blob (width, order, visibility and sort), or "" on
+     * failure. The caller owns the returned copy; the C allocation is freed
+     * here. */
+    [[nodiscard]] std::string columns_save() const {
+        char *value = pt_table_columns_save(handle_);
+        if (!value) {
+            return {};
+        }
+        std::string copy(value);
+        pt_free(value);
+        return copy;
+    }
+    /* Replaces the current layout atomically on success. A rejected blob
+     * leaves the table untouched and records the reason in pt::last_error(). */
+    bool columns_restore(std::string_view blob) const {
+        std::string value = copy_string(blob);
+        return pt_table_columns_restore(handle_, value.c_str());
+    }
 
     [[nodiscard]] uint32_t tree_root_count() const {
         return pt_tree_get_root_count(handle_);
@@ -1672,6 +1788,89 @@ class window {
         std::string copy(value);
         pt_free(value);
         return copy;
+    }
+    /* PNG clipboard image. Pixels are premultiplied 0xAARRGGBB, row-major with
+     * a stride of width. The span must hold width * height pixels; a short span
+     * is rejected before the C entry point can read past it. Pt copies the
+     * pixels during the call. */
+    bool set_clipboard_image(std::span<const pt_color> pixels, int width, int height) const {
+        if (width <= 0 || height <= 0 || width > pt_clipboard_image_max_dimension ||
+            height > pt_clipboard_image_max_dimension) {
+            return false;
+        }
+        const size_t columns = static_cast<size_t>(width);
+        const size_t rows = static_cast<size_t>(height);
+        if (columns > std::numeric_limits<size_t>::max() / rows) {
+            return false;
+        }
+        const size_t required = columns * rows;
+        if (pixels.size() < required) {
+            return false;
+        }
+        return pt_window_clipboard_set_image_png(handle_, pixels.data(), width, height);
+    }
+    /* Decodes the clipboard image slot into an owned pixel copy plus size, or
+     * std::nullopt when the slot is empty, not image/png or corrupt. */
+    [[nodiscard]] std::optional<clipboard_image> clipboard_image_png() const {
+        int width = 0;
+        int height = 0;
+        pt_color *pixels = pt_window_clipboard_get_image_png(handle_, &width, &height);
+        if (!pixels) {
+            return std::nullopt;
+        }
+        clipboard_image image;
+        image.width = width;
+        image.height = height;
+        if (width > 0 && height > 0) {
+            image.pixels.assign(pixels, pixels + static_cast<size_t>(width) *
+                                                 static_cast<size_t>(height));
+        }
+        pt_free(pixels);
+        return image;
+    }
+    /* text/uri-list write. Entries are absolute paths or already-formed URIs;
+     * Pt validates and copies them. An empty list is rejected. */
+    bool set_clipboard_uri_list(std::span<const std::string_view> uris) const {
+        if (uris.empty()) {
+            return false;
+        }
+        std::vector<std::string> owned;
+        owned.reserve(uris.size());
+        for (std::string_view uri : uris) {
+            owned.emplace_back(uri);
+        }
+        std::vector<const char *> pointers;
+        pointers.reserve(owned.size());
+        for (const std::string &uri : owned) {
+            pointers.push_back(uri.c_str());
+        }
+        return pt_window_clipboard_set_uri_list(handle_, pointers.data(),
+                                                static_cast<uint32_t>(pointers.size()));
+    }
+    bool set_clipboard_uri_list(std::initializer_list<std::string_view> uris) const {
+        return set_clipboard_uri_list(
+            std::span<const std::string_view>(uris.begin(), uris.size()));
+    }
+    /* Window icon. Pt takes its own reference; an invalid handle removes it.
+     * Headless and compositors without xdg_toplevel_icon_v1 accept the call as
+     * a silent no-op but still retain the image for the getter. */
+    window &set_icon(const icon_image &image) {
+        pt_window_set_icon(handle_, image.get());
+        return *this;
+    }
+    window &set_icon(pt_icon_image *image) {
+        pt_window_set_icon(handle_, image);
+        return *this;
+    }
+    window &clear_icon() {
+        pt_window_set_icon(handle_, nullptr);
+        return *this;
+    }
+    [[nodiscard]] pt_icon_image *icon_image_raw() const {
+        return pt_window_get_icon(handle_);
+    }
+    [[nodiscard]] icon_image icon_image_ref() const {
+        return icon_image(pt_icon_image_ref(pt_window_get_icon(handle_)));
     }
     [[nodiscard]] toast show_toast(std::string_view text,
                                    pt_toast_kind kind = pt_toast_info,
