@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <xkbcommon/xkbcommon-keysyms.h>
+
 typedef struct resize_state {
     int calls;
     int width;
@@ -29,6 +31,63 @@ typedef struct paint_probe {
     int calls;
     float width;
 } paint_probe;
+
+typedef struct pointer_probe {
+    int count;
+    pt_pointer_phase phase;
+    uint32_t button;
+    uint32_t click_count;
+    bool pressed;
+    bool consume_motion;
+} pointer_probe;
+
+static bool record_pointer(pt_window *window, const pt_pointer_event *event, void *data) {
+    (void)window;
+    pointer_probe *probe = data;
+    probe->count++;
+    probe->phase = event->phase;
+    probe->button = event->button;
+    probe->click_count = event->click_count;
+    probe->pressed = event->pressed;
+    return event->phase == pt_pointer_phase_motion && probe->consume_motion;
+}
+
+typedef struct key_probe {
+    int raw_calls;
+    int legacy_calls;
+    bool consume_raw;
+    bool consume_legacy;
+    uint32_t modifiers_seen;
+    int order[8];
+    int order_count;
+} key_probe;
+
+static bool record_raw_key(pt_window *window, uint32_t key, uint32_t modifiers,
+                           const char *utf8, void *data) {
+    (void)window;
+    (void)key;
+    (void)utf8;
+    key_probe *probe = data;
+    probe->raw_calls++;
+    probe->modifiers_seen = modifiers;
+    if (probe->order_count < 8) {
+        probe->order[probe->order_count++] = 1;
+    }
+    return probe->consume_raw;
+}
+
+static bool record_legacy_key(pt_window *window, uint32_t key, uint32_t modifiers,
+                              void *data) {
+    (void)window;
+    (void)key;
+    (void)modifiers;
+    key_probe *probe = data;
+    probe->legacy_calls++;
+    if (probe->order_count < 8) {
+        probe->order[probe->order_count++] = 2;
+    }
+    return probe->consume_legacy;
+}
 
 static void record_paint(pt_widget *widget, pt_paint_context *context, void *data) {
     (void)widget;
@@ -194,6 +253,165 @@ static void test_animation(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Button specificity (standards section 9): right and middle must not touch
+ * the left button's press state, click count or long-press timer. */
+static void test_button_specificity(pt_app *app) {
+    pt_window *window = pt_window_create(app, "buttons", 320, 240);
+    pt_widget *button = pt_button_create(pt_window_root(window), "Target");
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(320, 240, 1.0f);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect bounds = bounds_of(button);
+    float cx = bounds.x + bounds.w * 0.5f;
+    float cy = bounds.y + bounds.h * 0.5f;
+
+    pointer_probe probe = {0};
+    pt_window_set_pointer_callback(window, record_pointer, &probe);
+    pt_window_input_pointer_enter(window, cx, cy);
+    pt_window_input_pointer_motion(window, cx, cy, 900);
+
+    const uint32_t left = 0x110u;
+    const uint32_t right = 0x111u;
+    uint32_t left_slot = left & 31u;
+
+    pt_window_input_pointer_button(window, left, true, cx, cy, 1, 1000);
+    pt_window_input_pointer_button(window, left, false, cx, cy, 2, 1010);
+    pt_check(window->click_count[left_slot] == 1);
+    pt_check((window->pointer_buttons & (1u << left_slot)) == 0);
+    pt_check(probe.phase == pt_pointer_phase_up && probe.button == left);
+    pt_check(!probe.pressed);
+
+    /* A right click in the same spot is its own gesture. */
+    pt_window_input_pointer_button(window, right, true, cx, cy, 3, 1020);
+    pt_check(window->click_count[left_slot] == 1);
+    pt_check(probe.phase == pt_pointer_phase_down && probe.button == right);
+    pt_check(probe.pressed);
+    pt_check(probe.click_count == 1);
+    pt_window_input_pointer_button(window, right, false, cx, cy, 4, 1030);
+
+    /* The next left click is therefore a double click. */
+    pt_window_input_pointer_button(window, left, true, cx, cy, 5, 1040);
+    pt_check(window->click_count[left_slot] == 2);
+    pt_check(probe.click_count == 2);
+    pt_window_input_pointer_button(window, left, false, cx, cy, 6, 1050);
+
+    /* A right press/release inside a held left press keeps both the left bit
+     * and the long-press target alive; only the left release ends it. */
+    pt_window_input_pointer_button(window, left, true, cx, cy, 7, 2000);
+    pt_check(window->press_target == button);
+    pt_window_input_pointer_button(window, right, true, cx, cy, 8, 2010);
+    pt_window_input_pointer_button(window, right, false, cx, cy, 9, 2020);
+    pt_check(window->press_target == button);
+    pt_check((window->pointer_buttons & (1u << left_slot)) != 0);
+    pt_window_input_pointer_button(window, left, false, cx, cy, 10, 2030);
+    pt_check(window->press_target == NULL);
+    pt_check(window->pointer_buttons == 0);
+
+    pt_window_input_pointer_leave(window);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* Motion return values are advisory: a consuming motion callback must not
+ * stop hover, drag tracking or slider value updates. */
+static void test_motion_advisory(pt_app *app) {
+    pt_window *window = pt_window_create(app, "motion", 360, 240);
+    pt_widget *slider = pt_slider_create(pt_window_root(window));
+    pt_widget_set_height(slider, 32.0f);
+    pt_slider_set_value(slider, 0.2f);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(360, 240, 1.0f);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect bounds = bounds_of(slider);
+    float cy = bounds.y + bounds.h * 0.5f;
+    float start_x = bounds.x + bounds.w * 0.35f;
+    float end_x = bounds.x + bounds.w * 0.9f;
+
+    pointer_probe probe = {.consume_motion = true};
+    pt_window_set_pointer_callback(window, record_pointer, &probe);
+    pt_window_input_pointer_enter(window, start_x, cy);
+    pt_check(window->hovered == slider);
+    pt_window_input_pointer_button(window, 0x110u, true, start_x, cy, 20, 3000);
+    pt_window_input_pointer_motion(window, end_x, cy, 3010);
+    pt_check(probe.phase == pt_pointer_phase_motion);
+    pt_check(probe.count > 0);
+    pt_check(pt_slider_get_value(slider) > 0.7f);
+    pt_window_input_pointer_button(window, 0x110u, false, end_x, cy, 21, 3020);
+
+    /* Leaving still clears hover even though the callback returns true. */
+    pointer_probe leave_probe = {.consume_motion = true};
+    pt_window_set_pointer_callback(window, record_pointer, &leave_probe);
+    pt_window_input_pointer_enter(window, start_x, cy);
+    pt_check(window->hovered == slider);
+    pt_window_input_pointer_leave(window);
+    pt_check(window->hovered == NULL);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* Raw input dispatch order and consume scope (standards section 9). */
+static void test_raw_key_dispatch(pt_app *app) {
+    pt_window *window = pt_window_create(app, "raw", 360, 260);
+    pt_widget *entry = pt_entry_create(pt_window_root(window), "type");
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(360, 260, 1.0f);
+    pt_check(pt_window_paint(window, canvas));
+    pt_window_focus(window, entry);
+
+    key_probe probe = {0};
+    pt_window_set_key_event_callback(window, record_raw_key, &probe);
+    pt_window_set_key_callback(window, record_legacy_key, &probe);
+
+    /* Raw consumes: no legacy call, no widget insert, modifiers still land. */
+    probe.consume_raw = true;
+    pt_window_input_key(window, XKB_KEY_a, (uint32_t)pt_key_modifier_shift, "a", true);
+    pt_check(probe.raw_calls == 1);
+    pt_check(probe.legacy_calls == 0);
+    pt_check(probe.modifiers_seen == (uint32_t)pt_key_modifier_shift);
+    pt_check(window->modifiers == (uint32_t)pt_key_modifier_shift);
+    pt_check(strcmp(pt_widget_get_text(entry), "") == 0);
+
+    /* Raw passes, legacy consumes: still no widget insert. */
+    probe.consume_raw = false;
+    probe.consume_legacy = true;
+    pt_window_input_key(window, XKB_KEY_b, 0, "b", true);
+    pt_check(probe.raw_calls == 2);
+    pt_check(probe.legacy_calls == 1);
+    pt_check(strcmp(pt_widget_get_text(entry), "") == 0);
+
+    /* Neither consumes: raw runs before legacy and the text arrives. */
+    probe.consume_legacy = false;
+    probe.order_count = 0;
+    pt_window_input_key(window, XKB_KEY_c, 0, "c", true);
+    pt_check(probe.order_count == 2);
+    pt_check(probe.order[0] == 1 && probe.order[1] == 2);
+    pt_check(strcmp(pt_widget_get_text(entry), "c") == 0);
+
+    /* Overlay key handling runs before raw input: while the menu is open it
+     * owns the keyboard, so the callback never sees a key. */
+    pt_menu *menu = pt_menu_create(window);
+    pt_menu_add_item(menu, "One", NULL, NULL, NULL);
+    pt_menu_add_item(menu, "Two", NULL, NULL, NULL);
+    pt_menu_show_at(menu, 24.0f, window->header_height + 24.0f);
+    pt_check(pt_menu_is_open(menu));
+    int before = probe.raw_calls;
+    pt_window_input_key(window, XKB_KEY_Down, 0, NULL, true);
+    pt_check(probe.raw_calls == before);
+    pt_window_input_key(window, XKB_KEY_Escape, 0, NULL, true);
+    pt_check(!pt_menu_is_open(menu));
+    pt_check(probe.raw_calls == before);
+
+    /* With no overlay the callback is reached again. */
+    probe.consume_raw = true;
+    pt_window_input_key(window, XKB_KEY_F5, 0, NULL, true);
+    pt_check(probe.raw_calls == before + 1);
+    pt_menu_destroy(menu);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.window");
@@ -206,6 +424,9 @@ int main(void) {
     test_window_properties(app);
     test_scroll_painting(app);
     test_animation(app);
+    test_button_specificity(app);
+    test_motion_advisory(app);
+    test_raw_key_dispatch(app);
 
     /* Primary selection (middle-click paste) API. Headless runs keep an
      * in-process buffer, so the round trip must behave like the clipboard. */

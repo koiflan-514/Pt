@@ -1065,10 +1065,12 @@ struct pt_window {
     float pointer_x;
     float pointer_y;
     double last_paint_time;
-    uint32_t last_click_time;
-    float last_click_x;
-    float last_click_y;
-    uint32_t click_count;
+    /* Double-click tracking is per button: a right-click between two left
+     * clicks must not reset the left click count (standards section 9). */
+    uint32_t last_click_time[32];
+    float last_click_x[32];
+    float last_click_y[32];
+    uint32_t click_count[32];
     uint32_t pointer_serial;
     uint32_t pointer_buttons;
     int32_t touch_id;

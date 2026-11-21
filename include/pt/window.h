@@ -94,10 +94,13 @@ typedef void (*pt_focus_callback)(pt_window *window, bool focused, void *user_da
 pt_api void pt_window_set_focus_callback(pt_window *window, pt_focus_callback callback,
                                          void *user_data);
 
-/* Extended key callback. It runs after overlay key handling and before the
- * legacy key callback and focused-widget handling. Returning true consumes the
- * key. `utf8` is the xkb UTF-8 text for the key (may be NULL or empty for
- * non-text keys) and is valid only during the call. */
+/* Extended ("raw") key callback. Dispatch order is overlay key handling, this
+ * callback, the legacy key callback, then the focused widget. Returning true
+ * consumes the key for the remaining widget dispatch only: the window's
+ * modifier and latest-key-serial accounting still completes, so popup grabs and
+ * primary-selection serials cannot go stale. A consumed key never reaches
+ * text-input as an inserted commit. `utf8` is the xkb UTF-8 text for the key
+ * (may be NULL or empty for non-text keys) and is valid only during the call. */
 typedef bool (*pt_key_event_callback)(pt_window *window, uint32_t key, uint32_t modifiers,
                                       const char *utf8, void *user_data);
 pt_api void pt_window_set_key_event_callback(pt_window *window,
@@ -118,7 +121,10 @@ typedef enum pt_pointer_phase {
 /* A normalized pointer event in logical window coordinates. For axis events,
  * delta_y is positive downward and is expressed in the compositor's axis units
  * (typically 15 per wheel notch). `button` is a Linux BTN_* code for down/up and
- * 0 otherwise. `pressed` reports whether any pointer button is held. */
+ * 0 otherwise. For down and up, `pressed` reports the state of that button and
+ * `click_count` its own multi-click count; for the other phases `pressed`
+ * reports whether any pointer button is held. Non-left buttons never alter the
+ * left button's press state or click count. */
 typedef struct pt_pointer_event {
     pt_pointer_phase phase;
     float x;
@@ -131,9 +137,11 @@ typedef struct pt_pointer_event {
     bool pressed;
 } pt_pointer_event;
 
-/* Runs before overlay/widget pointer dispatch. Returning true consumes the
- * event. Enter, leave and motion callbacks are advisory: the return value is
- * ignored for them so hover tracking keeps working. */
+/* Runs before overlay/widget pointer dispatch. Returning true consumes down,
+ * up and axis events. Enter, leave and motion callbacks are advisory: the
+ * return value is ignored for them so hover tracking keeps working. The pointer
+ * event is borrowed for the call and becomes invalid when the callback
+ * returns. */
 typedef bool (*pt_pointer_callback)(pt_window *window, const pt_pointer_event *event,
                                     void *user_data);
 pt_api void pt_window_set_pointer_callback(pt_window *window, pt_pointer_callback callback,

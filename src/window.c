@@ -1062,6 +1062,15 @@ static bool emit_pointer_event(pt_window *window, pt_pointer_phase phase, float 
     if (!window || !window->pointer_callback) {
         return false;
     }
+    uint32_t click_count = 0;
+    bool button_pressed = window->pointer_buttons != 0;
+    if (phase == pt_pointer_phase_down || phase == pt_pointer_phase_up) {
+        uint32_t slot = button & 31u;
+        click_count = window->click_count[slot];
+        button_pressed = phase == pt_pointer_phase_down;
+    } else {
+        click_count = window->click_count[0x110u & 31u];
+    }
     pt_pointer_event event = {
         .phase = phase,
         .x = x,
@@ -1070,8 +1079,8 @@ static bool emit_pointer_event(pt_window *window, pt_pointer_phase phase, float 
         .delta_y = delta_y,
         .button = button,
         .modifiers = window->modifiers,
-        .click_count = window->click_count,
-        .pressed = window->pointer_buttons != 0,
+        .click_count = click_count,
+        .pressed = button_pressed,
     };
     return window->pointer_callback(window, &event, window->pointer_data);
 }
@@ -1098,12 +1107,10 @@ void pt_window_input_pointer_motion(pt_window *window, float x, float y, uint32_
     window->pointer_x = x;
     window->pointer_y = y;
     pt_window_press_motion(window, x, y);
-    bool custom = emit_pointer_event(window, pt_pointer_phase_motion, x, y, delta_x, delta_y,
-                                     0);
-    if (custom) {
-        update_hover(window, x, y);
-        return;
-    }
+    /* Motion is advisory (window.h): the return value is ignored so hover,
+     * drag tracking and long-press cancellation keep working. Only down/up and
+     * axis callbacks can consume an event. */
+    (void)emit_pointer_event(window, pt_pointer_phase_motion, x, y, delta_x, delta_y, 0);
     if (window->drag_pending && window->drag_widget) {
         float dx = x - window->drag_start_x;
         float dy = y - window->drag_start_y;
@@ -1216,23 +1223,30 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
         window->pointer_serial = serial;
     }
     if (pressed) {
-        window->pointer_buttons |= 1u << (button & 31u);
+        uint32_t slot = button & 31u;
+        window->pointer_buttons |= 1u << slot;
         uint32_t event_time = time ? time : (uint32_t)pt_now_ms();
-        bool same_spot = fabsf(x - window->last_click_x) <= 6.0f &&
-                         fabsf(y - window->last_click_y) <= 6.0f;
-        bool repeat = window->click_count > 0 && same_spot &&
-                      event_time >= window->last_click_time &&
-                      event_time - window->last_click_time <= 400u;
-        window->click_count = repeat ? window->click_count + 1u : 1u;
-        if (window->click_count > 3u) {
-            window->click_count = 1u;
+        bool same_spot = fabsf(x - window->last_click_x[slot]) <= 6.0f &&
+                         fabsf(y - window->last_click_y[slot]) <= 6.0f;
+        bool repeat = window->click_count[slot] > 0 && same_spot &&
+                      event_time >= window->last_click_time[slot] &&
+                      event_time - window->last_click_time[slot] <= 400u;
+        window->click_count[slot] = repeat ? window->click_count[slot] + 1u : 1u;
+        if (window->click_count[slot] > 3u) {
+            window->click_count[slot] = 1u;
         }
-        window->last_click_time = event_time;
-        window->last_click_x = x;
-        window->last_click_y = y;
+        window->last_click_time[slot] = event_time;
+        window->last_click_x[slot] = x;
+        window->last_click_y[slot] = y;
     } else {
-        window->pointer_buttons &= ~(1u << (button & 31u));
-        pt_window_press_end(window, x, y);
+        uint32_t slot = button & 31u;
+        window->pointer_buttons &= ~(1u << slot);
+        /* Only the primary button owns widget press state, text selection and
+         * the long-press machinery; a right or middle release must leave a
+         * held left button undisturbed. */
+        if (button == 0x110u) {
+            pt_window_press_end(window, x, y);
+        }
     }
     if (pressed) {
         pt_window_momentum_stop(window);
@@ -1297,8 +1311,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
                     pt_widget_kind_is_text_input(hit->kind) ||
                     hit->kind == pt_widget_table_cell || hit->kind == pt_widget_table_row ||
                     hit->kind == pt_widget_tree_row;
-                if (multi_clickable && window->click_count > 1) {
-                    pt_widget_pointer_multi_click(hit, x, y, window->click_count);
+                uint32_t left_clicks = window->click_count[0x110u & 31u];
+                if (multi_clickable && left_clicks > 1) {
+                    pt_widget_pointer_multi_click(hit, x, y, left_clicks);
                 }
             }
             window->needs_draw = true;
@@ -1335,8 +1350,9 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
                                                  active->height}, x, y);
         if (click_selection) {
             pt_widget_pointer_down(active, x, y);
-            if (pt_widget_kind_is_text_input(active->kind) && window->click_count > 1) {
-                pt_widget_pointer_multi_click(active, x, y, window->click_count);
+            uint32_t left_clicks = window->click_count[0x110u & 31u];
+            if (pt_widget_kind_is_text_input(active->kind) && left_clicks > 1) {
+                pt_widget_pointer_multi_click(active, x, y, left_clicks);
             }
             pt_widget_pointer_up(active, inside);
         } else {
