@@ -7,6 +7,8 @@
 #include "internal.h"
 
 #include <math.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,7 +16,9 @@
 
 #define pt_table_default_width 160.0f
 #define pt_table_min_width 48.0f
-#define pt_table_max_columns 1024u
+/* Upper bound accepted by restore for a saved width. The limit is only a
+ * sanity cap; the widest real column is far below it. */
+#define pt_table_max_width 1000000.0f
 
 static pt_table_state *table_state(pt_widget *table) {
     if (!table || table->kind != pt_widget_table) {
@@ -322,17 +326,42 @@ pt_widget *pt_table_create(pt_widget *parent) {
     return table;
 }
 
+/* Rebuild the header and row pool from the column arrays the state already
+ * owns. Callers must have filled widths, titles, keys, aligns, resizable and
+ * hidden for state->column_count entries and may have replaced sort state. */
+static void table_rebuild_columns(pt_widget *table, pt_table_state *state) {
+    pt_widget_clear_children(state->header);
+    for (uint32_t i = 0; i < state->column_count; ++i) {
+        pt_widget *cell = pt_widget_new(state->header, pt_widget_table_header_cell);
+        cell->column_index = i;
+        cell->text = pt_strdup(state->column_titles[i]);
+        cell->requested_width = state->column_widths[i];
+        cell->text_align = state->column_aligns[i];
+        cell->font_weight = pt_font_weight_semibold;
+        cell->font_size = 13.0f;
+        cell->radius = 0.0f;
+        cell->padding_left = 12.0f;
+        cell->padding_right = 12.0f;
+        cell->visible = !state->column_hidden[i];
+    }
+    table_clear_rows(table);
+    state->rebind = true;
+    table_update_header_icons(table);
+    pt_widget_mark_dirty(table, true);
+    pt_widget_a11y_emit(table, pt_a11y_event_structure_changed);
+}
+
 void pt_table_set_column_count(pt_widget *table, uint32_t count) {
     pt_table_state *state = table_state(table);
     if (!state) {
         return;
     }
-    /* Every column owns five state arrays and a header widget; an unbounded
+    /* Every column owns six state arrays and a header widget; an unbounded
      * count from application data would abort in the allocator. */
-    if (count > pt_table_max_columns) {
+    if (count > PT_TABLE_MAX_COLUMNS) {
         pt_log_warn("table column count %u exceeds the %u column limit", count,
-                    pt_table_max_columns);
-        count = pt_table_max_columns;
+                    PT_TABLE_MAX_COLUMNS);
+        count = PT_TABLE_MAX_COLUMNS;
     }
     /* Rebuilding the rows below destroys the inline editor, so commit is not
      * possible and the editor must be detached first. */
@@ -340,6 +369,7 @@ void pt_table_set_column_count(pt_widget *table, uint32_t count) {
     uint32_t old_count = state->column_count;
     float *widths = pt_alloc_zeroed(count ? count : 1, sizeof(*widths));
     char **titles = pt_alloc_zeroed(count ? count : 1, sizeof(*titles));
+    char **keys = pt_alloc_zeroed(count ? count : 1, sizeof(*keys));
     pt_text_align *aligns = pt_alloc_zeroed(count ? count : 1, sizeof(*aligns));
     bool *resizable = pt_alloc_zeroed(count ? count : 1, sizeof(*resizable));
     bool *hidden = pt_alloc_zeroed(count ? count : 1, sizeof(*hidden));
@@ -348,20 +378,26 @@ void pt_table_set_column_count(pt_widget *table, uint32_t count) {
         titles[i] = pt_strdup(i < old_count && state->column_titles[i]
                                   ? state->column_titles[i]
                                   : "");
+        keys[i] = pt_strdup(i < old_count && state->column_keys[i]
+                                ? state->column_keys[i]
+                                : "");
         aligns[i] = i < old_count ? state->column_aligns[i] : pt_text_align_start;
         resizable[i] = i < old_count ? state->column_resizable[i] : true;
         hidden[i] = i < old_count ? state->column_hidden[i] : false;
     }
     for (uint32_t i = 0; i < old_count; ++i) {
         free(state->column_titles[i]);
+        free(state->column_keys[i]);
     }
     free(state->column_widths);
     free(state->column_titles);
+    free(state->column_keys);
     free(state->column_aligns);
     free(state->column_resizable);
     free(state->column_hidden);
     state->column_widths = widths;
     state->column_titles = titles;
+    state->column_keys = keys;
     state->column_aligns = aligns;
     state->column_resizable = resizable;
     state->column_hidden = hidden;
@@ -378,25 +414,7 @@ void pt_table_set_column_count(pt_widget *table, uint32_t count) {
     }
     state->sort_count = sort_count;
 
-    pt_widget_clear_children(state->header);
-    for (uint32_t i = 0; i < count; ++i) {
-        pt_widget *cell = pt_widget_new(state->header, pt_widget_table_header_cell);
-        cell->column_index = i;
-        cell->text = pt_strdup(titles[i]);
-        cell->requested_width = widths[i];
-        cell->text_align = aligns[i];
-        cell->font_weight = pt_font_weight_semibold;
-        cell->font_size = 13.0f;
-        cell->radius = 0.0f;
-        cell->padding_left = 12.0f;
-        cell->padding_right = 12.0f;
-        cell->visible = !hidden[i];
-    }
-    table_clear_rows(table);
-    state->rebind = true;
-    table_update_header_icons(table);
-    pt_widget_mark_dirty(table, true);
-    pt_widget_a11y_emit(table, pt_a11y_event_structure_changed);
+    table_rebuild_columns(table, state);
 }
 
 uint32_t pt_table_get_column_count(const pt_widget *table) {
@@ -531,6 +549,43 @@ bool pt_table_get_column_hidden(const pt_widget *table, uint32_t column) {
         return false;
     }
     return state->column_hidden[column];
+}
+
+void pt_table_set_column_key(pt_widget *table, uint32_t column, const char *key) {
+    pt_table_state *state = table_state(table);
+    if (!state || column >= state->column_count) {
+        return;
+    }
+    const char *text = key ? key : "";
+    size_t length = strlen(text);
+    if (length > PT_TABLE_COLUMN_KEY_MAX) {
+        pt_log_warn("column key truncated to %u bytes", PT_TABLE_COLUMN_KEY_MAX);
+        length = PT_TABLE_COLUMN_KEY_MAX;
+    }
+    if (length > 0) {
+        for (uint32_t i = 0; i < state->column_count; ++i) {
+            if (i == column || !state->column_keys[i][0]) {
+                continue;
+            }
+            if (strlen(state->column_keys[i]) == length &&
+                memcmp(state->column_keys[i], text, length) == 0) {
+                pt_log_warn("column key '%.*s' is already used by column %u",
+                            (int)length, text, i);
+                return;
+            }
+        }
+    }
+    char *copy = pt_strdup_len(text, length);
+    free(state->column_keys[column]);
+    state->column_keys[column] = copy;
+}
+
+const char *pt_table_get_column_key(const pt_widget *table, uint32_t column) {
+    const pt_table_state *state = table_state_const(table);
+    if (!state || column >= state->column_count || !state->column_keys) {
+        return "";
+    }
+    return state->column_keys[column];
 }
 
 void pt_table_set_row_count(pt_widget *table, uint32_t count) {
@@ -1074,6 +1129,9 @@ static void swap_columns(pt_table_state *state, uint32_t a, uint32_t b) {
     char *title = state->column_titles[a];
     state->column_titles[a] = state->column_titles[b];
     state->column_titles[b] = title;
+    char *key = state->column_keys[a];
+    state->column_keys[a] = state->column_keys[b];
+    state->column_keys[b] = key;
     pt_text_align align = state->column_aligns[a];
     state->column_aligns[a] = state->column_aligns[b];
     state->column_aligns[b] = align;
@@ -1716,6 +1774,432 @@ pt_cursor pt_table_cursor(const pt_widget *table, float x, float y) {
     return pt_cursor_default;
 }
 
+/* ---------- column-layout persistence ---------- */
+
+typedef struct table_layout_column {
+    char key[PT_TABLE_COLUMN_KEY_MAX + 1];
+    size_t key_length;
+    float width;
+    bool hidden;
+} table_layout_column;
+
+typedef struct table_layout_sort {
+    uint32_t ordinal;
+    pt_sort_direction direction;
+} table_layout_sort;
+
+/* Split one line into space-separated tokens. Returns false when the line has
+ * no tokens or more than max_tokens; empty tokens are impossible because runs
+ * of spaces are skipped. */
+static bool layout_split(const char *line, size_t length, const char *tokens[],
+                         size_t token_lengths[], uint32_t max_tokens, uint32_t *count) {
+    uint32_t found = 0;
+    size_t pos = 0;
+    while (pos < length) {
+        while (pos < length && line[pos] == ' ') {
+            ++pos;
+        }
+        if (pos == length) {
+            break;
+        }
+        if (found == max_tokens) {
+            return false;
+        }
+        tokens[found] = line + pos;
+        while (pos < length && line[pos] != ' ') {
+            ++pos;
+        }
+        token_lengths[found] = (size_t)(line + pos - tokens[found]);
+        ++found;
+    }
+    *count = found;
+    return found > 0;
+}
+
+static bool layout_next_line(const char *blob, size_t length, size_t *offset,
+                             const char **line_start, size_t *line_length) {
+    if (*offset >= length) {
+        return false;
+    }
+    const char *start = blob + *offset;
+    const char *newline = memchr(start, '\n', length - *offset);
+    size_t consumed = newline ? (size_t)(newline - start) : length - *offset;
+    *line_start = start;
+    *line_length = consumed;
+    *offset += consumed + (newline ? 1u : 0u);
+    return true;
+}
+
+static bool layout_token_is(const char *token, size_t length, const char *text) {
+    size_t text_length = strlen(text);
+    return length == text_length && memcmp(token, text, length) == 0;
+}
+
+static bool layout_parse_u32(const char *token, size_t length, uint32_t *value) {
+    if (length == 0 || length > 10) {
+        return false;
+    }
+    uint64_t parsed = 0;
+    for (size_t i = 0; i < length; ++i) {
+        if (token[i] < '0' || token[i] > '9') {
+            return false;
+        }
+        parsed = parsed * 10u + (uint64_t)(token[i] - '0');
+        if (parsed > UINT32_MAX) {
+            return false;
+        }
+    }
+    *value = (uint32_t)parsed;
+    return true;
+}
+
+/* Widths are stored as integer thousandths of a logical pixel so the blob is
+ * independent of the process locale. */
+static bool layout_parse_width(const char *token, size_t length, float *width) {
+    uint32_t milli = 0;
+    if (!layout_parse_u32(token, length, &milli) || milli == 0) {
+        return false;
+    }
+    float parsed = (float)milli / 1000.0f;
+    if (!isfinite(parsed) || parsed > pt_table_max_width) {
+        return false;
+    }
+    *width = parsed;
+    return true;
+}
+
+static int layout_hex_digit(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool layout_parse_key(const char *token, size_t length, char key[PT_TABLE_COLUMN_KEY_MAX + 1],
+                             size_t *key_length) {
+    if (length == 1 && token[0] == '-') {
+        key[0] = '\0';
+        *key_length = 0;
+        return true;
+    }
+    if (length < 2 || length > 2u * PT_TABLE_COLUMN_KEY_MAX || (length % 2u) != 0) {
+        return false;
+    }
+    size_t bytes = length / 2u;
+    for (size_t i = 0; i < bytes; ++i) {
+        int high = layout_hex_digit(token[i * 2u]);
+        int low = layout_hex_digit(token[i * 2u + 1u]);
+        if (high < 0 || low < 0) {
+            return false;
+        }
+        key[i] = (char)((high << 4) | low);
+        if (key[i] == '\0') {
+            return false;
+        }
+    }
+    key[bytes] = '\0';
+    *key_length = bytes;
+    return true;
+}
+
+static bool layout_append(char *blob, size_t capacity, size_t *used, const char *format,
+                          ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    int written = vsnprintf(blob + *used, capacity - *used, format, arguments);
+    va_end(arguments);
+    if (written < 0 || (size_t)written >= capacity - *used) {
+        return false;
+    }
+    *used += (size_t)written;
+    return true;
+}
+
+char *pt_table_columns_save(const pt_widget *table) {
+    const pt_table_state *state = table_state_const(table);
+    if (!state) {
+        pt_set_error("pt_table_columns_save requires a table");
+        return NULL;
+    }
+    for (uint32_t i = 0; i < state->column_count; ++i) {
+        float width = state->column_widths[i];
+        if (!isfinite(width) || width <= 0.0f || width > pt_table_max_width) {
+            pt_set_error("column %u width is not representable", i);
+            return NULL;
+        }
+    }
+    char *blob = pt_alloc(PT_TABLE_COLUMN_LAYOUT_MAX + 1u);
+    size_t used = 0;
+    bool ok = layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, "PTCOLS 1\nC %u\n",
+                            state->column_count);
+    for (uint32_t i = 0; ok && i < state->column_count; ++i) {
+        const char *key = state->column_keys[i] ? state->column_keys[i] : "";
+        size_t key_length = strlen(key);
+        if (key_length > PT_TABLE_COLUMN_KEY_MAX) {
+            key_length = PT_TABLE_COLUMN_KEY_MAX;
+        }
+        if (key_length == 0) {
+            ok = layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, "- ");
+        } else {
+            for (size_t j = 0; ok && j < key_length; ++j) {
+                ok = layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, "%02x",
+                                   (unsigned)(unsigned char)key[j]);
+            }
+            ok = ok && layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, " ");
+        }
+        unsigned long long milli =
+            (unsigned long long)llround((double)state->column_widths[i] * 1000.0);
+        ok = ok && layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, "%llu %u\n",
+                                 milli, state->column_hidden[i] ? 1u : 0u);
+    }
+    ok = ok && layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, "S %u\n",
+                             state->sort_count);
+    for (uint32_t i = 0; ok && i < state->sort_count; ++i) {
+        ok = layout_append(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u, &used, "%u %u\n",
+                           state->sort_columns[i], (unsigned)state->sort_directions[i]);
+    }
+    if (!ok) {
+        free(blob);
+        pt_set_error("column layout exceeds the %u byte limit",
+                     PT_TABLE_COLUMN_LAYOUT_MAX);
+        return NULL;
+    }
+    blob[used] = '\0';
+    return blob;
+}
+
+/* Map each saved entry (in saved display order) to a current column index.
+ * Non-empty keys match by identity; empty keys match by position. A keyed
+ * match may not steal a position needed by an entry without a key. */
+static bool layout_build_slots(const pt_table_state *state,
+                               const table_layout_column *columns, uint32_t count,
+                               uint32_t *slots) {
+    if (count != state->column_count) {
+        return false;
+    }
+    bool *used = pt_alloc_zeroed(count ? count : 1u, sizeof(*used));
+    bool ok = true;
+    for (uint32_t i = 0; i < count && ok; ++i) {
+        if (columns[i].key_length == 0) {
+            continue;
+        }
+        int32_t match = -1;
+        for (uint32_t j = 0; j < count; ++j) {
+            if (!used[j] && state->column_keys[j] &&
+                strcmp(state->column_keys[j], columns[i].key) == 0) {
+                match = (int32_t)j;
+                break;
+            }
+        }
+        if (match < 0) {
+            ok = false;
+            break;
+        }
+        slots[i] = (uint32_t)match;
+        used[match] = true;
+    }
+    for (uint32_t i = 0; i < count && ok; ++i) {
+        if (columns[i].key_length != 0) {
+            continue;
+        }
+        if (used[i]) {
+            ok = false;
+            break;
+        }
+        slots[i] = i;
+        used[i] = true;
+    }
+    free(used);
+    return ok;
+}
+
+bool pt_table_columns_restore(pt_widget *table, const char *blob) {
+    pt_table_state *state = table_state(table);
+    if (!state || !blob) {
+        pt_set_error("pt_table_columns_restore requires a table and a blob");
+        return false;
+    }
+    size_t length = strnlen(blob, PT_TABLE_COLUMN_LAYOUT_MAX + 1u);
+    if (length > PT_TABLE_COLUMN_LAYOUT_MAX) {
+        pt_set_error("column layout exceeds the %u byte limit",
+                     PT_TABLE_COLUMN_LAYOUT_MAX);
+        return false;
+    }
+
+    const char *tokens[4] = {0};
+    size_t token_lengths[4] = {0};
+    uint32_t token_count = 0;
+    size_t offset = 0;
+    const char *line = NULL;
+    size_t line_length = 0;
+
+    if (!layout_next_line(blob, length, &offset, &line, &line_length) ||
+        !layout_split(line, line_length, tokens, token_lengths, 4, &token_count) ||
+        token_count != 2 || !layout_token_is(tokens[0], token_lengths[0], "PTCOLS")) {
+        pt_set_error("invalid column layout header");
+        return false;
+    }
+    if (!layout_token_is(tokens[1], token_lengths[1], "1")) {
+        pt_set_error("unsupported column layout version");
+        return false;
+    }
+
+    if (!layout_next_line(blob, length, &offset, &line, &line_length) ||
+        !layout_split(line, line_length, tokens, token_lengths, 4, &token_count) ||
+        token_count != 2 || !layout_token_is(tokens[0], token_lengths[0], "C")) {
+        pt_set_error("invalid column layout count line");
+        return false;
+    }
+    uint32_t count = 0;
+    if (!layout_parse_u32(tokens[1], token_lengths[1], &count) ||
+        count > PT_TABLE_MAX_COLUMNS) {
+        pt_set_error("invalid column count");
+        return false;
+    }
+
+    table_layout_column *columns =
+        pt_alloc_zeroed(count ? count : 1u, sizeof(*columns));
+    bool ok = true;
+    for (uint32_t i = 0; i < count && ok; ++i) {
+        if (!layout_next_line(blob, length, &offset, &line, &line_length) ||
+            !layout_split(line, line_length, tokens, token_lengths, 4, &token_count) ||
+            token_count != 3) {
+            ok = false;
+            break;
+        }
+        if (!layout_parse_key(tokens[0], token_lengths[0], columns[i].key,
+                              &columns[i].key_length) ||
+            !layout_parse_width(tokens[1], token_lengths[1], &columns[i].width)) {
+            ok = false;
+            break;
+        }
+        if (token_lengths[2] != 1 || (tokens[2][0] != '0' && tokens[2][0] != '1')) {
+            ok = false;
+            break;
+        }
+        columns[i].hidden = tokens[2][0] == '1';
+        for (uint32_t j = 0; columns[i].key_length > 0 && j < i; ++j) {
+            if (columns[j].key_length > 0 &&
+                strcmp(columns[j].key, columns[i].key) == 0) {
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    table_layout_sort sorts[PT_TABLE_MAX_SORT_COLUMNS] = {0};
+    uint32_t sort_count = 0;
+    if (ok) {
+        if (!layout_next_line(blob, length, &offset, &line, &line_length) ||
+            !layout_split(line, line_length, tokens, token_lengths, 4, &token_count) ||
+            token_count != 2 || !layout_token_is(tokens[0], token_lengths[0], "S")) {
+            ok = false;
+        } else if (!layout_parse_u32(tokens[1], token_lengths[1], &sort_count) ||
+                   sort_count > PT_TABLE_MAX_SORT_COLUMNS) {
+            ok = false;
+        }
+    }
+    for (uint32_t i = 0; i < sort_count && ok; ++i) {
+        if (!layout_next_line(blob, length, &offset, &line, &line_length) ||
+            !layout_split(line, line_length, tokens, token_lengths, 4, &token_count) ||
+            token_count != 2) {
+            ok = false;
+            break;
+        }
+        uint32_t direction = 0;
+        if (!layout_parse_u32(tokens[0], token_lengths[0], &sorts[i].ordinal) ||
+            sorts[i].ordinal >= count ||
+            !layout_parse_u32(tokens[1], token_lengths[1], &direction) ||
+            direction < (uint32_t)pt_sort_ascending ||
+            direction > (uint32_t)pt_sort_descending) {
+            ok = false;
+            break;
+        }
+        sorts[i].direction = (pt_sort_direction)direction;
+        for (uint32_t j = 0; j < i; ++j) {
+            if (sorts[j].ordinal == sorts[i].ordinal) {
+                ok = false;
+                break;
+            }
+        }
+    }
+    /* The blob may end with a newline, but not with extra content. */
+    if (ok && offset != length) {
+        ok = false;
+    }
+    if (!ok) {
+        free(columns);
+        pt_set_error("malformed column layout blob");
+        return false;
+    }
+
+    uint32_t *slots = pt_alloc_zeroed(count ? count : 1u, sizeof(*slots));
+    if (!layout_build_slots(state, columns, count, slots)) {
+        free(slots);
+        free(columns);
+        pt_set_error("column layout does not match the table columns");
+        return false;
+    }
+
+    /* Validation is complete; only now may the live layout change. The
+     * rebuild below destroys the inline editor, so detach it first. */
+    pt_table_cancel_edit(table);
+    uint32_t old_count = state->column_count;
+    float *widths = pt_alloc_zeroed(count ? count : 1u, sizeof(*widths));
+    char **titles = pt_alloc_zeroed(count ? count : 1u, sizeof(*titles));
+    char **keys = pt_alloc_zeroed(count ? count : 1u, sizeof(*keys));
+    pt_text_align *aligns = pt_alloc_zeroed(count ? count : 1u, sizeof(*aligns));
+    bool *resizable = pt_alloc_zeroed(count ? count : 1u, sizeof(*resizable));
+    bool *hidden = pt_alloc_zeroed(count ? count : 1u, sizeof(*hidden));
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t source = slots[i];
+        widths[i] = pt_max_float(pt_table_min_width, columns[i].width);
+        hidden[i] = columns[i].hidden;
+        titles[i] = pt_strdup(state->column_titles[source]);
+        keys[i] = pt_strdup(state->column_keys[source]);
+        aligns[i] = state->column_aligns[source];
+        resizable[i] = state->column_resizable[source];
+    }
+    for (uint32_t i = 0; i < old_count; ++i) {
+        free(state->column_titles[i]);
+        free(state->column_keys[i]);
+    }
+    free(state->column_widths);
+    free(state->column_titles);
+    free(state->column_keys);
+    free(state->column_aligns);
+    free(state->column_resizable);
+    free(state->column_hidden);
+    state->column_widths = widths;
+    state->column_titles = titles;
+    state->column_keys = keys;
+    state->column_aligns = aligns;
+    state->column_resizable = resizable;
+    state->column_hidden = hidden;
+    state->column_count = count;
+    state->sort_count = sort_count;
+    for (uint32_t i = 0; i < sort_count; ++i) {
+        state->sort_columns[i] = sorts[i].ordinal;
+        state->sort_directions[i] = sorts[i].direction;
+    }
+    table_rebuild_columns(table, state);
+    float content = table_content_width(table);
+    float viewport = pt_max_float(1.0f, table->width - table->padding_left -
+                                           table->padding_right);
+    if (table->scroll_x > pt_max_float(0.0f, content - viewport)) {
+        table->scroll_x = pt_max_float(0.0f, content - viewport);
+    }
+    free(slots);
+    free(columns);
+    return true;
+}
+
 void pt_table_free_extra(pt_widget *table) {
     pt_table_state *state = table_state(table);
     if (!state) {
@@ -1723,9 +2207,11 @@ void pt_table_free_extra(pt_widget *table) {
     }
     for (uint32_t i = 0; i < state->column_count; ++i) {
         free(state->column_titles[i]);
+        free(state->column_keys[i]);
     }
     free(state->column_widths);
     free(state->column_titles);
+    free(state->column_keys);
     free(state->column_aligns);
     free(state->column_resizable);
     free(state->column_hidden);

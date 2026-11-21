@@ -413,6 +413,14 @@ pt_api pt_widget *pt_icon_button_create(pt_widget *parent, pt_icon icon,
  * update the model and call pt_table_refresh from the callback. */
 #define pt_table_column_none ((uint32_t)-1)
 
+/* Column limits shared by the layout model and the persistence blob. A table
+ * clamps pt_table_set_column_count to PT_TABLE_MAX_COLUMNS, a column key is
+ * truncated to PT_TABLE_COLUMN_KEY_MAX bytes, and a serialized layout never
+ * exceeds PT_TABLE_COLUMN_LAYOUT_MAX bytes. */
+#define PT_TABLE_MAX_COLUMNS 1024u
+#define PT_TABLE_COLUMN_KEY_MAX 64u
+#define PT_TABLE_COLUMN_LAYOUT_MAX 262144u
+
 typedef enum pt_sort_direction {
     pt_sort_none = 0,
     pt_sort_ascending,
@@ -530,6 +538,58 @@ pt_api void pt_table_set_on_columns_reordered(
     pt_widget *table, pt_table_columns_reordered_callback callback, void *user_data);
 pt_api void pt_table_set_on_row_drag(pt_widget *table, pt_table_row_drag_callback callback,
                                      void *user_data);
+
+/* Column identity and layout persistence, since 1.2. A column key is an
+ * application-owned stable identifier (UTF-8, at most PT_TABLE_COLUMN_KEY_MAX
+ * bytes, truncated with a warning when longer). Keys are matched across
+ * reorders and saved layouts; an empty key means "match by position". Keys
+ * must be unique among non-empty keys, so setting a key already used by
+ * another column is rejected with a warning and leaves that column unchanged.
+ * pt_table_get_column_key never returns NULL and the returned string is owned
+ * by the table and invalidated by the next key change or column move. */
+pt_api void pt_table_set_column_key(pt_widget *table, uint32_t column, const char *key);
+pt_api const char *pt_table_get_column_key(const pt_widget *table, uint32_t column);
+
+/* Versioned column-layout persistence. pt_table_columns_save serializes the
+ * current display order plus each column's width, hidden flag and the
+ * multi-column sort state. Titles, alignment and resizability are model
+ * configuration and are not saved. The result is a NUL-terminated ASCII blob
+ * owned by the caller (release with pt_free), or NULL when the table is not a
+ * table, a column width is not finite/positive/representable, or the blob
+ * would exceed PT_TABLE_COLUMN_LAYOUT_MAX. The application decides where to
+ * store it (file, configuration, database); Pt never touches the filesystem
+ * here. The format is:
+ *
+ *     PTCOLS 1
+ *     C <count>
+ *     <key> <width> <hidden>        count times, in display order
+ *     S <sort_count>
+ *     <ordinal> <direction>         sort_count times
+ *
+ * <key> is '-' for a column without a key, otherwise the key bytes as
+ * lowercase hex (empty keys are matched by position). <width> is the width in
+ * thousandths of a logical pixel (120000 is 120 px) and must be positive;
+ * values below the implementation minimum are clamped on restore. <hidden> is
+ * 0 or 1. <ordinal> indexes the column lines above (so sorting follows a
+ * column across reorders) and <direction> is 1 (ascending) or 2 (descending).
+ * A later version may append fields, but the version number changes and older
+ * readers reject it.
+ *
+ * pt_table_columns_restore validates the whole blob before touching the table.
+ * It returns false for a NULL table or blob, an oversized blob, an unknown
+ * magic or version, a truncated or malformed line, a non-finite or
+ * non-positive width, an unknown hidden flag, a bad key, more than
+ * PT_TABLE_MAX_COLUMNS columns, more than PT_TABLE_MAX_SORT_COLUMNS sort
+ * entries, a duplicate sort ordinal, a direction other than ascending or
+ * descending, or trailing junk. Column
+ * matching is strict: the saved count must equal the current column count;
+ * each non-empty saved key must match exactly one current column; each empty
+ * saved key is matched by its display position. A missing or duplicate key,
+ * or a mixed set that cannot form a permutation, rejects the blob. On failure
+ * the current layout is untouched (atomic); on success the saved widths,
+ * visibility, order and sort state are applied and the table rebinds. */
+pt_api char *pt_table_columns_save(const pt_widget *table);
+pt_api bool pt_table_columns_restore(pt_widget *table, const char *blob);
 
 /* Hierarchical tree view. Nodes are owned by the tree; handles stay valid
  * until the node, its ancestor or the tree is cleared. Only expanded branches
