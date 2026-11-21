@@ -356,6 +356,17 @@ uint32_t pt_canvas_get_pixel(const pt_canvas *canvas, int x, int y);
 int pt_canvas_write_png(const pt_canvas *canvas, const char *path);
 int pt_write_png_rgba(const char *path, int width, int height, const uint8_t *rgba);
 
+/* In-memory PNG codec shared by snapshots and clipboard images. The encoder
+ * takes premultiplied 0xAARRGGBB pixels (pt_window_paint_pixels layout) and
+ * produces a straight-alpha RGBA PNG. The decoder returns caller-owned
+ * premultiplied 0xAARRGGBB pixels (release with pt_free), rejects corrupt,
+ * oversized and decompression-bomb inputs, and leaves the out parameters at
+ * zero on failure. */
+uint8_t *pt_png_encode_argb_premultiplied(const uint32_t *pixels, int width,
+                                          int height, size_t *out_size);
+pt_color *pt_png_decode_argb_premultiplied(const uint8_t *data, size_t size,
+                                           int *out_width, int *out_height);
+
 /* ---------- data views and navigation ---------- */
 
 /* A rubber band dragged across a data view. Coordinates are window space, the
