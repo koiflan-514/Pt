@@ -51,6 +51,20 @@ _Static_assert(pt_a11y_event_focus_changed == 0, "focus event must stay 0");
 _Static_assert(pt_a11y_event_structure_changed == 6, "structure event must stay 6");
 
 /* Input, drag and motion enums. */
+_Static_assert(pt_pointer_phase_enter == 0, "pointer enter must stay 0");
+_Static_assert(pt_pointer_phase_leave == 1, "pointer leave must stay 1");
+_Static_assert(pt_pointer_phase_motion == 2, "pointer motion must stay 2");
+_Static_assert(pt_pointer_phase_down == 3, "pointer down must stay 3");
+_Static_assert(pt_pointer_phase_up == 4, "pointer up must stay 4");
+_Static_assert(pt_pointer_phase_axis == 5, "pointer axis must stay 5");
+_Static_assert(pt_pointer_phase_cancel == 6, "pointer cancel must stay 6");
+
+/* fd-watch event bits: append-only, one bit per readiness class. */
+_Static_assert(pt_fd_event_read == (1u << 0), "fd read bit");
+_Static_assert(pt_fd_event_write == (1u << 1), "fd write bit");
+_Static_assert(pt_fd_event_error == (1u << 2), "fd error bit");
+_Static_assert(pt_fd_event_hangup == (1u << 3), "fd hangup bit");
+
 _Static_assert(pt_input_purpose_normal == 0, "normal purpose must stay 0");
 _Static_assert(pt_input_purpose_terminal == 6, "terminal purpose must stay 6");
 _Static_assert(pt_button_primary == 0, "primary button must stay 0");
@@ -149,6 +163,30 @@ _Static_assert(offsetof(pt_transition, duration) < offsetof(pt_transition, easin
                "transition order");
 _Static_assert(offsetof(pt_transition, easing) < offsetof(pt_transition, active),
                "transition order");
+
+/* Window-level pointer events. The field order is part of the callback contract:
+ * an event is built by the framework and only read by applications. */
+_Static_assert(offsetof(pt_pointer_event, phase) == 0, "pointer phase first");
+_Static_assert(offsetof(pt_pointer_event, phase) < offsetof(pt_pointer_event, x), "pointer order");
+_Static_assert(offsetof(pt_pointer_event, x) < offsetof(pt_pointer_event, y), "pointer order");
+_Static_assert(offsetof(pt_pointer_event, y) < offsetof(pt_pointer_event, delta_x),
+               "pointer order");
+_Static_assert(offsetof(pt_pointer_event, delta_x) < offsetof(pt_pointer_event, delta_y),
+               "pointer order");
+_Static_assert(offsetof(pt_pointer_event, delta_y) < offsetof(pt_pointer_event, button),
+               "pointer order");
+_Static_assert(offsetof(pt_pointer_event, button) < offsetof(pt_pointer_event, modifiers),
+               "pointer order");
+_Static_assert(offsetof(pt_pointer_event, modifiers) < offsetof(pt_pointer_event, click_count),
+               "pointer order");
+_Static_assert(offsetof(pt_pointer_event, click_count) < offsetof(pt_pointer_event, pressed),
+               "pointer order");
+_Static_assert(sizeof(((pt_pointer_event *)0)->phase) == sizeof(pt_pointer_phase),
+               "pointer phase is the enum size");
+_Static_assert(sizeof(((pt_pointer_event *)0)->button) == sizeof(uint32_t), "button is 32-bit");
+_Static_assert(sizeof(((pt_pointer_event *)0)->click_count) == sizeof(uint32_t),
+               "click count is 32-bit");
+_Static_assert(sizeof(((pt_pointer_event *)0)->pressed) == sizeof(bool), "pressed is bool");
 
 /* Runtime invariants that cannot be expressed as an offset comparison. */
 int main(void) {
