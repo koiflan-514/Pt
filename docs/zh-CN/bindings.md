@@ -1091,12 +1091,12 @@ Python 以 `pt.Popup`/`pt.IconImage` 类和 `Widget`/`Window` 方法对应；Jav
 
 | 表面 | C++ | Python | Java |
 | --- | --- | --- | --- |
-| 弹出层（10） | `pt::popup`（`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`） | `pt.Popup`（`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`） | `Pt.popup_create`, `popup_show`, `popup_reposition`, `popup_dismiss`, `popup_is_open`, `popup_content`, `popup_set_on_dismiss`, `popup_set_placement`, `popup_get_placement`, `popup_destroy` |
+| 弹出层（10） | `pt::popup`（`show`, `reposition`, `dismiss`, `is_open`, `content`, `on_dismiss`, `set_placement`, `placement`, `reset`） | `pt.Popup`（`create`, `show`, `reposition`, `dismiss`, `is_open`, `content`, `on_dismiss`, `placement` 属性, `destroy`） | `Pt.popup_create`, `popup_show`, `popup_reposition`, `popup_dismiss`, `popup_is_open`, `popup_content`, `popup_set_on_dismiss`, `popup_set_placement`, `popup_get_placement`, `popup_destroy` |
 | 字体回退（7） | `app::set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `App.set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `Pt.app_set_font_fallbacks`, `app_get_font_fallback_count`, `app_get_font_fallback`, `app_set_font_fallbacks_for_family`, `app_get_font_fallback_count_for_family`, `app_get_font_fallback_for_family`, `app_font_uncovered_count` |
-| 剪贴板媒体（3） | `window::set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Window.set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Pt.window_clipboard_set_image_png`, `window_clipboard_get_image_png`, `window_clipboard_set_uri_list` |
+| 剪贴板媒体（3） | `window::set_clipboard_image`, `clipboard_image_png`, `set_clipboard_uri_list` | `Window.set_clipboard_image`, `clipboard_image`（属性）, `set_clipboard_uri_list` | `Pt.window_clipboard_set_image_png`, `window_clipboard_get_image_png`, `window_clipboard_set_uri_list` |
 | 列持久化（4） | `widget::set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Widget.set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Pt.table_set_column_key`, `table_get_column_key`, `table_columns_save`, `table_columns_restore` |
-| 图标（12） | `pt::icon_image`（`load_file`, `load_memory`, `from_name`, `width`, `height`）, `widget::set_icon_image`, `icon_image`, `set_icon_tint`, `window::set_icon`, `icon` | `pt.IconImage`（`load_file`, `load_memory`, `from_name`, `width`, `height`）, `Widget.set_icon_image`, `icon_image`, `set_icon_tint`, `Window.set_icon`, `icon` | `Pt.icon_image_load_file`, `icon_image_load_memory`, `icon_image_from_name`, `icon_image_width`, `icon_image_height`, `button_set_icon_image`, `button_get_icon_image`, `button_set_icon_tint`, `window_set_icon`, `window_get_icon` |
-| 选择器（70） | `pt::select`, `pt::date_picker`, `pt::number_picker`, `pt::color_picker` 以及 `select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` 控件方法 | `pt.select`, `pt.date_picker`, `pt.number_picker`, `pt.color_picker` 以及 `Widget.select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` 方法 | `Pt.select_*`, `Pt.date_picker_*`, `Pt.number_picker_*`, `Pt.color_picker_*` |
+| 图标（12） | `pt::icon_image`（`load_file`, `load_memory`, `from_name`, `width`, `height`, `ref`）, `widget::set_icon_image`, `icon_image_ref`, `icon_image_raw`, `set_icon_tint`, `window::set_icon`, `icon_image_ref` | `pt.IconImage`（`load_file`, `load_memory`, `from_name`, `width`, `height`, `ref`, `destroy`）, `Widget.set_icon_image`, `icon_image`, `set_icon_tint`, `Window.set_icon_image`, `icon_image` | `Pt.icon_image_load_file`, `icon_image_load_memory`, `icon_image_from_name`, `icon_image_ref`, `icon_image_width`, `icon_image_height`, `icon_image_destroy`, `button_set_icon_image`, `button_get_icon_image`, `button_set_icon_tint`, `window_set_icon`, `window_get_icon` |
+| 选择器（70） | `pt::select`, `pt::date_picker`, `pt::number_picker`, `pt::color_picker` 以及 `select_*`/`date_*`/`number_*`/`color_*` 控件方法（例如 `set_select_selected`, `set_date`, `set_number_range`, `set_color_hex`） | `pt.select`, `pt.date_picker`, `pt.number_picker`, `pt.color_picker` 以及 `Widget.select_*`/`date_picker_*`/`number_picker_*`/`color_picker_*` 方法 | `Pt.select_*`, `Pt.date_picker_*`, `Pt.number_picker_*`, `Pt.color_picker_*` |
 
 分组说明：
 
@@ -1104,14 +1104,16 @@ Python 以 `pt.Popup`/`pt.IconImage` 类和 `Widget`/`Window` 方法对应；Jav
   拥有者；销毁拥有者会释放内容树，且不运行关闭回调。锚点按值传递。
 - **字体回退。** C++ 和 Python 用 `int` 索引回退链；按字体族的 getter 以空值
   表示“无覆盖”。Java 使用与 C API 匹配的整数哨兵。
-- **剪贴板媒体。** 图像获取函数返回调用方拥有的像素（C++ 为 `std::vector`，
-  Python 为 `list[int]`，Java 为方法填充的 `int[]`）；C++ 和 Python 自动释放，
-  Java 像文本剪贴板一样通过 `pt_free` 释放。
+- **剪贴板媒体。** 图像获取函数返回拥有型副本及其尺寸：C++ 为
+  `std::optional<clipboard_image>`（`pixels`、`width`、`height`），Python 为
+  `(bytes, width, height)` 或 `None`，Java 为 `ClipboardImage` record。C++ 和
+  Python 自行释放原生缓冲区，Java 像文本剪贴板一样通过 `pt_free` 释放。
 - **列持久化。** `columns_save` 返回拥有的 `std::string`/`str`（Java 复制并
   释放），`columns_restore` 接受同一文本。blob 对绑定层不透明。
 - **图标。** `pt::icon_image`/`pt.IconImage` 是引用计数拥有者；赋给按钮或窗口
-  会取得自己的引用，因此释放本地拥有者是安全的。Java 保留原始
-  `icon_image_ref`/`destroy` 句柄。
+  会取得自己的引用，因此释放本地拥有者是安全的。C++ 的 getter 同时提供
+  `icon_image_raw`（借用）和 `icon_image_ref`（拥有）；Java 保留原始
+  `icon_image_ref`/`icon_image_destroy` 句柄。
 - **选择器。** 项文本会被复制，项数据仍是借用的。静默 setter 绝不触发变更
   回调；回调签名是现有的 `pt_index_callback`、`pt_date_callback`、
   `pt_number_callback` 和 `pt_color_callback`。

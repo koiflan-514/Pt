@@ -1560,12 +1560,12 @@ every name; the helper names below are the expected set.
 
 | Surface | C++ | Python | Java |
 | --- | --- | --- | --- |
-| Popups (10) | `pt::popup` (`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`) | `pt.Popup` (`show`, `reposition`, `dismiss`, `content`, `on_dismiss`, `set_placement`, `placement`) | `Pt.popup_create`, `popup_show`, `popup_reposition`, `popup_dismiss`, `popup_is_open`, `popup_content`, `popup_set_on_dismiss`, `popup_set_placement`, `popup_get_placement`, `popup_destroy` |
+| Popups (10) | `pt::popup` (`show`, `reposition`, `dismiss`, `is_open`, `content`, `on_dismiss`, `set_placement`, `placement`, `reset`) | `pt.Popup` (`create`, `show`, `reposition`, `dismiss`, `is_open`, `content`, `on_dismiss`, `placement` property, `destroy`) | `Pt.popup_create`, `popup_show`, `popup_reposition`, `popup_dismiss`, `popup_is_open`, `popup_content`, `popup_set_on_dismiss`, `popup_set_placement`, `popup_get_placement`, `popup_destroy` |
 | Font fallback (7) | `app::set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `App.set_font_fallbacks`, `font_fallback_count`, `font_fallback`, `set_font_fallbacks_for_family`, `font_fallback_count_for_family`, `font_fallback_for_family`, `font_uncovered_count` | `Pt.app_set_font_fallbacks`, `app_get_font_fallback_count`, `app_get_font_fallback`, `app_set_font_fallbacks_for_family`, `app_get_font_fallback_count_for_family`, `app_get_font_fallback_for_family`, `app_font_uncovered_count` |
-| Clipboard media (3) | `window::set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Window.set_clipboard_image_png`, `clipboard_image_png`, `set_clipboard_uri_list` | `Pt.window_clipboard_set_image_png`, `window_clipboard_get_image_png`, `window_clipboard_set_uri_list` |
+| Clipboard media (3) | `window::set_clipboard_image`, `clipboard_image_png`, `set_clipboard_uri_list` | `Window.set_clipboard_image`, `clipboard_image` (property), `set_clipboard_uri_list` | `Pt.window_clipboard_set_image_png`, `window_clipboard_get_image_png`, `window_clipboard_set_uri_list` |
 | Column persistence (4) | `widget::set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Widget.set_column_key`, `column_key`, `columns_save`, `columns_restore` | `Pt.table_set_column_key`, `table_get_column_key`, `table_columns_save`, `table_columns_restore` |
-| Icons (12) | `pt::icon_image` (`load_file`, `load_memory`, `from_name`, `width`, `height`), `widget::set_icon_image`, `icon_image`, `set_icon_tint`, `window::set_icon`, `icon` | `pt.IconImage` (`load_file`, `load_memory`, `from_name`, `width`, `height`), `Widget.set_icon_image`, `icon_image`, `set_icon_tint`, `Window.set_icon`, `icon` | `Pt.icon_image_load_file`, `icon_image_load_memory`, `icon_image_from_name`, `icon_image_width`, `icon_image_height`, `button_set_icon_image`, `button_get_icon_image`, `button_set_icon_tint`, `window_set_icon`, `window_get_icon` |
-| Pickers (70) | `pt::select`, `pt::date_picker`, `pt::number_picker`, `pt::color_picker` and the `select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` widget methods | `pt.select`, `pt.date_picker`, `pt.number_picker`, `pt.color_picker` and the `Widget.select_*`, `date_picker_*`, `number_picker_*`, `color_picker_*` methods | `Pt.select_*`, `Pt.date_picker_*`, `Pt.number_picker_*`, `Pt.color_picker_*` |
+| Icons (12) | `pt::icon_image` (`load_file`, `load_memory`, `from_name`, `width`, `height`, `ref`), `widget::set_icon_image`, `icon_image_ref`, `icon_image_raw`, `set_icon_tint`, `window::set_icon`, `icon_image_ref` | `pt.IconImage` (`load_file`, `load_memory`, `from_name`, `width`, `height`, `ref`, `destroy`), `Widget.set_icon_image`, `icon_image`, `set_icon_tint`, `Window.set_icon_image`, `icon_image` | `Pt.icon_image_load_file`, `icon_image_load_memory`, `icon_image_from_name`, `icon_image_ref`, `icon_image_width`, `icon_image_height`, `icon_image_destroy`, `button_set_icon_image`, `button_get_icon_image`, `button_set_icon_tint`, `window_set_icon`, `window_get_icon` |
+| Pickers (70) | `pt::select`, `pt::date_picker`, `pt::number_picker`, `pt::color_picker` and the `select_*`/`date_*`/`number_*`/`color_*` widget methods (for example `set_select_selected`, `set_date`, `set_number_range`, `set_color_hex`) | `pt.select`, `pt.date_picker`, `pt.number_picker`, `pt.color_picker` and the `Widget.select_*`/`date_picker_*`/`number_picker_*`/`color_picker_*` methods | `Pt.select_*`, `Pt.date_picker_*`, `Pt.number_picker_*`, `Pt.color_picker_*` |
 
 Group notes:
 
@@ -1575,16 +1575,19 @@ Group notes:
 - **Font fallback.** C++ and Python index the chain by `int`; the per-family
   getters return an empty value for "no override". Java uses integer sentinels
   matching the C API.
-- **Clipboard media.** The image getter returns caller-owned pixels (`std::vector`
-  in C++, `list[int]` in Python, `int[]` filled by the Java method); release is
-  automatic in C++ and Python and `pt_free`-backed in Java like the text
-  clipboard.
+- **Clipboard media.** The image getter returns an owned copy plus its size:
+  `std::optional<clipboard_image>` (`pixels`, `width`, `height`) in C++,
+  `(bytes, width, height)` or `None` in Python, and a `ClipboardImage` record
+  in Java. C++ and Python release the native buffer themselves; Java does the
+  same through `pt_free` like the text clipboard.
 - **Column persistence.** `columns_save` returns an owned `std::string`/`str`
   (Java copies and frees) and `columns_restore` takes the same text. The blob is
   opaque to the binding.
 - **Icons.** `pt::icon_image`/`pt.IconImage` are reference-counted owners;
   assigning one to a button or window takes its own reference, so dropping the
-  local owner is safe. Java keeps the raw `icon_image_ref`/`destroy` handles.
+  local owner is safe. C++ getters expose both `icon_image_raw` (borrowed) and
+  `icon_image_ref` (owned); Java keeps the raw `icon_image_ref`/
+  `icon_image_destroy` handles.
 - **Pickers.** Item text is copied and item data stays borrowed. The silent
   setters never fire the change callback; the callback signatures are the
   existing `pt_index_callback`, `pt_date_callback`, `pt_number_callback` and
