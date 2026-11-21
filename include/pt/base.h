@@ -62,9 +62,9 @@ extern "C" {
 #endif
 
 #define pt_version_major 1
-#define pt_version_minor 1
+#define pt_version_minor 2
 #define pt_version_patch 0
-#define pt_version_string "1.1.0"
+#define pt_version_string "1.2.0"
 
 /* Public colors are packed as 0xRRGGBBAA. The renderer converts them to
  * premultiplied ARGB8888 internally. */
@@ -181,10 +181,10 @@ typedef void (*pt_index_callback)(pt_widget *widget, uint32_t index, void *user_
 #define pt_auto (-1.0f)
 
 /* Returns the last error for the current thread. The string is owned by Pt and
- * remains valid until the next Pt call on the same thread. */
+ * remains valid until the next Pt call on the same thread. Since 1.0. */
 pt_api const char *pt_get_last_error(void);
 
-/* Frees memory returned by Pt to the caller, such as clipboard text. */
+/* Frees memory returned by Pt to the caller, such as clipboard text. Since 1.0. */
 pt_api void pt_free(void *pointer);
 
 #ifdef __cplusplus
