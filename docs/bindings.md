@@ -1522,13 +1522,13 @@ Callback wrappers follow the same ownership rules as the rest of the surface:
   signature. Only keys and pointer down/up/axis are consumed; enter, leave and
   motion ignore the return value.
 - **Allocated strings.** `pt_window_primary_get` returns malloc'd UTF-8.
-  Python's `Window.primary` returns a `str` and frees the native buffer, Java
-  returns a `MemorySegment` that the caller frees, and C++ returns a `char *`
-  owned by the caller, like C.
+  Python's `Window.primary` returns a `str` and frees the native buffer, Java's
+  `window_primary_get` copies the string and frees it like
+  `window_clipboard_get`, and C++ returns a `char *` owned by the caller, like C.
 - **Offscreen snapshots write into caller memory.** Python's
   `paint_window_pixels(window, width, height)` returns a `list[int]` of
-  `0xAARRGGBB` values for small frames, while `Window.paint_pixels` takes a
-  caller-provided buffer; C++ takes a `std::span<uint32_t>`.
+  `0xAARRGGBB` values; C++ takes a `std::span<uint32_t>` and Java a
+  `MemorySegment` sized `width * height`.
 - **fd watch callbacks run on the UI thread** and the descriptor stays owned by
   the application. Unwatching from inside the callback is safe, and the binding
   keeps the trampoline alive until the watch is removed.

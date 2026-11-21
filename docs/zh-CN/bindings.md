@@ -1060,12 +1060,13 @@ Java 测试是 `bindings/java/test/pt/PtTest.java`；使用 `make check-bindings
   接口返回 `boolean`，C++ 保持 C 签名。只有按键和指针 down/up/axis 会被
   消费；enter、leave 和 motion 忽略返回值。
 - **分配的字符串。** `pt_window_primary_get` 返回 malloc 分配的 UTF-8。
-  Python 的 `Window.primary` 返回 `str` 并释放原生缓冲区，Java 返回由调用方
-  释放的 `MemorySegment`，C++ 像 C 一样返回由调用方拥有的 `char *`。
+  Python 的 `Window.primary` 返回 `str` 并释放原生缓冲区，Java 的
+  `window_primary_get` 像 `window_clipboard_get` 一样复制字符串并释放，
+  C++ 像 C 一样返回由调用方拥有的 `char *`。
 - **离屏快照写入调用方内存。** Python 的
-  `paint_window_pixels(window, width, height)` 为小帧返回 `0xAARRGGBB`
-  值的 `list[int]`，而 `Window.paint_pixels` 接受调用方提供的缓冲区；C++
-  接受 `std::span<uint32_t>`。
+  `paint_window_pixels(window, width, height)` 返回 `0xAARRGGBB` 值的
+  `list[int]`；C++ 接受 `std::span<uint32_t>`，Java 接受大小为
+  `width * height` 的 `MemorySegment`。
 - **描述符监视回调在 UI 线程上运行**，描述符始终归应用所有。在回调内部
   取消监视是安全的，绑定会让 trampoline 一直存活到监视被移除。
 
