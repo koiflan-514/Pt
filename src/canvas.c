@@ -287,7 +287,7 @@ void pt_canvas_fill_rect(pt_canvas *canvas, float x, float y, float w, float h, 
     bool fully_inside = dx0 <= (float)x0 && dx1 >= (float)x1 && dy0 <= (float)y0 &&
                         dy1 >= (float)y1;
     if (fully_inside && src_alpha == 255) {
-        if (x0 == 0 && x1 == canvas->width) {
+        if (x0 == 0 && x1 == canvas->width && canvas->stride == canvas->width) {
             size_t offset = (size_t)y0 * (size_t)canvas->stride;
             size_t count = (size_t)(y1 - y0) * (size_t)canvas->stride;
             for (size_t i = 0; i < count; ++i) {

@@ -108,6 +108,16 @@ static void patch_paint(pt_widget *widget, pt_paint_context *context, void *data
     pt_paint_fill_rect(context, 4.0f, 4.0f, 8.0f, 8.0f, pt_rgb(0xAA3300));
 }
 
+/* Opaque full-cover fill: exercises the canvas full-width fast path. */
+static void fill_paint(pt_widget *widget, pt_paint_context *context, void *data) {
+    (void)widget;
+    paint_probe *probe = data;
+    probe->calls++;
+    probe->width = pt_paint_width(context);
+    pt_paint_fill_rect(context, 0.0f, 0.0f, pt_paint_width(context),
+                       pt_paint_height(context), pt_rgb(0xAA3300));
+}
+
 static pt_rect bounds_of(pt_widget *widget) {
     float x = 0.0f;
     float y = 0.0f;
@@ -409,6 +419,25 @@ static void test_offscreen_snapshot(pt_app *app) {
     int sy = (int)swin->root->y;
     pt_check(strided[(size_t)(sy + 5) * (size_t)stride + (size_t)(sx + 5)] == paint_mark_pixel);
     pt_check(strided[(size_t)(sy + 5) * (size_t)stride + (size_t)(sx + 13)] != paint_mark_pixel);
+
+    /* A full-width opaque fill must leave the stride padding untouched too;
+     * the canvas fast path used to write rows * stride pixels. */
+    pt_widget_set_paint_callback(swin->root, fill_paint, &stride_probe);
+    for (int i = 0; i < stride * 48; ++i) {
+        strided[i] = 0xDEADBEEFu;
+    }
+    pt_check(pt_window_paint_pixels_ex(swin, strided, 64, 48, &desc));
+    bool fill_padding_kept = true;
+    for (int row = 0; row < 48; ++row) {
+        for (int column = 64; column < stride; ++column) {
+            if (strided[(size_t)row * (size_t)stride + (size_t)column] != 0xDEADBEEFu) {
+                fill_padding_kept = false;
+            }
+        }
+    }
+    pt_check(fill_padding_kept);
+    pt_check(strided[(size_t)(sy + 5) * (size_t)stride + (size_t)(sx + 5)] == paint_mark_pixel);
+    pt_widget_set_paint_callback(swin->root, patch_paint, &stride_probe);
 
     /* Scale 2 doubles the device-pixel footprint of the same logical patch. */
     uint32_t *scaled = calloc((size_t)128 * 96, sizeof(uint32_t));
