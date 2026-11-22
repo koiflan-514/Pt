@@ -12,7 +12,7 @@
  *   3. the entry editing path (visual caret, round trips, selection spans).
  *
  * The assertions are invariants, not golden values: random text has no fixed
- * expected pixels. Iterations come from PT_BIDI_FUZZ_ITERATIONS (default 800,
+ * expected pixels. Iterations come from PT_BIDI_FUZZ_ITERATIONS (default 100,
  * bounded for `make check`); tools/bidi-fuzz.sh raises it for long and
  * sanitizer runs.
  */
