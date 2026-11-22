@@ -1793,4 +1793,67 @@ void pt_platform_flush(pt_app *app);
 uint64_t pt_app_add_timeout_internal(pt_app *app, uint32_t ms, pt_timer_callback callback,
                                      void *data);
 
+/* ---------- bidi (2.0) ---------- */
+
+/* Paragraph base direction. `auto` runs UBA rules P2-P3 (falling back to
+ * left-to-right when the paragraph has no strong character); `ltr`/`rtl` pin
+ * the base level to 0/1. */
+typedef enum pt_bidi_base {
+    pt_bidi_base_auto = 0,
+    pt_bidi_base_ltr,
+    pt_bidi_base_rtl
+} pt_bidi_base;
+
+/* One run of a line after rules L1-L2. Offsets and lengths are logical UTF-8
+ * byte positions in the analysed text, so removed X9 controls still occupy
+ * bytes (shaping keeps them; drawing skips them with pt_bidi_is_removed).
+ * `level` is the resolved embedding level. Runs are emitted in visual order,
+ * left to right, and `visual_index` is the run's position in that order. */
+typedef struct pt_bidi_run {
+    size_t offset;
+    size_t length;
+    uint8_t level;
+    size_t visual_index;
+} pt_bidi_run;
+
+/* A reordered line. `offset`/`length` are the logical byte range passed to
+ * pt_bidi_line_create; `base_level` is the resolved paragraph level. */
+typedef struct pt_bidi_line {
+    size_t offset;
+    size_t length;
+    uint8_t base_level;
+    pt_bidi_run *runs;
+    size_t run_count;
+} pt_bidi_line;
+
+/* Opaque analysed paragraph. The text is decoded once into an internal
+ * code-point copy; callers may release their buffer afterwards. */
+typedef struct pt_bidi_paragraph pt_bidi_paragraph;
+
+/* Analyses the first paragraph in [0, len). On success `*out` owns the
+ * paragraph and must be released with pt_bidi_paragraph_free. An empty input
+ * succeeds with a paragraph of length zero and the base level implied by the
+ * requested direction. */
+bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
+                               pt_bidi_paragraph **out);
+void pt_bidi_paragraph_free(pt_bidi_paragraph *paragraph);
+uint8_t pt_bidi_paragraph_base_level(const pt_bidi_paragraph *paragraph);
+size_t pt_bidi_paragraph_length(const pt_bidi_paragraph *paragraph);
+
+/* Reorders `length` bytes of the paragraph starting at `offset` (rules L1-L2)
+ * and returns the visual runs. The range must lie inside the paragraph. The
+ * line owns its runs; release it with pt_bidi_line_free. */
+bool pt_bidi_line_create(const pt_bidi_paragraph *paragraph, size_t offset, size_t length,
+                         pt_bidi_line *out);
+void pt_bidi_line_free(pt_bidi_line *line);
+
+/* Resolved level of the byte at `byte_offset`, or -1 when outside the line. */
+int pt_bidi_line_level_at(const pt_bidi_line *line, size_t byte_offset);
+
+/* True for the X9 controls removed by the bidi algorithm (BN, LRE, RLE, LRO,
+ * RLO, PDF). Their bytes stay in runs for shaping but must not be painted. */
+bool pt_bidi_is_removed(uint32_t codepoint);
+const char *pt_bidi_engine_version(void);
+const char *pt_bidi_unicode_version(void);
+
 #endif
