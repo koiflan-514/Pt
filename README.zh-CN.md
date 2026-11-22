@@ -6,10 +6,10 @@
 应用可以使用 C、C++、Python 或 Java 编写，面向同一套扁平 C ABI。
 这个名字是铂的化学符号：小而致密、不易反应。
 
-状态：**1.3.0**。线路验证与契约补全版本：可在无头环境中回放协议序列的进程内伪合成器、
-IME 视觉补全（`preedit_hint` 下划线与输入面板请求）、经内置解码器支持的 SVG 图标源、
-专用的数值步进按钮无障碍角色，以及 C++ 拥有型 getter 加固——这套只追加式表面构建于包含
-556 个函数的 C ABI 之上，由 C++/Python/Java 封装，并强制要求绑定功能对等。
+状态：**1.4.0**。输入线路矩阵补全与格式打磨版本：既有加载器支持 SVGZ 图标源、
+触摸/手写板/拖放输入的无头线路覆盖、多触点焦点修正，以及 niri+fcitx5 实时 IME
+组合闭环。它不新增任何公共函数、枚举或结构，因此表面仍为包含 556 个函数的 C ABI，
+由 C++/Python/Java 封装，并强制要求绑定功能对等。
 发布记录已写好，带注释的标签将在最终门禁运行后创建；参见
 [docs/release.md](docs/release.md)。API 由经审阅的基线、生成的函数参考和
 兼容性策略共同跟踪；参见 [docs/api-reference.md](docs/api-reference.md)、
@@ -48,6 +48,53 @@ IME 视觉补全（`preedit_hint` 下划线与输入面板请求）、经内置�
 - 基于 `wl_shm` 的软件渲染：冷启动快，窗口未获焦时空闲占用不到单核的 0.3%，
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
+
+## 1.4.0 的新特性
+
+1.4.0 收尾了 1.3 之后遗留的可追加事项，同时不触碰 2.0 的结构性边界。
+它**不新增任何公共函数、枚举或结构**：表面仍为 556 个函数和 910 条基线条目，
+与 1.3.0 完全一致。本版工作是能力扩展、测试基础设施，以及一处有意的行为修正。
+带注释的标签将在最终门禁运行后创建，记录见 [release.md](docs/release.md)。
+
+- **SVGZ 图标源。** `pt_icon_image_load_file` 和
+  `pt_icon_image_load_memory` 通过内容嗅探接受 gzip 压缩的 SVG 文档：
+  gzip 魔数 `0x1f 0x8b` 先于文本嗅探检查，因此压缩文档的顶层字节不必看起来像 XML。
+  解压在两个方向都有界——压缩输入沿用现有 16 MiB 上限，解压后文档同样限制在
+  16 MiB，超出即拒绝而不是继续增长（解压炸弹守卫）；解压后的字节还必须通过
+  同一 SVG 嗅探，因此并非 SVG 的 gzip 归档会被拒绝。句柄保留解压后的源字节而非
+  压缩字节，并像普通 SVG 句柄一样按每个请求尺寸重新解析。hicolor `scalable/`
+  查找现在依次尝试 `.svg`、`.svgz`、`.png`；固定尺寸目录仍仅查找 `.png`。
+  零新增公共函数：既有加载器获得该格式，`pt/icon.h` 将契约标注为
+  “Since 1.2; SVGZ since 1.4”。`test_icon` 从 330 增至 800 项检查，包含对解压器的
+  变异与垃圾输入模糊测试。
+- **输入线路矩阵补全。** 伪合成器现在注入并回放剩余输入协议表面。`wl_touch`
+  覆盖 down/up/motion/frame/cancel、多接触点与捏合，以及能力移除；tablet-v2
+  覆盖 seat/tool 生命周期、proximity、压力、倾斜、旋转、滑块、滚轮和按键；
+  拖放覆盖 `data_device` enter/motion/drop/leave、经 `SCM_RIGHTS` fd 的 offer
+  accept/receive 与 finish，以及 source target/action/cancelled/`dnd_finished`；
+  主选区增加注入与回放。新的 `test_wire_input` 槽通过 595 项检查，
+  `wait_object` 辅助函数消除了服务端状态竞态（连续 200 次运行零失败），
+  设施的手写板管理器请求表中 `get_tablet_seat`/`destroy` 顺序写反的问题也已修正。
+  这属于测试基础设施：不改变公共头文件、符号或 ABI。
+- **多触点焦点修正。** `src/wayland/platform.c` 曾在第一个接触点抬起时无条件清除
+  `touch_focus`，导致其余手指的 motion 和 up 被丢弃、捏合遗留活动状态、
+  cancel 无法清理，重复捏合也会失效。内部 `pt_window_input_touch_up` 现在返回
+  剩余接触点数（内部接口从 `void` 改为 `uint32_t`，不是公共 ABI 变更），
+  platform 仅在剩余数为零时清除焦点；幸存的单接触点会重新更新模拟指针，
+  而不再被忽略。捏合仍然绝不触发点击，`test_damage` 保持 98 项通过。
+  这是一处有意的行为修正：重复捏合与中途 cancel 现在行为正确。
+  `test_wire_input` 已从“记录旧限制”升级为“断言正确行为”。
+- **niri + fcitx5 实时 IME 闭环。** 运行时 registry 检查显示 niri 26.04 广告
+  `zwp_input_method_manager_v2` v1，fcitx5 5.1.23 运行其 pinyin 引擎。
+  键入 `nihao ` 现在可驱动实时组合：预编辑依次演进 `n` → `ni` → `ni h` →
+  `ni ha` → `ni hao`，空格经 text-input-v3 将 `你好` 提交到 Pt
+  （`PREEDIT_COUNT=5`）。关键点是：在嵌套 display 上创建的虚拟键盘会绕过
+  input-method 抓取，因此 harness 改为向父 display 注入，让嵌套 niri 像接收
+  真实键盘一样收到按键。harness 由 `tools/live-ime.sh` 与
+  `tests/ime_live_probe.c`（仅使用公开 API）组成，以 `make check-ime-live` 运行；
+  没有父 niri 时诚实地以 rc 0 跳过；将 fcitx5 隔离在私有会话总线上，不触碰
+  用户实例；并通过有界等待、信号即退和注键前焦点复核加固流程。它已接入
+  `ci.sh` 的实时段。KWin+fcitx5 与 Mutter+IBus 实时组合仍缺环境，保留为遗留项。
 
 ## 1.3.0 的新特性
 
@@ -419,6 +466,7 @@ make check                 # all headless C suites, binding suites, API audit an
 make check-bindings        # only the C++ wrapper, Python ctypes and Java FFM tests
 make check-wayland         # live suite: nested compositor, popups and idle guard
 make check-typing          # hermetically inject keys into a nested compositor
+make check-ime-live        # live niri+fcitx5 composition through text-input-v3
 make bench                 # headless layout, full/partial paint and startup benchmarks
 make perf-check            # benchmarks plus regression ceilings (4K, large-tree scroll)
 make install-check         # staged install, SONAME/ABI and four-language consumers
@@ -608,7 +656,7 @@ pkg-config --modversion pt
 
 <a id="limitations-in-11"></a>
 
-## 1.2 中的限制
+## 1.4 中的限制
 
 - 仅支持 Wayland；没有 X11、Windows 或 macOS 后端。
 - 1.x ABI 为只追加：移除需要主版本发布和 SONAME 提升。
@@ -620,9 +668,10 @@ pkg-config --modversion pt
   弹出层使用原生 `xdg_popup` 表面；对话框、通知和可过滤组合框弹出层仍合成
   在窗口内，因为它们是模态的、堆叠的，或需要编辑器保持焦点。原生弹出层仍
   需要一个已配置的 xdg-shell 窗口，因此无头运行使用窗口内回退方案。
-- 图标图像是栅格的：PNG 解码加 hicolor 主题查找，并带按尺寸/缩放缓存。
-  SVG 源被推迟，因此只提供可缩放 SVG 的图标主题无法解析。
-  `pt_window_set_icon` 是尽力而为：没有 `xdg-toplevel-icon-v1` 时合成器可能
+- 图标图像是栅格的：PNG、SVG 和 SVGZ 解码加 hicolor 主题查找，并带按尺寸/缩放
+  缓存。SVG 子集诚实而非完整——文本、栅格图像、滤镜、遮罩、`clipPath`、
+  `use`/`symbol`、标记、动画以及完整 CSS 级联会被忽略，没有可绘制形状的文档
+  会被拒绝。`pt_window_set_icon` 是尽力而为：没有 `xdg-toplevel-icon-v1` 时合成器可能
   显示自己的回退图标，图像仍由应用拥有。
 - 选择器不读取进程 locale。日期格式是显式的 `pt_date_format`，
   数字字段提交时始终使用 `.` 作为小数分隔符（输入时 `.` 和 `,` 都接受），
@@ -640,8 +689,8 @@ pkg-config --modversion pt
 - 拖动源和结构化放置提供内容需要与任何 Wayland 拖动相同的隐式指针抓取，
   因此 `pt_window_begin_drag` 仅在按压处于活动状态时成功，
   而无头运行没有可通信的拖动合成器。流式读取传递字节；
-  解码 JSON 或 URI 列表是应用的工作。触摸手势使用两个触点；额外触点会被忽略。
-  触控笔支持取决于合成器提供的 `tablet-v2`。
+  解码 JSON 或 URI 列表是应用的工作。触摸捏合与旋转测量前两个被跟踪的触点；
+  额外触点会被跟踪，但不改变手势度量。触控笔支持取决于合成器提供的 `tablet-v2`。
 - 样式化文本段覆盖标签和文本区域字节范围内的字重、倾斜、颜色、下划线、
   逐段字体族和逐段字号。没有双向文本段落布局，没有内联图像，
   也没有逐段拉伸或光学对齐，文本区域仍以统一的段落几何编辑纯文本。
@@ -679,7 +728,7 @@ Pt 在首次提交时向 `xdg-decoration` 请求客户端模式，因为它的�
 pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
-`pt_decoration_auto` 遵循框架默认策略，在 1.2 中即客户端装饰。请求
+`pt_decoration_auto` 遵循框架默认策略，在整个 1.x 系列中即客户端装饰。请求
 从来不是保证：`configure` 返回的模式才是权威结果，
 `pt_window_get_effective_decoration_mode` 会单独报告它，而
 `pt_window_get_decoration_mode` 返回请求模式。Sway 即使收到客户端

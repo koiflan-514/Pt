@@ -6,14 +6,13 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **1.3.0**. The wire-verification and contract-completion release: an
-in-process fake compositor that replays protocol sequences headlessly, the IME
-visual completion (`preedit_hint` underlines and the input-panel requests), SVG
-icon sources through a vendored decoder, a dedicated spin-button accessibility
-role, and C++ owned-getter hardening — an append-only surface on
-a 556-function C ABI wrapped in C++/Python/Java with binding parity enforced.
-The release record is written and the annotated tag is created after the final
-gate run; see
+Status: **1.4.0**. The input-wire-matrix and format-polish release: SVGZ icon
+sources through the existing loaders, headless wire coverage for touch, tablet
+and drag-and-drop input, a multi-touch focus correction, and a live
+niri+fcitx5 IME composition harness. It adds no public function, enum or
+struct, so the surface stays a 556-function C ABI wrapped in C++/Python/Java
+with binding parity enforced. The release record is written and the annotated
+tag is created after the final gate run; see
 [docs/release.md](docs/release.md). The API is tracked by a reviewed baseline, a
 generated function reference and a compatibility policy; see
 [docs/api-reference.md](docs/api-reference.md),
@@ -60,6 +59,70 @@ generated function reference and a compatibility policy; see
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 1.4.0
+
+1.4.0 closes the remaining appendable items carried past 1.3 without touching
+the 2.0 structural horizon. It adds **no public function, enum or struct**: the
+surface stays at 556 functions and 910 baseline entries, exactly as in 1.3.0.
+The work is capability extension, test infrastructure and one intentional
+behaviour correction. The annotated tag is created after the final gate run
+recorded in [release.md](docs/release.md).
+
+- **SVGZ icon sources.** `pt_icon_image_load_file` and
+  `pt_icon_image_load_memory` accept a gzip-compressed SVG document by content
+  sniffing: the gzip magic `0x1f 0x8b` is checked before the text sniff, so a
+  compressed document never has to look like XML at the top level. Inflation is
+  bounded in both directions — the compressed input keeps the existing 16 MiB
+  cap and the inflated document is capped at 16 MiB as well, which rejects a
+  decompression bomb instead of growing it; the inflated bytes must then pass
+  the same SVG sniff, so a gzip archive that is not SVG is refused. The handle
+  keeps the inflated source, not the compressed bytes, and re-parses it per
+  requested size like a plain SVG handle. Hicolor `scalable/` lookup now tries
+  `.svg`, then `.svgz`, then `.png`; fixed-size directories remain `.png` only.
+  Zero new public functions: the existing loaders gained the format, and
+  `pt/icon.h` marks the contract "Since 1.2; SVGZ since 1.4". `test_icon` grew
+  from 330 to 800 checks, including mutation and garbage fuzzing of the
+  decompressor.
+- **Input wire matrix completion.** The fake compositor now injects and
+  replays the rest of the input protocol surface. `wl_touch` covers
+  down/up/motion/frame/cancel, multiple contacts and pinch, and capability
+  removal; tablet-v2 covers the seat/tool lifecycle, proximity, pressure, tilt,
+  rotation, slider, wheel and buttons; drag and drop covers `data_device`
+  enter/motion/drop/leave, offer accept/receive over an `SCM_RIGHTS` fd and
+  finish, plus source target/action/cancelled/`dnd_finished`; primary selection
+  gains injection and replay. The new `test_wire_input` slot passes 595
+  checks, a `wait_object` helper removes the server-state race (200 consecutive
+  runs, zero failures), and the facility's tablet-manager request table had
+  `get_tablet_seat`/`destroy` written in the wrong order, now fixed. This is
+  test infrastructure: no public header, symbol or ABI changes.
+- **Multi-touch focus correction.** `src/wayland/platform.c` used to clear
+  `touch_focus` unconditionally when the first contact lifted, so motion and up
+  for the remaining fingers were dropped, a pinch could leave active state
+  behind, cancel could not clean up, and a repeated pinch failed. The internal
+  `pt_window_input_touch_up` now returns the remaining contact count (a `void`
+  to `uint32_t` internal interface change, not a public ABI change) and the
+  platform clears focus only at zero; a surviving single contact updates the
+  emulated pointer again instead of being ignored. `pinch` still never clicks,
+  and `test_damage` remains 98 green. This is an intentional behaviour
+  correction: repeated pinches and a mid-gesture cancel now behave correctly.
+  `test_wire_input` asserts the correct behaviour rather than recording the old
+  limitation.
+- **Live IME loop for niri + fcitx5.** A runtime registry check showed niri
+  26.04 advertising `zwp_input_method_manager_v2` v1 and fcitx5 5.1.23 running
+  its pinyin engine. Typing `nihao ` now drives a live composition: the preedit
+  advances `n` → `ni` → `ni h` → `ni ha` → `ni hao` and the space commits `你好`
+  through text-input-v3 into Pt (`PREEDIT_COUNT=5`). The decisive detail is
+  that a virtual keyboard created on the nested display bypasses the
+  input-method grab, so the harness injects into the parent display and lets
+  the nested niri receive the keys as a real keyboard would. The harness is
+  `tools/live-ime.sh` plus `tests/ime_live_probe.c` (public API only), runs as
+  `make check-ime-live`, skips honestly with rc 0 when there is no parent niri,
+  isolates fcitx5 on a private session bus so the user's instance is untouched,
+  and hardens the run with bounded waits, signal-triggered teardown and a focus
+  recheck immediately before injection. It is wired into the `ci.sh` live
+  section. KWin+fcitx5 and Mutter+IBus live composition still lack their
+  environments and remain listed as open.
 
 ## What is new in 1.3.0
 
@@ -512,6 +575,7 @@ make check                 # all headless C suites, binding suites, API audit an
 make check-bindings        # only the C++ wrapper, Python ctypes and Java FFM tests
 make check-wayland         # live suite: nested compositor, popups and idle guard
 make check-typing          # hermetically inject keys into a nested compositor
+make check-ime-live        # live niri+fcitx5 composition through text-input-v3
 make bench                 # headless layout, full/partial paint and startup benchmarks
 make perf-check            # benchmarks plus regression ceilings (4K, large-tree scroll)
 make install-check         # staged install, SONAME/ABI and four-language consumers
@@ -711,7 +775,7 @@ migration and comparison guides also have
 release records, roadmap, performance notes and policy pages remain
 English-only.
 
-## Limitations in 1.2
+## Limitations in 1.4
 
 - Wayland only; there is no X11, Windows or macOS backend.
 - The 1.x ABI is append-only: removals require a major release and a SONAME
@@ -727,9 +791,11 @@ English-only.
   the window because they are modal, stacked or need the editor to keep focus.
   Native popups still need a configured xdg-shell window, so headless runs use
   the in-window fallback.
-- Icon images are raster: PNG decoding plus hicolor theme lookup with a
-  per-size/scale cache. SVG sources are deferred, so an icon theme that only
-  ships scalable SVGs is not resolved. `pt_window_set_icon` is best-effort:
+- Icon images are raster: PNG, SVG and SVGZ decoding plus hicolor theme lookup
+  with a per-size/scale cache. The SVG subset is honest rather than complete —
+  text, raster images, filters, masks, `clipPath`, `use`/`symbol`, markers,
+  animation and the full CSS cascade are ignored, and a document with no
+  drawable shape is rejected. `pt_window_set_icon` is best-effort:
   without `xdg-toplevel-icon-v1` the compositor may show its own fallback, and
   the application keeps ownership of the image.
 - The pickers do not read the process locale. The date format is an explicit
@@ -754,8 +820,9 @@ English-only.
   as any Wayland drag, so `pt_window_begin_drag` only succeeds while a press is
   active, and a headless run has no drag compositor to talk to. Streamed reads
   deliver bytes; decoding JSON or a URI list is the application's job. Touch
-  gestures use two contacts; additional contacts are ignored. Stylus support
-  depends on `tablet-v2` from the compositor.
+  pinch and rotate measure the first two tracked contacts; extra contacts are
+  tracked but do not change the gesture metrics. Stylus support depends on
+  `tablet-v2` from the compositor.
 - Styled runs cover weight, slant, color, underline, per-run font family and
   per-run size over byte ranges of labels and text areas. There is no bidi
   paragraph layout, no inline images and no per-run stretch or optical
@@ -802,7 +869,7 @@ pt_window_set_decoration_mode(window, pt_decoration_server);
 ```
 
 `pt_decoration_auto` follows the framework default, which is client-side
-decoration in 1.2. The request is never a guarantee: the mode returned by
+decoration through the 1.x series. The request is never a guarantee: the mode returned by
 `configure` is authoritative, and `pt_window_get_effective_decoration_mode`
 reports it separately from the requested mode returned by
 `pt_window_get_decoration_mode`. Sway forces server-side decoration on tiled
