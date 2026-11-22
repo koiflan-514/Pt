@@ -990,7 +990,8 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
             inner.w, area->text_align, muted, true,
             paint_text_base(area, area->placeholder, placeholder_len));
     }
-    int caret_line = pt_text_layout_line_for_position(&layout, layout.caret);
+    int caret_line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                          (pt_text_bias)area->caret_affinity);
     float caret_x = inner.x + pt_text_layout_x_for_position_bias(
                                   &layout, caret_line, layout.caret,
                                   (pt_text_bias)area->caret_affinity);

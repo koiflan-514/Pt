@@ -369,7 +369,8 @@ static float text_area_expected_caret_x(pt_widget *area) {
     if (!pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout)) {
         return 0.0f;
     }
-    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    int line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                     (pt_text_bias)area->caret_affinity);
     float x = pt_text_layout_x_for_position_bias(&layout, line, layout.caret,
                                                  (pt_text_bias)area->caret_affinity);
     pt_text_layout_free(&layout);
@@ -507,6 +508,19 @@ static void test_bidi_entry_editing(pt_app *app) {
     pt_widget_ime_rect(entry, &password_left_x, NULL, NULL, NULL);
     pt_check(password_right_x > password_left_x + 4);
     pt_entry_set_password(entry, false);
+
+    /* A double-click word selection writes its own anchor and caret, so it
+     * must clear a stale trailing affinity; otherwise the next visual caret
+     * step starts from the wrong side of a run boundary. */
+    pt_widget_set_text_direction(entry, pt_text_direction_auto);
+    pt_widget_set_text(entry, mixed);
+    pt_entry_set_selection(entry, 4, 4);
+    entry->caret_affinity = pt_text_bias_trailing;
+    pt_widget_pointer_multi_click(entry,
+                                  entry->x + entry->padding_left - entry->scroll_x + 4.0f,
+                                  entry->y + entry->height * 0.5f, 2);
+    pt_check(entry->selection_anchor == 0 && entry->cursor == 3);
+    pt_check(entry->caret_affinity == pt_text_bias_leading);
 
     /* The text area shares the visual map: one line of the same mixed text
      * moves identically, and Home/End are visual edges. */

@@ -548,6 +548,211 @@ static void test_rtl_editing(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Soft-wrap boundaries are shared by both adjacent lines (the previous line's
+ * end and the next line's start are the same byte). The caret's affinity picks
+ * the line the caret box, Home/End, the next visual step and a click act on:
+ * trailing stays on the upper line, leading belongs to the lower one. A hard
+ * newline keeps its own byte and never moves. The un-biased layout query keeps
+ * the pre-affinity (trailing) answer, so plain LTR behaviour is unchanged. */
+static void test_soft_wrap_affinity(pt_app *app) {
+    pt_window *window = pt_window_create(app, "soft-wrap-affinity", 420, 380);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 12.0f, 12.0f, 12.0f, 12.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 220.0f, 140.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    const char *wrapped =
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E \xD7\xA0\xD7\xA1\xD7\xA2 "
+        "\xD7\xA3\xD7\xA4\xD7\xA5 \xD7\xA6\xD7\xA7\xD7\xA8 "
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E";
+    pt_widget_set_text(area, wrapped);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(420, 380, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+    window->caret_visible = true;
+
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.line_count >= 2);
+    size_t boundary = layout.lines[0].end;
+    size_t line1_end = layout.lines[1].end;
+    float line_h = layout.line_height;
+    /* The same byte has two visual stops: line 0's visual left and line 1's
+     * visual right (Hebrew lines are visual right-to-left). Home/End targets
+     * are the opposite edges of the line they act on. */
+    float line0_right = pt_text_layout_x_for_position_bias(&layout, 0, 0,
+                                                           pt_text_bias_leading);
+    float line0_left = pt_text_layout_x_for_position_bias(&layout, 0, boundary,
+                                                          pt_text_bias_trailing);
+    float line1_right = pt_text_layout_x_for_position_bias(&layout, 1, boundary,
+                                                           pt_text_bias_leading);
+    float line1_left = pt_text_layout_x_for_position_bias(&layout, 1, line1_end,
+                                                          pt_text_bias_leading);
+    pt_check(boundary == layout.lines[1].start && boundary > 0);
+    pt_check(line1_end > boundary);
+    pt_text_layout_free(&layout);
+
+    int line0_y = (int)lroundf(area->y + area->padding_top);
+    int line1_y = (int)lroundf(area->y + area->padding_top + line_h);
+    pt_check(line1_y > line0_y);
+    float inner_x = area->x + area->padding_left;
+    int x = 0;
+    int y = 0;
+
+    /* Leading affinity at the boundary is the first character of line 1: the
+     * IME rectangle sits on line 1 at that line's visual right edge. */
+    pt_text_area_set_selection(area, boundary, boundary);
+    pt_check(area->caret_affinity == pt_text_bias_leading);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line1_y);
+    pt_check_near((float)x, inner_x + line1_right, 1.0f);
+
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == boundary);
+    pt_check(area->caret_affinity == pt_text_bias_leading);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line1_y);
+    pt_check_near((float)x, inner_x + line1_right, 1.0f);
+
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == line1_end);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line1_y);
+    pt_check_near((float)x, inner_x + line1_left, 1.0f);
+
+    /* Trailing affinity belongs to line 0: the control case for the same byte. */
+    pt_text_area_set_selection(area, boundary, boundary);
+    area->caret_affinity = pt_text_bias_trailing;
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line0_y);
+    pt_check_near((float)x, inner_x + line0_left, 1.0f);
+
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == 0);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line0_y);
+    pt_check_near((float)x, inner_x + line0_right, 1.0f);
+
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == boundary);
+    pt_check(area->caret_affinity == pt_text_bias_trailing);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line0_y);
+    pt_check_near((float)x, inner_x + line0_left, 1.0f);
+
+    /* Clicking line 1's visual start keeps the caret on line 1, and clicking
+     * line 0's visual end keeps it on line 0. */
+    float click_x = inner_x + line1_right + 1.0f;
+    float click_y = area->y + area->padding_top + line_h * 1.5f;
+    pt_text_bias click_bias = pt_text_bias_trailing;
+    pt_check(pt_text_area_position_at_bias(area, &ctx, click_x, click_y, &click_bias) ==
+              boundary);
+    pt_check(click_bias == pt_text_bias_leading);
+    pt_widget_pointer_down(area, click_x, click_y);
+    pt_check(area->cursor == boundary && area->caret_affinity == pt_text_bias_leading);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line1_y);
+    pt_widget_pointer_up(area, true);
+
+    click_x = inner_x + 0.5f;
+    click_y = area->y + area->padding_top + line_h * 0.5f;
+    click_bias = pt_text_bias_leading;
+    pt_check(pt_text_area_position_at_bias(area, &ctx, click_x, click_y, &click_bias) ==
+              boundary);
+    pt_check(click_bias == pt_text_bias_trailing);
+    pt_widget_pointer_down(area, click_x, click_y);
+    pt_check(area->cursor == boundary && area->caret_affinity == pt_text_bias_trailing);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line0_y);
+    pt_widget_pointer_up(area, true);
+
+    /* A selection spanning wrapped lines still collapses to its logical edge:
+     * the documented multi-line order, not the in-line visual x comparison. */
+    pt_text_area_set_selection(area, 10, 60);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == 60);
+    pt_text_area_set_selection(area, 10, 60);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(area->cursor == 10);
+
+    /* Pure LTR wrap: the un-biased query keeps the old upper-line answer for
+     * existing callers, while a trailing caret still renders and navigates on
+     * line 0 and a leading caret on line 1. */
+    pt_widget *plain = pt_text_area_create(root, "ltr");
+    pt_check(plain != NULL);
+    pt_widget_set_text(plain,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    pt_widget_set_size(plain, 220.0f, 100.0f);
+    pt_widget_set_align_self(plain, pt_align_start);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(plain));
+
+    pt_layout_ctx lctx = pt_layout_context_for(plain);
+    pt_text_layout latin = {0};
+    pt_check(pt_text_layout_build(plain, &lctx, pt_text_area_content_width(plain), &latin));
+    pt_check(latin.line_count >= 2);
+    size_t latin_boundary = latin.lines[0].end;
+    size_t latin_line1_end = latin.lines[1].end;
+    float latin_h = latin.line_height;
+    pt_check(latin_boundary == latin.lines[1].start &&
+             latin_boundary < latin.display_len);
+    pt_check(pt_text_layout_line_for_position(&latin, latin_boundary) == 0);
+    pt_check(pt_text_layout_line_for_position_bias(&latin, latin_boundary,
+                                                   pt_text_bias_trailing) == 0);
+    pt_check(pt_text_layout_line_for_position_bias(&latin, latin_boundary,
+                                                   pt_text_bias_leading) == 1);
+    float latin_line0_end = pt_text_layout_x_for_position_bias(&latin, 0, latin_boundary,
+                                                               pt_text_bias_trailing);
+    float latin_line1_start = pt_text_layout_x_for_position_bias(&latin, 1, latin_boundary,
+                                                                 pt_text_bias_leading);
+    pt_text_layout_free(&latin);
+    int latin_line0_y = (int)lroundf(plain->y + plain->padding_top);
+    int latin_line1_y = (int)lroundf(plain->y + plain->padding_top + latin_h);
+    pt_check(latin_line1_y > latin_line0_y);
+    float latin_x = plain->x + plain->padding_left;
+
+    pt_text_area_set_selection(plain, latin_boundary, latin_boundary);
+    pt_check(plain->caret_affinity == pt_text_bias_leading);
+    pt_widget_ime_rect(plain, &x, &y, NULL, NULL);
+    pt_check(y == latin_line1_y);
+    pt_check_near((float)x, latin_x + latin_line1_start, 1.0f);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(plain->cursor == latin_line1_end);
+    pt_widget_ime_rect(plain, &x, &y, NULL, NULL);
+    pt_check(y == latin_line1_y);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(plain->cursor == latin_boundary);
+    pt_widget_ime_rect(plain, &x, &y, NULL, NULL);
+    pt_check(y == latin_line1_y);
+
+    pt_text_area_set_selection(plain, latin_boundary, latin_boundary);
+    plain->caret_affinity = pt_text_bias_trailing;
+    pt_widget_ime_rect(plain, &x, &y, NULL, NULL);
+    pt_check(y == latin_line0_y);
+    pt_check_near((float)x, latin_x + latin_line0_end, 1.0f);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(plain->cursor == latin_boundary);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(plain->cursor == 0);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.textarea");
@@ -572,6 +777,7 @@ int main(void) {
     test_grow_to_content(window, canvas);
     test_rtl_layout(app);
     test_rtl_editing(app);
+    test_soft_wrap_affinity(app);
 
     pt_canvas_destroy(canvas);
     pt_window_free(window);

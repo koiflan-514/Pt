@@ -400,6 +400,7 @@ static void entry_select_word(pt_widget *entry, size_t position) {
         entry->selection_anchor = start;
         entry->cursor = end;
     }
+    entry->caret_affinity = pt_text_bias_leading;
     entry_reset_caret(entry);
 }
 
@@ -969,6 +970,7 @@ static bool entry_ime_delete_selection(pt_widget *widget) {
     memmove(widget->text + start, widget->text + end, len - end + 1);
     widget->cursor = start;
     widget->selection_anchor = start;
+    widget->caret_affinity = pt_text_bias_leading;
     /* Quiet: composition callers notify once they finished touching the widget. */
     return true;
 }
@@ -1121,6 +1123,7 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
     }
     if (range_count == 0 && insert_len == 0) {
         if (finalize) {
+            widget->caret_affinity = pt_text_bias_leading;
             entry_ime_clear_preedit(widget);
             entry_ime_end_composition(widget);
             entry_reset_caret(widget);
@@ -3987,7 +3990,8 @@ static bool text_area_vertical(pt_widget *area, uint32_t keysym, bool shift) {
     if (!text_area_build_layout(area, &ctx, &layout)) {
         return false;
     }
-    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    int line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                     (pt_text_bias)area->caret_affinity);
     float goal = area->caret_goal_x >= 0.0f
                      ? area->caret_goal_x
                      : pt_text_layout_x_for_position_bias(&layout, line, layout.caret,
@@ -4023,6 +4027,9 @@ static bool text_area_vertical(pt_widget *area, uint32_t keysym, bool shift) {
         if (fabsf(trailing_x - goal) < fabsf(leading_x - goal)) {
             bias = pt_text_bias_trailing;
         }
+        /* Keep the landing on the target line even when the goal x sits on a
+         * shared soft-wrap boundary. */
+        bias = pt_text_layout_bias_for_line(&layout, target, position, bias);
     }
     pt_text_layout_free(&layout);
     entry_set_cursor(area, position, shift);
@@ -4054,7 +4061,8 @@ static bool text_area_line_edge(pt_widget *area, bool end, bool shift, bool docu
     if (!text_area_build_layout(area, &ctx, &layout)) {
         return false;
     }
-    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    int line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                       (pt_text_bias)area->caret_affinity);
     size_t position = end ? layout.lines[line].end : layout.lines[line].start;
     pt_text_bias bias = pt_text_bias_leading;
     if (text_area_line_is_mapped(&layout, line)) {
@@ -4063,6 +4071,9 @@ static bool text_area_line_edge(pt_widget *area, bool end, bool shift, bool docu
             position = mapped_position;
         }
     }
+    /* Home/End stays on the line the caret is on, including when its edge is a
+     * shared soft-wrap boundary. */
+    bias = pt_text_layout_bias_for_line(&layout, line, position, bias);
     pt_text_layout_free(&layout);
     entry_set_cursor(area, position, shift);
     area->caret_affinity = bias;
@@ -4075,7 +4086,10 @@ static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
     pt_layout_ctx ctx = {0};
     pt_text_layout layout = {0};
     bool have_layout = text_area_build_layout(area, &ctx, &layout);
-    int line = have_layout ? pt_text_layout_line_for_position(&layout, layout.caret) : 0;
+    int line = have_layout
+                   ? pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                            (pt_text_bias)area->caret_affinity)
+                   : 0;
     bool mapped = have_layout && text_area_line_is_mapped(&layout, line);
     size_t position = area->cursor;
     pt_text_bias bias = (pt_text_bias)area->caret_affinity;
@@ -4613,6 +4627,7 @@ void pt_widget_pointer_down(pt_widget *widget, float x, float y) {
     if (pt_widget_kind_is_text_input(widget->kind)) {
         pt_layout_ctx ctx = pt_layout_context_for(widget);
         size_t position = 0;
+        pt_text_bias bias = pt_text_bias_leading;
         if (widget->kind == pt_widget_entry) {
             pt_font *font = pt_widget_font_for(widget, &ctx);
             if (font) {
@@ -4620,9 +4635,14 @@ void pt_widget_pointer_down(pt_widget *widget, float x, float y) {
                                                  x - widget->x - widget->padding_left);
             }
         } else {
-            position = pt_text_area_position_at(widget, &ctx, x, y);
+            position = pt_text_area_position_at_bias(widget, &ctx, x, y, &bias);
         }
         entry_set_cursor(widget, position, false);
+        if (widget->kind == pt_widget_text_area) {
+            /* A hit on a shared soft-wrap boundary keeps the caret on the
+             * clicked line instead of snapping to the line above. */
+            widget->caret_affinity = bias;
+        }
         widget->selecting = true;
         entry_reset_caret(widget);
         if (widget->kind == pt_widget_entry) {
@@ -4762,6 +4782,7 @@ void pt_widget_pointer_drag(pt_widget *widget, float x, float y) {
     } else if (pt_widget_kind_is_text_input(widget->kind) && widget->selecting) {
         pt_layout_ctx ctx = pt_layout_context_for(widget);
         size_t position = 0;
+        pt_text_bias bias = pt_text_bias_leading;
         if (widget->kind == pt_widget_entry) {
             pt_font *font = pt_widget_font_for(widget, &ctx);
             if (font) {
@@ -4769,10 +4790,11 @@ void pt_widget_pointer_drag(pt_widget *widget, float x, float y) {
                                                  x - widget->x - widget->padding_left);
             }
         } else {
-            position = pt_text_area_position_at(widget, &ctx, x, y);
+            position = pt_text_area_position_at_bias(widget, &ctx, x, y, &bias);
         }
         entry_set_cursor(widget, position, true);
         if (widget->kind == pt_widget_text_area) {
+            widget->caret_affinity = bias;
             pt_text_area_ensure_caret_visible(widget, &ctx);
         }
         entry_reset_caret(widget);

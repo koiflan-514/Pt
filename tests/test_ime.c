@@ -847,6 +847,84 @@ static void test_wire_input_panel_v1(void) {
 
 #define HE_BET "\xD7\x90\xD7\x91\xD7\x92"
 
+/* Composition paths that delete a selection or finalize an empty commit must
+ * reset the caret affinity. A stale trailing affinity would freeze the preedit
+ * caret on the trailing visual side of a bidi run boundary even though the
+ * logical cursor already moved to that boundary's leading side. */
+static void test_affinity_resets(pt_app *app) {
+    pt_window *window = pt_window_create(app, "ime-affinity", 520, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget_set_gap(root, 8.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *dirty = pt_entry_create(root, "");
+    pt_widget *clean = pt_entry_create(root, "");
+    pt_check(dirty != NULL && clean != NULL);
+    if (!dirty || !clean) {
+        pt_window_free(window);
+        return;
+    }
+    pt_widget_set_text(dirty, HE_BET " " HE_BET);
+    pt_widget_set_text(clean, HE_BET " " HE_BET);
+    pt_widget_set_size(dirty, 480.0f, 34.0f);
+    pt_widget_set_size(clean, 480.0f, 34.0f);
+    pt_widget_set_align_self(dirty, pt_align_start);
+    pt_widget_set_align_self(clean, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 240, 1.0f);
+    pt_check(canvas && pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(dirty));
+    window->caret_visible = true;
+
+    /* The dirty entry starts from a trailing affinity; the clean twin never
+     * leaves leading. Both compose over the same selection. */
+    pt_entry_set_selection(dirty, 0, 4);
+    dirty->caret_affinity = pt_text_bias_trailing;
+    pt_entry_set_selection(clean, 0, 4);
+    pt_check(dirty->caret_affinity == pt_text_bias_trailing);
+    pt_check(pt_widget_preedit_ex(dirty, "xy", 2, 2));
+    pt_check(pt_widget_preedit_ex(clean, "xy", 2, 2));
+    pt_check(dirty->caret_affinity == pt_text_bias_leading);
+    pt_check(clean->caret_affinity == pt_text_bias_leading);
+    pt_check(strcmp(pt_widget_get_text(dirty), pt_widget_get_text(clean)) == 0);
+
+    int dirty_x = 0;
+    int clean_x = 0;
+    pt_widget_ime_rect(dirty, &dirty_x, NULL, NULL, NULL);
+    pt_widget_ime_rect(clean, &clean_x, NULL, NULL, NULL);
+    pt_check(dirty_x == clean_x);
+    /* The reset matters visually: the leading side is not the trailing one. */
+    dirty->caret_affinity = pt_text_bias_trailing;
+    int trailing_x = 0;
+    pt_widget_ime_rect(dirty, &trailing_x, NULL, NULL, NULL);
+    pt_check(trailing_x != dirty_x);
+    dirty->caret_affinity = pt_text_bias_leading;
+
+    pt_window_input_ime_compose(window, "", "", -1, -1, 0, 0);
+    pt_check(dirty->preedit == NULL);
+    pt_check(pt_widget_preedit_ex(clean, "", -1, -1));
+    pt_check(clean->preedit == NULL);
+
+    /* An empty finalize is an early-return no-op for the text, but it still
+     * clears the affinity because it resets the caret state. */
+    pt_entry_set_selection(dirty, 2, 2);
+    pt_entry_set_selection(clean, 2, 2);
+    dirty->caret_affinity = pt_text_bias_trailing;
+    pt_check(pt_widget_ime_apply(dirty, "", 0, 0, true));
+    pt_check(dirty->caret_affinity == pt_text_bias_leading);
+    pt_check(strcmp(pt_widget_get_text(dirty), pt_widget_get_text(clean)) == 0);
+    pt_widget_ime_rect(dirty, &dirty_x, NULL, NULL, NULL);
+    pt_widget_ime_rect(clean, &clean_x, NULL, NULL, NULL);
+    pt_check(dirty_x == clean_x);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 static float entry_visual_caret_x(pt_widget *entry) {
     const char *text = entry->text ? entry->text : "";
     size_t len = strlen(text);
@@ -928,7 +1006,8 @@ static void test_rtl_geometry(pt_app *app) {
     pt_layout_ctx ctx = pt_layout_context_for(area);
     pt_text_layout layout = {0};
     pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
-    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    int line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                     (pt_text_bias)area->caret_affinity);
     float area_expected = area->x + area->padding_left +
                           pt_text_layout_x_for_position_bias(&layout, line, layout.caret,
                                                              (pt_text_bias)area->caret_affinity);
@@ -984,6 +1063,7 @@ int main(void) {
     test_custom_surface(app);
 
     test_rtl_geometry(app);
+    test_affinity_resets(app);
 
     test_wire_ime_composition();
     test_wire_input_panel();

@@ -280,7 +280,8 @@ void pt_text_layout_free(pt_text_layout *layout) {
     memset(layout, 0, sizeof(*layout));
 }
 
-int pt_text_layout_line_for_position(const pt_text_layout *layout, size_t position) {
+int pt_text_layout_line_for_position_bias(const pt_text_layout *layout, size_t position,
+                                          pt_text_bias bias) {
     if (!layout || layout->line_count <= 0) {
         return 0;
     }
@@ -288,14 +289,42 @@ int pt_text_layout_line_for_position(const pt_text_layout *layout, size_t positi
         position = layout->display_len;
     }
     for (int i = 0; i < layout->line_count; ++i) {
-        if (position >= layout->lines[i].start && position <= layout->lines[i].end) {
-            return i;
-        }
         if (position < layout->lines[i].start) {
             return i > 0 ? i - 1 : 0;
         }
+        if (position > layout->lines[i].end) {
+            continue;
+        }
+        /* A soft-wrap boundary belongs to both lines: the previous line ends
+         * there and the next one starts there. The caret's affinity decides
+         * which side of the break it is drawn on; a hard newline has its own
+         * byte between the two lines and stays on the upper one. */
+        if (bias == pt_text_bias_leading && i + 1 < layout->line_count &&
+            position == layout->lines[i + 1].start) {
+            return i + 1;
+        }
+        return i;
     }
     return layout->line_count - 1;
+}
+
+int pt_text_layout_line_for_position(const pt_text_layout *layout, size_t position) {
+    /* The historical (pre-affinity) assignment is the trailing one: the byte
+     * at a shared soft-wrap boundary stays on the line above. */
+    return pt_text_layout_line_for_position_bias(layout, position, pt_text_bias_trailing);
+}
+
+pt_text_bias pt_text_layout_bias_for_line(const pt_text_layout *layout, int line,
+                                          size_t position, pt_text_bias preferred) {
+    pt_text_bias other = preferred == pt_text_bias_trailing ? pt_text_bias_leading
+                                                            : pt_text_bias_trailing;
+    if (pt_text_layout_line_for_position_bias(layout, position, preferred) == line) {
+        return preferred;
+    }
+    if (pt_text_layout_line_for_position_bias(layout, position, other) == line) {
+        return other;
+    }
+    return preferred;
 }
 
 float pt_text_layout_x_for_position(const pt_text_layout *layout, int line, size_t position) {
@@ -399,7 +428,8 @@ void pt_text_area_ensure_caret_visible(pt_widget *area, const pt_layout_ctx *ctx
     }
     float viewport = pt_max_float(1.0f, area->height - area->padding_top -
                                             area->padding_bottom);
-    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    int line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                     (pt_text_bias)area->caret_affinity);
     float top = (float)line * layout.line_height;
     if (top < area->scroll_y) {
         area->scroll_y = top;
@@ -448,7 +478,8 @@ void pt_text_area_caret_box(const pt_widget *area, const pt_layout_ctx *ctx, int
     int out_h = 18;
     pt_text_layout layout = {0};
     if (area && pt_text_layout_build(area, ctx, pt_text_area_content_width(area), &layout)) {
-        int line = pt_text_layout_line_for_position(&layout, layout.caret);
+        int line = pt_text_layout_line_for_position_bias(&layout, layout.caret,
+                                                         (pt_text_bias)area->caret_affinity);
         pt_text_bias bias = (pt_text_bias)area->caret_affinity;
         float caret_x = pt_text_layout_x_for_position_bias(&layout, line, layout.caret, bias);
         if (area->preedit && *area->preedit) {
@@ -484,13 +515,19 @@ void pt_text_area_caret_box(const pt_widget *area, const pt_layout_ctx *ctx, int
     }
 }
 
-size_t pt_text_area_position_at(const pt_widget *area, const pt_layout_ctx *ctx, float x,
-                                float y) {
+size_t pt_text_area_position_at_bias(const pt_widget *area, const pt_layout_ctx *ctx, float x,
+                                    float y, pt_text_bias *bias) {
     if (!area) {
+        if (bias) {
+            *bias = pt_text_bias_leading;
+        }
         return 0;
     }
     pt_text_layout layout = {0};
     if (!pt_text_layout_build(area, ctx, pt_text_area_content_width(area), &layout)) {
+        if (bias) {
+            *bias = pt_text_bias_leading;
+        }
         return 0;
     }
     float local_x = x - area->x - area->padding_left;
@@ -506,6 +543,18 @@ size_t pt_text_area_position_at(const pt_widget *area, const pt_layout_ctx *ctx,
         line = layout.line_count - 1;
     }
     size_t position = pt_text_layout_position_for_x(&layout, line, local_x);
+    /* A click on a shared soft-wrap boundary keeps the caret on the line that
+     * was clicked, so the affinity that renders there is the one we store. */
+    pt_text_bias chosen =
+        pt_text_layout_bias_for_line(&layout, line, position, pt_text_bias_leading);
     pt_text_layout_free(&layout);
+    if (bias) {
+        *bias = chosen;
+    }
     return position;
+}
+
+size_t pt_text_area_position_at(const pt_widget *area, const pt_layout_ctx *ctx, float x,
+                                float y) {
+    return pt_text_area_position_at_bias(area, ctx, x, y, NULL);
 }

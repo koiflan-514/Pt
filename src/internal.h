@@ -1208,7 +1208,22 @@ void pt_text_area_caret_box(const pt_widget *area, const pt_layout_ctx *ctx, int
                             int *w, int *h);
 size_t pt_text_area_position_at(const pt_widget *area, const pt_layout_ctx *ctx, float x,
                                 float y);
+/* Click landing with the caret affinity that keeps the caret on the clicked
+ * line when the hit lands on a shared soft-wrap boundary. */
+size_t pt_text_area_position_at_bias(const pt_widget *area, const pt_layout_ctx *ctx, float x,
+                                    float y, pt_text_bias *bias);
 int pt_text_layout_line_for_position(const pt_text_layout *layout, size_t position);
+/* Line assignment with an explicit caret affinity: at a soft-wrap boundary the
+ * previous line's end and the next line's start are the same byte, so leading
+ * affinity belongs to the next line and trailing to the previous one. A hard
+ * newline keeps its own byte and is unaffected. */
+int pt_text_layout_line_for_position_bias(const pt_text_layout *layout, size_t position,
+                                          pt_text_bias bias);
+/* The preferred affinity when it renders on `line`, else the other one when
+ * that does, else `preferred`. Used by clicks and edge keys that already know
+ * which line they act on. */
+pt_text_bias pt_text_layout_bias_for_line(const pt_text_layout *layout, int line,
+                                          size_t position, pt_text_bias preferred);
 /* Resolved embedding level of the cluster a caret at `position` attaches to
  * (leading affinity), used for preedit direction and caret composition. */
 uint8_t pt_text_layout_level_for_position(const pt_text_layout *layout, int line,
