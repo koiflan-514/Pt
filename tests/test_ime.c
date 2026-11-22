@@ -5,10 +5,16 @@
  */
 
 #include "../src/internal.h"
+#include "fake_compositor.h"
 #include "harness.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+/* zwp_text_input_v3 request opcodes used by the wire assertions. */
+#define ime_text_input_enable 1u
+#define ime_text_input_show_input_panel 9u
+#define ime_text_input_hide_input_panel 10u
 
 static pt_widget *make_entry(pt_window *window, const char *initial) {
     pt_widget *entry = pt_entry_create(pt_window_root(window), "type");
@@ -543,6 +549,302 @@ static void test_custom_surface(pt_app *app) {
     pt_window_free(window);
 }
 
+/* ---------- fake-compositor wire replay ---------- */
+
+static void ime_wire_wait_configured(fake_compositor *fc, pt_app *app,
+                                     pt_window *window) {
+    for (int i = 0; i < 300 && window && !window->configured; ++i) {
+        fake_compositor_dispatch(fc, app, 5);
+    }
+}
+
+/* Starts a non-headless Pt app against the fake compositor and returns a shown,
+ * configured window with a focused entry holding "abcdef". */
+static pt_window *ime_wire_open(fake_compositor *fc, pt_app **app_out) {
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.ime.wire");
+    pt_check(app != NULL);
+    if (!app) {
+        return NULL;
+    }
+    pt_check(fake_compositor_settle(fc, app));
+    pt_window *window = pt_window_create(app, "ime-wire", 320, 200);
+    pt_check(window != NULL);
+    if (!window) {
+        pt_app_destroy(app);
+        return NULL;
+    }
+    pt_widget *entry = pt_entry_create(pt_window_root(window), "wire");
+    pt_check(entry != NULL);
+    pt_widget_set_text(entry, "abcdef");
+    pt_check(pt_widget_focus(entry));
+    pt_window_show(window);
+    ime_wire_wait_configured(fc, app, window);
+    pt_check(window->configured);
+    pt_check(fake_compositor_settle(fc, app));
+    *app_out = app;
+    return window;
+}
+
+static void test_wire_ime_composition(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    pt_app *app = NULL;
+    pt_window *window = ime_wire_open(&fc, &app);
+    if (!window) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_widget *entry = window->focused;
+    pt_check(entry != NULL);
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+    uint32_t text_input = fake_compositor_live_id(&fc, FC_K_TEXT_INPUT);
+    pt_check(text_input != 0);
+
+    /* text-input enter activates the focused entry and enables the object. */
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_text_input_enter(&fc, surface));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TEXT_INPUT,
+                                          ime_text_input_enable, 1, 32));
+    pt_check(app->platform->text_input_enabled);
+    pt_check(app->platform->text_input_window == window);
+
+    /* preedit_string and preedit_hint are double-buffered: they only touch the
+     * pending state until done, and then apply together. */
+    pt_check(fake_compositor_text_input_preedit_string(&fc, "xyz", 1, 2));
+    pt_check(fake_compositor_text_input_preedit_hint(
+        &fc, 0, 1, (uint32_t)pt_ime_hint_selection));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->preedit == NULL);
+    pt_check(entry->preedit_hint_count == 0);
+    pt_check(app->platform->pending_preedit != NULL);
+    pt_check(strcmp(app->platform->pending_preedit, "xyz") == 0);
+    pt_check(app->platform->pending_preedit_begin == 1);
+    pt_check(app->platform->pending_preedit_end == 2);
+    pt_check(app->platform->pending_hint_count == 1);
+
+    pt_check(fake_compositor_text_input_done(&fc, 41u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->ime_serial == 41u);
+    pt_check(app->platform->pending_preedit == NULL);
+    pt_check(entry->preedit != NULL && strcmp(entry->preedit, "xyz") == 0);
+    pt_check(entry->preedit_cursor_begin == 1);
+    pt_check(entry->preedit_cursor_end == 2);
+    pt_check(entry->preedit_hint_count == 1);
+    pt_check(entry->preedit_hints[0].start == 0);
+    pt_check(entry->preedit_hints[0].end == 1);
+    pt_check(entry->preedit_hints[0].hint == pt_ime_hint_selection);
+
+    /* A done with no text ends the visible composition: it clears the preedit
+     * and hints and requests a repaint. A shown window draws synchronously when
+     * scheduled and clears needs_draw, so park it unshown while observing the
+     * flag itself. */
+    window->shown = false;
+    window->needs_draw = false;
+    pt_check(fake_compositor_text_input_done(&fc, 42u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->preedit == NULL);
+    pt_check(entry->preedit_hint_count == 0);
+    pt_check(window->needs_draw);
+
+    /* The same empty done with no composition to end is only an acknowledgement
+     * of the state we pushed, and must not trigger a repaint. */
+    window->needs_draw = false;
+    pt_check(fake_compositor_text_input_done(&fc, 43u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->preedit == NULL);
+    pt_check(!window->needs_draw);
+    window->shown = true;
+
+    /* delete_surrounding_text and commit_string apply in one done, with the
+     * deletion counted from the cursor and the commit inserted at its end. */
+    pt_widget_set_text(entry, "abcdef");
+    pt_entry_set_selection(entry, 4, 4);
+    pt_check(fake_compositor_text_input_delete_surrounding_text(&fc, 2, 1));
+    pt_check(fake_compositor_text_input_commit_string(&fc, "X"));
+    pt_check(fake_compositor_text_input_done(&fc, 44u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(strcmp(pt_widget_get_text(entry), "abXf") == 0);
+    pt_check(entry->cursor == 3);
+
+    /* Deletion lengths snap to UTF-8 boundaries on the wire too. The emoji is
+     * four bytes, so a two-byte deletion cannot split it. */
+    pt_widget_set_text(entry, "a\xF0\x9F\x98\x80" "b");
+    pt_entry_set_selection(entry, 5, 5);
+    pt_check(fake_compositor_text_input_delete_surrounding_text(&fc, 2, 0));
+    pt_check(fake_compositor_text_input_commit_string(&fc, "X"));
+    pt_check(fake_compositor_text_input_done(&fc, 45u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(strcmp(pt_widget_get_text(entry), "a\xF0\x9F\x98\x80" "Xb") == 0);
+
+    /* The v2 action is double-buffered with done and activates the entry without
+     * fabricating a key press or newline. */
+    pt_widget_set_text(entry, "value");
+    submit_probe probe = {0};
+    pt_entry_set_on_submit(entry, count_submit, &probe);
+    pt_window_set_key_event_callback(window, count_raw_key, &probe);
+    pt_window_set_key_callback(window, count_legacy_key, &probe);
+    pt_check(fake_compositor_text_input_action(&fc, 1u, 46u));
+    pt_check(fake_compositor_text_input_done(&fc, 46u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(probe.submits == 1);
+    pt_check(probe.raw_keys == 0);
+    pt_check(probe.legacy_keys == 0);
+    pt_check(strcmp(pt_widget_get_text(entry), "value") == 0);
+
+    /* language is advisory and does not alter text or schedule a repaint. */
+    window->needs_draw = false;
+    pt_check(fake_compositor_text_input_language(&fc, "ja"));
+    pt_check(fake_compositor_text_input_done(&fc, 47u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(strcmp(pt_widget_get_text(entry), "value") == 0);
+    pt_check(!window->needs_draw);
+
+    pt_check(fake_compositor_error(&fc) == NULL);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+    pt_window_set_key_event_callback(window, NULL, NULL);
+    pt_window_set_key_callback(window, NULL, NULL);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
+static void test_wire_input_panel(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    pt_app *app = NULL;
+    pt_window *window = ime_wire_open(&fc, &app);
+    if (!window) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+    pt_check(app->platform->text_input != NULL);
+    pt_check(wl_proxy_get_version((struct wl_proxy *)app->platform->text_input) == 2);
+
+    /* Focusing the entry already enabled the text-input object, so the show
+     * intent forwards the v2 request immediately. */
+    fake_compositor_clear(&fc);
+    pt_check(pt_window_show_input_panel(window));
+    pt_check(window->input_panel_requested);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TEXT_INPUT,
+                                          ime_text_input_show_input_panel, 1, 32));
+    pt_check(app->platform->text_input_enabled);
+    fc_request show = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_TEXT_INPUT,
+                                          ime_text_input_show_input_panel, &show));
+    pt_check(show.nargs == 0);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_show_input_panel) == 1);
+
+    /* The window-level state machine suppresses a repeated show. */
+    pt_check(!pt_window_show_input_panel(window));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_show_input_panel) == 1);
+
+    /* hide forwards the v2 opcode 10 and is likewise idempotent. */
+    pt_check(pt_window_hide_input_panel(window));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TEXT_INPUT,
+                                          ime_text_input_hide_input_panel, 1, 32));
+    fc_request hide = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_TEXT_INPUT,
+                                          ime_text_input_hide_input_panel, &hide));
+    pt_check(hide.nargs == 0);
+    pt_check(!pt_window_hide_input_panel(window));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_hide_input_panel) == 1);
+
+    /* After leave there is no active text-input object again: the show intent
+     * waits, then is forwarded by the next enter/enable activation. */
+    pt_check(fake_compositor_text_input_leave(&fc, surface));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->text_input_window == NULL);
+    size_t shows = fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                                  ime_text_input_show_input_panel);
+    pt_check(pt_window_show_input_panel(window));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_show_input_panel) == shows);
+    pt_check(fake_compositor_text_input_enter(&fc, surface));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TEXT_INPUT,
+                                          ime_text_input_show_input_panel,
+                                          shows + 1, 32));
+
+    pt_check(fake_compositor_error(&fc) == NULL);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
+static void test_wire_input_panel_v1(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_TEXT_INPUT | FC_OPT_TEXT_INPUT_V1));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    pt_app *app = NULL;
+    pt_window *window = ime_wire_open(&fc, &app);
+    if (!window) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+    pt_check(app->platform->text_input != NULL);
+    pt_check(wl_proxy_get_version((struct wl_proxy *)app->platform->text_input) == 1);
+
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_text_input_enter(&fc, surface));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TEXT_INPUT,
+                                          ime_text_input_enable, 1, 32));
+    pt_check(app->platform->text_input_enabled);
+
+    /* The window still records its intent, but a v1 text-input object cannot
+     * carry show/hide_input_panel: neither request may be sent. */
+    pt_check(pt_window_show_input_panel(window));
+    pt_check(window->input_panel_requested);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_show_input_panel) == 0);
+    pt_check(pt_window_hide_input_panel(window));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_hide_input_panel) == 0);
+
+    /* The activation replay is version-guarded as well. */
+    pt_check(fake_compositor_text_input_leave(&fc, surface));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(pt_window_show_input_panel(window));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_text_input_enter(&fc, surface));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TEXT_INPUT,
+                                          ime_text_input_enable, 2, 32));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TEXT_INPUT,
+                                            ime_text_input_show_input_panel) == 0);
+
+    pt_check(fake_compositor_error(&fc) == NULL);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.ime");
@@ -565,6 +867,10 @@ int main(void) {
     test_text_area_hints(app);
     test_input_panel(app, window);
     test_custom_surface(app);
+
+    test_wire_ime_composition();
+    test_wire_input_panel();
+    test_wire_input_panel_v1();
 
     pt_window_free(window);
     pt_app_destroy(app);
