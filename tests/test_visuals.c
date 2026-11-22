@@ -859,6 +859,241 @@ static void test_snapshot_rtl_chrome(pt_app *app) {
     }
 }
 
+/* CSD titles carry a bidi paragraph: the window has no widget direction, so
+ * the title resolves its first strong character and falls back to the window's
+ * UI direction. A mixed title must match a manual bidi draw and differ from
+ * the legacy single-direction draw, which is what the old path used. */
+static pt_rect probe_csd_minimize_rect(const pt_window *window) {
+    bool rtl = pt_window_get_ui_direction(window) == pt_ui_direction_rtl;
+    float y = (window->header_height - 30.0f) * 0.5f;
+    if (y < 0.0f) {
+        y = 0.0f;
+    }
+    float close_x = rtl ? 8.0f : (float)window->width - 8.0f - 36.0f;
+    float maximize_x = close_x + (rtl ? 36.0f : -36.0f);
+    return (pt_rect){maximize_x + (rtl ? 36.0f : -36.0f), y, 36.0f, 30.0f};
+}
+
+static pt_bidi_base probe_title_base(const pt_window *window, const char *title,
+                                     size_t len) {
+    pt_bidi_base strong = pt_bidi_first_strong_direction(title, len);
+    if (strong != pt_bidi_base_auto) {
+        return strong;
+    }
+    return pt_window_get_ui_direction(window) == pt_ui_direction_rtl ? pt_bidi_base_rtl
+                                                                    : pt_bidi_base_ltr;
+}
+
+static uint64_t region_hash(const pt_canvas *canvas, int x0, int x1, int y0, int y1) {
+    uint64_t hash = 1469598103934665603ull;
+    for (int y = y0; y <= y1; ++y) {
+        for (int x = x0; x <= x1; ++x) {
+            hash ^= pt_canvas_get_pixel(canvas, x, y);
+            hash *= 1099511628211ull;
+        }
+    }
+    return hash;
+}
+
+static void test_csd_title_bidi(pt_app *app) {
+    const char *directory = snapshot_directory();
+    /* Hebrew first, so the paragraph base is RTL and the embedded Latin run
+     * moves to the visual left; the legacy single-direction painter keeps the
+     * Latin run on the right. */
+    const char *title = "\xD7\x90\xD7\x91\xD7\x92 abc";
+    pt_window *window = pt_window_create(app, title, 520, 260);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_window_set_ui_direction(window, pt_ui_direction_rtl);
+    pt_label_create(pt_window_root(window), "Decorated");
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 260, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    uint64_t rtl = 0;
+    snapshot_paint(window, canvas, directory, "rtl-csd-title", &rtl);
+    uint64_t repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-csd-title-repeat", &repeat);
+    pt_check(rtl == repeat);
+
+    /* Rebuild the title band the same way paint_csd does, once through the
+     * bidi painter and once through the legacy painter. */
+    float scale = window->render_scale > 0.0f ? window->render_scale : 1.0f;
+    const char *family = window->app && window->app->theme.font_family[0]
+                             ? window->app->theme.font_family
+                             : "sans-serif";
+    pt_font *font = pt_font_acquire(family, pt_font_weight_semibold,
+                                    pt_font_slant_upright, 13.0f * scale);
+    pt_check(font != NULL);
+    if (!font) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    pt_rect minimize = probe_csd_minimize_rect(window);
+    float left = minimize.x + minimize.w + 16.0f;
+    float title_width = pt_max_float(0.0f, (float)window->width - 8.0f - left);
+    if (title_width < 20.0f) {
+        title_width = (float)window->width - 16.0f;
+        left = 8.0f;
+    }
+    float line_height = font->line_height / scale;
+    float baseline = (window->header_height - line_height) * 0.5f +
+                     font->ascent / scale;
+    pt_color titlebar = pt_app_get_theme_color(app, pt_theme_titlebar);
+    pt_color text = pt_app_get_theme_color(app, pt_theme_text);
+    if (!window->keyboard_focused) {
+        text = pt_color_alpha(text, 190);
+    }
+    pt_canvas *bidi_ref = pt_canvas_create(520, 260, 1.0f);
+    pt_canvas *legacy_ref = pt_canvas_create(520, 260, 1.0f);
+    pt_check(bidi_ref && legacy_ref);
+    uint64_t painted_hash = 0;
+    if (bidi_ref && legacy_ref) {
+        pt_canvas_fill_rect(bidi_ref, 0.0f, 0.0f, 520.0f, window->header_height,
+                            titlebar);
+        pt_canvas_fill_rect(legacy_ref, 0.0f, 0.0f, 520.0f, window->header_height,
+                            titlebar);
+        pt_canvas_push_clip(bidi_ref, 8.0f, 0.0f, title_width,
+                            window->header_height - 1.0f);
+        pt_canvas_draw_text_line_bidi(bidi_ref, font, window->title,
+                                      strlen(window->title), left, baseline,
+                                      title_width, pt_text_align_center, text, true,
+                                      probe_title_base(window, window->title,
+                                                       strlen(window->title)));
+        pt_canvas_pop_clip(bidi_ref);
+        pt_canvas_push_clip(legacy_ref, 8.0f, 0.0f, title_width,
+                            window->header_height - 1.0f);
+        pt_canvas_draw_text_line(legacy_ref, font, window->title,
+                                 strlen(window->title), left, baseline, title_width,
+                                 pt_text_align_center, text, true);
+        pt_canvas_pop_clip(legacy_ref);
+
+        int band0 = (int)left;
+        int band1 = (int)pt_min_float((float)window->width, 8.0f + title_width) - 1;
+        pt_check(band1 >= band0);
+        int band_y1 = (int)window->header_height - 2;
+        painted_hash = region_hash(canvas, band0, band1, 0, band_y1);
+        pt_check(painted_hash == region_hash(bidi_ref, band0, band1, 0, band_y1));
+        pt_check(painted_hash != region_hash(legacy_ref, band0, band1, 0, band_y1));
+        pt_canvas_destroy(bidi_ref);
+        pt_canvas_destroy(legacy_ref);
+    }
+
+    /* A pure Hebrew title resolves an RTL base and still matches the bidi
+     * painter; its golden repeats identically. */
+    pt_window *hebrew = pt_window_create(app, "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D "
+                                               "\xD7\xA2\xD7\x95\xD7\x9C\xD7\x9D",
+                                         480, 240);
+    pt_check(hebrew != NULL);
+    if (hebrew) {
+        pt_window_set_ui_direction(hebrew, pt_ui_direction_rtl);
+        pt_label_create(pt_window_root(hebrew), "Decorated");
+        pt_window_show(hebrew);
+        pt_canvas *he_canvas = pt_canvas_create(480, 240, 1.0f);
+        pt_check(he_canvas != NULL);
+        if (he_canvas) {
+            uint64_t he_hash = 0;
+            snapshot_paint(hebrew, he_canvas, directory, "rtl-csd-title-hebrew",
+                           &he_hash);
+            uint64_t he_repeat = 0;
+            snapshot_paint(hebrew, he_canvas, directory,
+                           "rtl-csd-title-hebrew-repeat", &he_repeat);
+            pt_check(he_hash == he_repeat);
+            pt_check(he_hash != 0);
+            pt_canvas_destroy(he_canvas);
+        }
+        pt_window_free(hebrew);
+    }
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* The combo box chevron mirrors to the leading (left) edge in RTL together
+ * with its reserve; the value keeps the trailing padding. The field is empty
+ * so the only chrome in the side strips is the chevron. */
+static void test_combobox_rtl_chevron(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "combo-rtl", 420, 200);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *combobox = pt_combobox_create(root);
+    pt_check(combobox != NULL);
+    pt_widget_set_size(combobox, 220.0f, 34.0f);
+    pt_widget_set_align_self(combobox, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(420, 200, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    uint64_t rtl = 0;
+    snapshot_paint(window, canvas, directory, "rtl-combobox-chevron", &rtl);
+    uint64_t repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-combobox-chevron-repeat", &repeat);
+    pt_check(rtl == repeat);
+
+    pt_color background = pt_app_get_theme_color(app, pt_theme_control);
+    int mid = (int)(combobox->y + combobox->height * 0.5f);
+    int reserve = (int)pt_combobox_chevron_reserve;
+    int left0 = (int)(combobox->x + combobox->padding_left);
+    int right1 = (int)(combobox->x + combobox->width - combobox->padding_right);
+    int left_ink = 0;
+    int right_ink = 0;
+    for (int y = mid - 8; y <= mid + 8; ++y) {
+        for (int x = left0; x < left0 + reserve; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++left_ink;
+            }
+        }
+        for (int x = right1 - reserve; x < right1; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++right_ink;
+            }
+        }
+    }
+    pt_check(left_ink > 0);
+    pt_check(right_ink == 0);
+
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    pt_check(pt_window_paint(window, canvas));
+    background = pt_app_get_theme_color(app, pt_theme_control);
+    left0 = (int)(combobox->x + combobox->padding_left);
+    right1 = (int)(combobox->x + combobox->width - combobox->padding_right);
+    left_ink = 0;
+    right_ink = 0;
+    for (int y = mid - 8; y <= mid + 8; ++y) {
+        for (int x = left0; x < left0 + reserve; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++left_ink;
+            }
+        }
+        for (int x = right1 - reserve; x < right1; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++right_ink;
+            }
+        }
+    }
+    pt_check(left_ink == 0);
+    pt_check(right_ink > 0);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -875,6 +1110,8 @@ int main(void) {
     test_snapshot_rtl_wrapped(app);
     test_snapshot_rtl_editing(app);
     test_snapshot_rtl_chrome(app);
+    test_csd_title_bidi(app);
+    test_combobox_rtl_chevron(app);
     pt_app_destroy(app);
     return pt_test_finish("visuals");
 }

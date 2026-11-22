@@ -853,6 +853,18 @@ static bool window_rtl(const pt_window *window) {
     return window && pt_window_get_ui_direction(window) == pt_ui_direction_rtl;
 }
 
+/* The window has no widget-level text direction: the title follows its first
+ * strong character, and neutral-only titles fall back to the window's UI
+ * direction. This mirrors pt_widget_text_base for an auto-direction widget. */
+static pt_bidi_base window_title_base(const pt_window *window, const char *title,
+                                      size_t len) {
+    pt_bidi_base strong = pt_bidi_first_strong_direction(title, len);
+    if (strong != pt_bidi_base_auto) {
+        return strong;
+    }
+    return window_rtl(window) ? pt_bidi_base_rtl : pt_bidi_base_ltr;
+}
+
 /* Title-bar buttons run close, maximize, minimize from the trailing edge. In
  * RTL the trailing edge is the left one, so the same logical order starts from
  * the left: close sits nearest the top-left corner. */
@@ -1092,8 +1104,10 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
                 color = pt_color_alpha(color, 190);
             }
             pt_canvas_push_clip(canvas, 8.0f, 0.0f, title_width, window->header_height - 1.0f);
-            pt_canvas_draw_text_line(canvas, font, title, strlen(title), left, baseline,
-                                     title_width, pt_text_align_center, color, true);
+            pt_canvas_draw_text_line_bidi(canvas, font, title, strlen(title), left,
+                                          baseline, title_width, pt_text_align_center,
+                                          color, true,
+                                          window_title_base(window, title, strlen(title)));
             pt_canvas_pop_clip(canvas);
         }
     }

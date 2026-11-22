@@ -903,6 +903,14 @@ static void paint_combobox(pt_canvas *canvas, pt_widget *combobox) {
     paint_outline(canvas, combobox, border, border_width);
 
     pt_rect area = text_area(combobox);
+    /* The chevron reserve mirrors with the chrome: trailing (right) in LTR,
+     * leading (left) in RTL. A filterable combo owns an embedded entry that
+     * paints itself and reserves its own slot in the layout pass, so only the
+     * self-painted value reserves a side here. */
+    bool rtl = paint_rtl(combobox);
+    if (rtl && !field) {
+        area.x += pt_combobox_chevron_reserve;
+    }
     area.w = pt_max_float(0.0f, area.w - pt_combobox_chevron_reserve);
 
     pt_color muted = color_from_theme(combobox, pt_theme_text_muted);
@@ -923,8 +931,10 @@ static void paint_combobox(pt_canvas *canvas, pt_widget *combobox) {
     pt_color chevron = combobox->enabled
                            ? (open ? color_from_theme(combobox, pt_theme_accent) : muted)
                            : pt_color_alpha(muted, 0x80u);
-    float center_x = combobox->x + combobox->width - combobox->padding_right -
-                     pt_combobox_chevron_reserve * 0.5f;
+    float center_x = rtl ? combobox->x + combobox->padding_left +
+                              pt_combobox_chevron_reserve * 0.5f
+                        : combobox->x + combobox->width - combobox->padding_right -
+                              pt_combobox_chevron_reserve * 0.5f;
     float center_y = combobox->y + combobox->height * 0.5f;
     pt_paint_icon_glyph(canvas, open ? pt_icon_chevron_up : pt_icon_chevron_down, center_x,
                         center_y, 11.0f, chevron);
