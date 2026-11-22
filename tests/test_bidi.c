@@ -340,6 +340,109 @@ static void test_font_pipeline(pt_font *font) {
                   pt_font_measure_bidi(font, cache_text, len, pt_bidi_base_ltr), 0.0f);
 }
 
+/* Rule L1: whitespace at a wrapped line end resets to the paragraph base even
+ * when the paragraph-level analysis resolved it to an embedded level. */
+static void test_line_l1_whitespace(void) {
+    /* LTR base, two Hebrew words separated by spaces. The whole paragraph
+     * resolves the spaces to level 1 (inside the RTL stretch); a line cut after
+     * the first word resets the trailing space to level 0. */
+    const char *text = "\xD7\x90\xD7\x91   \xD7\x92\xD7\x93";
+    pt_bidi_paragraph *paragraph = NULL;
+    pt_check(pt_bidi_paragraph_analyze(text, strlen(text), pt_bidi_base_ltr, &paragraph));
+    pt_check(paragraph != NULL);
+    pt_bidi_line whole = {0};
+    pt_check(pt_bidi_line_create(paragraph, 0, strlen(text), &whole));
+    pt_check(whole.base_level == 0);
+    pt_check(pt_bidi_line_level_at(&whole, 4) == 1);
+    pt_check(pt_bidi_line_level_at(&whole, 5) == 1);
+    pt_bidi_line_free(&whole);
+
+    pt_bidi_line cut = {0};
+    pt_check(pt_bidi_line_create(paragraph, 0, 5, &cut));
+    pt_check(cut.base_level == 0);
+    pt_check(pt_bidi_line_level_at(&cut, 3) == 1);
+    pt_check(pt_bidi_line_level_at(&cut, 4) == 0);
+    pt_bidi_line_free(&cut);
+    pt_bidi_paragraph_free(paragraph);
+}
+
+/* Logical <-> visual map: clusters, run-boundary affinity, removed controls. */
+static void test_visual_map(pt_font *font) {
+    const char *hebrew = "\xD7\x90\xD7\x91\xD7\x92";
+    size_t hebrew_len = strlen(hebrew);
+    pt_text_visual_map *map = NULL;
+    pt_check(pt_text_visual_map_build_bidi(font, hebrew, hebrew_len, pt_bidi_base_rtl, &map));
+    pt_check(map != NULL);
+    if (!map) {
+        return;
+    }
+    float width = pt_text_visual_map_width(map);
+    pt_check(width > 0.0f);
+    pt_check(map->count == 3);
+    pt_check(map->base_level == 1);
+    /* RTL logical start sits at the visual right edge and each cluster walks
+     * left; the map is descending in logical order. */
+    pt_check_near(pt_text_visual_map_x_for_position(map, 0, pt_text_bias_leading), width, 0.01f);
+    pt_check(pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading) < width);
+    pt_check(pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading) <
+             pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading));
+    pt_check_near(pt_text_visual_map_x_for_position(map, hebrew_len, pt_text_bias_trailing),
+                  0.0f, 0.01f);
+    /* Hit testing at the visual left edge returns the logical end. */
+    pt_check(pt_text_visual_map_position_for_x(map, 0.0f, pt_text_bias_leading) == hebrew_len);
+    pt_check(pt_text_visual_map_position_for_x(map, width, pt_text_bias_leading) == 0);
+    /* Cluster boundaries: the middle of a 2-byte Hebrew cluster is interior. */
+    pt_check(pt_text_visual_map_is_boundary(map, 0));
+    pt_check(!pt_text_visual_map_is_boundary(map, 1));
+    pt_check(pt_text_visual_map_is_boundary(map, 2));
+    pt_check(pt_text_visual_map_next_boundary(map, 0) == 2);
+    pt_check(pt_text_visual_map_prev_boundary(map, hebrew_len) == 4);
+    pt_text_visual_map_free(map);
+    map = NULL;
+
+    /* Run-boundary affinity under an LTR base: the logical position between the
+     * Latin run and the Hebrew run has two visual sides. */
+    const char *mixed = "abc \xD7\x90\xD7\x91";
+    size_t mixed_len = strlen(mixed);
+    pt_check(pt_text_visual_map_build_bidi(font, mixed, mixed_len, pt_bidi_base_auto, &map));
+    pt_check(map != NULL);
+    if (map) {
+        float leading = pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading);
+        float trailing = pt_text_visual_map_x_for_position(map, 4, pt_text_bias_trailing);
+        pt_check(leading > trailing + 0.5f);
+        /* The Hebrew cluster interior maps to one x side or the other, never
+         * past the line edges. */
+        float inside = pt_text_visual_map_x_for_position(map, 5, pt_text_bias_leading);
+        pt_check(inside >= -0.01f && inside <= pt_text_visual_map_width(map) + 0.01f);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
+    /* X9 controls keep their bytes but collapse to a zero-width cluster; they
+     * are not cluster boundaries and add no width. */
+    const char *controlled = "a\xE2\x80\xAA" "b";
+    size_t controlled_len = strlen(controlled);
+    pt_check(pt_text_visual_map_build_bidi(font, controlled, controlled_len, pt_bidi_base_ltr,
+                                            &map));
+    pt_check(map != NULL);
+    if (map) {
+        pt_check_near(pt_text_visual_map_width(map), pt_font_measure(font, "ab", 2), 0.01f);
+        pt_check(pt_text_visual_map_is_boundary(map, 1));
+        pt_check(!pt_text_visual_map_is_boundary(map, 2));
+        pt_check(!pt_text_visual_map_is_boundary(map, 3));
+        pt_check(pt_text_visual_map_is_boundary(map, 4));
+        pt_check_near(pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading),
+                      pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading), 0.01f);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
+    /* Empty input builds an empty map rather than failing. */
+    pt_check(pt_text_visual_map_build_bidi(font, "", 0, pt_bidi_base_auto, &map));
+    pt_check(map != NULL && map->count == 0 && pt_text_visual_map_width(map) == 0.0f);
+    pt_text_visual_map_free(map);
+}
+
 static uint64_t draw_one(pt_canvas *canvas, pt_font *font, const char *text, pt_bidi_base base,
                          float x) {
     pt_canvas_clear(canvas, 0x000000FFu);
@@ -401,6 +504,7 @@ int main(void) {
     test_paragraph_basics();
     test_byte_maps();
     test_controls_and_combining();
+    test_line_l1_whitespace();
 
     pt_font *font = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
                                     pt_font_slant_upright, 24.0f);
@@ -409,6 +513,7 @@ int main(void) {
     } else {
         test_font_pipeline(font);
         test_rendering(font);
+        test_visual_map(font);
     }
 
     /* Neutral fallback keeps the API surface honest even without the font. */
