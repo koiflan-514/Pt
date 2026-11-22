@@ -1158,18 +1158,19 @@ archive.
 
 ## 1.4.0 validation record (2026-11-22)
 
-Environment: the integration tree `b947a6e` (wave 1 plus the wave-2
-multi-touch fix) with the version bump, generated reference and bilingual
-guides on the `m21/docs-final` documentation branch. The measured figures below
-that are marked **pending final gate run** have not been re-run on the final
-documentation tree; the two suite counts quoted as measured are from this
-worktree.
+Environment: the final gate tree `e1104c2` on `m21/integration` on the
+reference machine (CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1,
+Python 3.14.10 and OpenJDK 25.0.2. The four wave-1 workstreams and the wave-2
+multi-touch fix are integrated at `b947a6e`; the version bump, generated
+reference and bilingual guides merged from `m21/docs-final` (`1460643`) and the
+SVGZ example refresh from `m21/examples` (`043c0d8`) form the gate tree.
 
-This is a **draft record**, not the final gate record. The release is complete
-in scope and code, but `make check`, `make check-bindings`, `make perf-check`,
-the live suites, `tools/ci.sh`, `tools/release-check.sh --full` and the ABI
-comparison against 1.3.0 still have to be run on the frozen tree and their
-figures filled in before the tag.
+This is the **final gate record**. Every figure below was measured on
+`e1104c2`, including `make check`, `make check-bindings`, `make perf-check`,
+the live suites, `tools/ci.sh` (sanitizer, staged install, reproducible tarball
+and tarball rebuild), the symbol-level ABI comparison against 1.3.0 and
+`tools/release-check.sh --full`. The only step left before the tag is the
+owner's freeze confirmation.
 
 ### Scope
 
@@ -1233,22 +1234,68 @@ section an upgrading application must read:
 - **No other public behaviour changed.** The wire matrix and `wait_object` are
   test-only, and the live IME harness is an external tool.
 
-### Results (pending final gate run)
+### Results
 
 | Check | Result |
 | --- | --- |
-| Version agreement | pass on this branch: `include/pt/base.h`, `Makefile` `VERSION`, the README status line and the generated reference all say 1.4.0; SONAME `libpt.so.1` |
+| Version agreement | pass: `include/pt/base.h`, `Makefile` `VERSION`, the README status line and the generated reference all say 1.4.0; SONAME `libpt.so.1` |
 | API baseline | pass: `api/pt.api` unchanged at 556 functions / 910 entries; the reference names all 556 baseline functions |
 | Since audit | pass: 556/556 declarations carry Since 1.0/1.1/1.2/1.3 (412/36/106/2), zero missing |
-| C suites (headless) | **pending final gate run**; `test_icon` 800 (up from 330), `test_wire_input` 595, `test_damage` 98 measured on this tree |
+| C suites (headless) | pass: 37 executables (36 suites plus the property sweep), 8,991 checks plus the 454,380-check property suite; `test_icon` 800 (up from 330), `test_wire_input` 595, `test_damage` 98, `test_fake_compositor` 275, `test_ime` 314, `test_popup` 466, `test_abi` 13; the AT-SPI bridge reports 236 |
 | Bilingual documentation | pass: 9 public guides, no structural drift; code blocks byte-identical |
-| Binding parity | **pending final gate run**; expected 556/556 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted, unchanged because no function was added |
-| `make check` / `make check-bindings` | **pending final gate run** |
-| `make perf-check` | **pending final gate run** |
-| Live Wayland / live typing / live IME | **pending final gate run**; `make check-ime-live` is expected to pass under niri+fcitx5 and to skip with rc 0 elsewhere |
-| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | **pending final gate run** |
-| ABI diff against 1.3.0 | **pending final gate run**; expected 556 → 556 exported `pt_*` symbols, 0 added, 0 removed, no type changes, SONAME `libpt.so.1` unchanged |
-| `tools/release-check.sh --full` | **pending final gate run** |
+| Binding parity | pass: 556/556 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted, unchanged because no function was added |
+| `make check` / `make check-bindings` | pass: 36 C suites at 8,991 checks plus the property sweep; C++ 844 checks, Python 67 tests, Java 685 checks, 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
+| `make perf-check` | pass: every ceiling holds; dense full paint 5.435 ms, dense layout 3.004 ms, 4K full paint 7.585 ms, first frame 14.34 ms, idle 300 ms CPU 0.537 ms (startup bench: idle 500 ms CPU 0.883 ms) |
+| Live Wayland / live typing / live IME | pass under niri: `make check-wayland` 48 checks (focused-entry idle 30.6 ms over 5000 ms after one external-input retry); `make check-typing` PASS (ptdirect, text-input-v3); `make check-ime-live` PASS — preedit `n` → `ni` → `ni h` → `ni ha` → `ni hao` and the space commits `你好` into Pt (`PREEDIT_COUNT=5`, `LAST_PREEDIT=ni hao`) |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pass: `tools/ci.sh` exited 0 (`CI verification passed for Pt 1.4.0`); ASan+UBSan clean rebuild of all 37 C test binaries plus `test_cpp`, the Python suite (67 tests) and the Java suite (685 checks), 0 failures; staged install reports SONAME `libpt.so.1`, pkg-config 1.4.0, an exported ABI matching the baseline, C/C++/Python/Java consumers and `uninstall`; two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduced one digest (sidecar matches), and the extracted tree rebuilt with `werror=1` and passed `make check` |
+| ABI diff against 1.3.0 | pass at the symbol level: 556 → 556 exported `pt_*` symbols, 0 added, 0 removed, no type changes, SONAME `libpt.so.1` unchanged; `abidiff` is still unavailable on the reference machine |
+| `tools/release-check.sh --full` | pass: every automated gate is green; only the two human items remain open (freeze commit/tag and live-suite sign-off, both recorded above) |
+
+### ABI statement
+
+The 1.4.0 C surface is unchanged: no function, enum constant, struct, callback
+typedef or opaque handle was added, removed or modified, so the ABI delta is
+empty by construction. `abidiff` (libabigail) is still not installed on the
+reference machine (no package, and `sudo` requires a password), so the
+release-time comparison was run at the symbol level: a fresh `make lib` build
+of the `1.3.0` tag (`58a561c`, checked out in a temporary worktree) and the gate
+build of `e1104c2` were compared with `nm -D --defined-only`. Both export 556
+`pt_*` symbols and the sorted symbol-and-type diff is empty: **0 removed, 0
+added, no type changes**. `readelf -d` reports `libpt.so.1` on both. The
+multi-touch fix changes an internal helper's return type
+(`pt_window_input_touch_up`, `void` → `uint32_t`) in `src/internal.h`; it is not
+an exported symbol. SVGZ and the wire matrix add no public API. A type-level
+`abidiff` run is still recommended on a machine that has libabigail before
+publishing.
+
+### Gate transcripts
+
+`tools/ci.sh` on `e1104c2` exited 0 (`CI verification passed for Pt 1.4.0`):
+
+- werror build, `make check` and `make perf-check` in `build/ci/normal`; the
+  staged install exercised the C, C++, Python and Java consumers, the
+  pkg-config file (1.4.0), the SONAME (`libpt.so.1`) and the baseline, then
+  `uninstall` removed the installed paths (`install check passed`).
+- Sanitizer pass in a separate `build/ci/sanitize` tree. The script begins with
+  `rm -rf build/ci`, so the ASan+UBSan objects are compiled from empty; the log
+  shows the fresh `-fsanitize=address,undefined -fno-omit-frame-pointer`
+  compiles, all 37 sanitized C test binaries pass, and `test_cpp` (844 checks),
+  the Python suite (67 tests) and the Java suite (685 checks) run against the
+  sanitized library with zero sanitizer reports. `ldd` on
+  `build/ci/sanitize/tests/test_core`,
+  `build/ci/sanitize/libpt.so.1.4.0` and
+  `build/ci/sanitize/tests/libwire_driver.so` lists `libasan.so.8` and
+  `libubsan.so.1`. No gate-script gap was found in this pass; the
+  `wire-driver` link that the Java suite needs was already in place.
+- Reproducible tarball: two `dist` runs produce
+  `d785816c0541b645ffc428f8d4c13eee8585ccf01f821af7ea0b3e108f7aeada` (the
+  sidecar matches); the extracted archive builds with `werror=1` and passes
+  `make check`.
+- Live suites (because `WAYLAND_DISPLAY` was set): `check-wayland` 48 checks
+  under niri with focused-entry idle 30.6 ms over 5000 ms after one
+  external-input retry; `check-typing` PASS (ptdirect, text-input-v3);
+  `check-ime-live` PASS under the parent niri and fcitx5, with
+  `PREEDIT_COUNT=5` and `COMMIT=你好`.
 
 ### Known issues
 
@@ -1271,15 +1318,28 @@ section an upgrading application must read:
   separator, hex colour). Localized month and group separators remain the
   application's responsibility.
 
-### Final gate placeholders
+### Committed-tree digest
 
-The following lines are intentionally left for the frozen-tree run so the
-record does not imply a gate that has not happened: `make check` and
-`make check-bindings` totals, `make perf-check` numbers, the live Wayland,
-typing and IME results, the sanitizer/staged-install/tarball transcript, the
-`tools/ci.sh` exit status and tarball digest, the symbol-level ABI comparison
-against 1.3.0, and the `tools/release-check.sh --full` report. The annotated tag
-is created from the final gate tree once the owner confirms the freeze.
+The gate-time digest above was measured on `e1104c2` with this record still in
+its draft (pending) form, before the figures were backfilled; editing this file
+necessarily changes the archive. `tools/ci.sh` proves the archive is
+reproducible by building `dist` twice and comparing the two digests, so the
+tagged tree reproduces its own digest exactly — re-measure there rather than
+trusting a digest quoted from inside the archive.
+
+All sha256 digests in this record were measured with
+`SOURCE_DATE_EPOCH=1767225600`, the reproducible-build epoch that
+`tools/ci.sh` fixes. A bare `make dist` derives its epoch from the last commit
+time instead, and that epoch lands in the mtime field of every tar header, so
+the same tree digests differently. Extracting both archives gives
+byte-identical trees; only the timestamp header differs. To reproduce a digest
+quoted here, run `SOURCE_DATE_EPOCH=1767225600 make dist`, not a bare
+`make dist`.
+
+The annotated tag is created from the final gate tree once the owner confirms
+the freeze. `tools/release-check.sh --full` reports every automated gate green;
+the two open items it always reports are the human ones (freeze commit/tag and
+live-suite sign-off), and the live suites above were run on this tree.
 
 ## 1.3.0 validation record (2026-11-22)
 
