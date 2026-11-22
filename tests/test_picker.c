@@ -1471,10 +1471,16 @@ static void test_picker_rtl(pt_app *app) {
     if (state && state->content) {
         pt_widget *previous = find_named(state->content, "Previous month");
         pt_widget *next = find_named(state->content, "Next month");
-        pt_check(previous && next);
+        pt_widget *today = find_named(state->content, "Today");
+        pt_check(previous && next && today);
         if (previous && next) {
             /* The header row mirrors: the first child sits on the right. */
             pt_check(bounds_of(previous).x > bounds_of(next).x);
+            /* Today trails the whole cluster on the leading (left) edge. */
+            if (today) {
+                pt_check(bounds_of(today).x + bounds_of(today).w <=
+                         bounds_of(previous).x);
+            }
             pt_check(previous->icon == pt_icon_chevron_right);
             pt_check(next->icon == pt_icon_chevron_left);
             pt_rect previous_bounds = bounds_of(previous);
