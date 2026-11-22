@@ -6,16 +6,19 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **1.4.0**. The input-wire-matrix and format-polish release: SVGZ icon
-sources through the existing loaders, headless wire coverage for touch, tablet
-and drag-and-drop input, a multi-touch focus correction, and a live
-niri+fcitx5 IME composition harness. It adds no public function, enum or
-struct, so the surface stays a 556-function C ABI wrapped in C++/Python/Java
-with binding parity enforced. The release record is written and the annotated
-tag is created after the final gate run; see
-[docs/release.md](docs/release.md). The API is tracked by a reviewed baseline, a
-generated function reference and a compatibility policy; see
-[docs/api-reference.md](docs/api-reference.md),
+Status: **2.0.0**. The right-to-left and bidirectional-text release: the full
+Unicode Bidirectional Algorithm through a vendored SheenBidi engine with 100%
+conformance, eight additive direction functions, visual caret movement and
+selection, mirrored UI geometry and chrome, an accessibility direction
+attribute, and a byte-for-byte LTR compatibility gate.
+The surface is a 564-function C ABI wrapped in C++/Python/Java with
+binding parity enforced;
+SONAME stays `libpt.so.1` because 2.0 adds declarations and corrects bidi
+rendering without breaking the binary interface (`ABI_MAJOR` is tracked
+separately from `VERSION`). The release record is written and the final gate
+run and annotated tag follow it; see [docs/release.md](docs/release.md). The API
+is tracked by a reviewed baseline, a generated function reference and a
+compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 [docs/api-policy.md](docs/api-policy.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why Pt
@@ -25,6 +28,10 @@ generated function reference and a compatibility policy; see
   baggage.
 - A retained-mode widget tree and a flat, opaque C ABI that is pleasant to bind.
 - Crisp FreeType + HarfBuzz text, including CJK shaping and fractional scaling.
+- Right-to-left text done properly: the full Unicode Bidirectional Algorithm,
+  Arabic and Hebrew shaping with automatic bracket mirroring, mirrored rows,
+  columns-kept-logical tables, visual caret movement, and an accessible
+  direction attribute — with unchanged pixels for pure LTR interfaces.
 - A modern, tokenized design language: 38 semantic color roles and 10 geometric
   metrics, deep dark and clean light palettes, tonal control surfaces, soft
   accents, focus-visible rings and restrained motion, overridable per window.
@@ -59,6 +66,77 @@ generated function reference and a compatibility policy; see
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 2.0.0
+
+2.0.0 is the first structural release since 1.0 and the bidi/right-to-left
+milestone. It adds **8 public functions and 2 enums (6 values)** with
+zero-value defaults that preserve LTR behavior: the surface is **564 functions
+and 924 baseline entries**, 0 removed and 0 changed. The SONAME stays
+`libpt.so.1`: the release marks a rendering correction and an additive API, not
+a binary break, so the Makefile tracks `ABI_MAJOR` separately from `VERSION`.
+The annotated tag follows the final gate run recorded in
+[release.md](docs/release.md).
+
+- **A real bidi engine.** 2.0 vendors SheenBidi v3.0.0 (Apache-2.0) as one
+  unity-compiled object and drives it through a UTF-32 adapter that keeps a
+  byte-offset table beside the code points. The adapter exists because the
+  upstream UTF-8 entry point has an L1 line-end whitespace defect; the internal
+  path avoids it without patching the engine. The Unicode Bidirectional
+  Algorithm is now complete: explicit embeddings and overrides, isolates, weak
+  and neutral resolution, paired brackets, implicit levels and the line-level
+  rules after wrapping.
+- **100% conformance, in `make check`.** The vendored Unicode 18.0.0
+  `BidiTest.txt` and `BidiCharacterTest.txt` data (Unicode License v3, gzipped
+  for size) runs **770,241 + 91,707 cases with 0 failures** in about 0.5 s.
+  `THIRD_PARTY.md` records the engine tag, digest, license and upgrade policy.
+- **Direction API without a new editing model.** `pt_ui_direction`
+  (`inherit`/`ltr`/`rtl`) and `pt_text_direction` (`auto`/`ltr`/`rtl`) plus
+  app, window and widget UI setters/getters and widget text setters/getters
+  make eight functions. Resolution is widget → nearest explicit ancestor →
+  window → app → LTR; auto follows UBA P2/P3 per paragraph and falls back to
+  the resolved UI direction for neutral-only text. Getters return the explicit
+  value, and `inherit`/`auto` are zero, so zero-initialized widgets behave as
+  in 1.x.
+- **Visual editing by default.** Left/Right move to the visually adjacent
+  cluster boundary (which can raise or lower the logical offset inside an RTL
+  run), Home/End go to the visual line ends, Ctrl+Home/End stay document
+  logical, Shift keeps a logical anchor, and Backspace/Delete stay logical.
+  Soft-wrap boundaries carry caret affinity, selections paint one rectangle per
+  visual run, IME rectangles are visual, and password bullets derive their
+  direction from the stored text. Applications that want logical movement
+  intercept keys in the existing window key callback; there is no ninth API.
+- **Mirrored UI geometry and chrome.** Flex, wrap, grid and scroll geometry
+  mirror; tabs, sidebars, picker popups, client-side decoration, overlays and
+  menus place their chrome from the resolved UI direction. Scrollbars move to
+  the RTL left and tree chevrons to the right. Table and tree **columns keep
+  logical order** through an internal opt-out, an RTL entry is right-anchored
+  (at `scroll_x = 0` it shows the logical start at the visual right), and
+  padding/margin stay physical with no start/end API.
+- **Accessibility direction.** Every accessible object publishes its resolved
+  UI direction as a `direction` attribute, and text objects publish the
+  paragraph direction through `Text.GetAttributes` and
+  `Text.GetDefaultAttributes` with a scalar range. The C-level
+  `pt_widget_get_a11y_text` keeps **byte** offsets while the D-Bus `Text`
+  interface uses **scalar** offsets; passwords report direction but no
+  characters. The older wording that called every accessibility getter scalar
+  was corrected.
+- **LTR is protected by two hard gates.** The 17 pure-LTR PNG snapshots in
+  `test_visuals` are byte-identical to 1.4, and `tools/ltr-compat.sh` builds
+  1.4.0 and the 2.0 tree on one machine and reports **10/10 `SAME`** across ten
+  LTR scenes. No golden hash is checked in because font rasterization differs
+  between machines; building both revisions together holds it constant.
+- **Honest performance wording.** The LTR fast path classifies text from the
+  engine's Unicode bidi types (any R/AL character or bidi format control needs
+  UBA) and keeps the legacy single-run path; a 292,531-assigned-code-point
+  sweep found 0 mismatches. Bidi analysis is O(n) per rebuild, allocations are
+  bounded by line length, and the shape cache is keyed by direction. The old
+  "no per-frame allocation" promise is withdrawn because 1.4 already rebuilt
+  line layout on every paint; the contract is now **bounded per rebuild**.
+- **Examples in all four languages.** `examples/c/rtl_gallery.c` shows a mixed
+  Arabic/Hebrew/Latin label, an RTL entry and text area, a mirrored container,
+  a nested LTR panel and a direction switch; C++, Python and Java each carry a
+  smaller direction switch that exercises the wrappers.
 
 ## What is new in 1.4.0
 
@@ -585,7 +663,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` runs headless and needs no compositor. It includes the C test
 suites, the C++/Python/Java binding suites, the exported-symbol and API
-baseline audit, the hard 556/556 binding-parity gate, the per-round 0.6–0.10
+baseline audit, the hard 564/564 binding-parity gate, the per-round 0.6–0.10
 surface audits, a check that `docs/api-reference.md` matches the headers, and
 the randomized property suite for text editing, URI parsing, data-view indices
 and damage rectangles.
@@ -617,16 +695,20 @@ only a person can close.
 | C | [accessibility.c](examples/c/accessibility.c) | `make run-a11y` |
 | C | [notes.c](examples/c/notes.c) | `make run-notes` |
 | C | [combobox.c](examples/c/combobox.c) | `make run-combobox` |
+| C | [rtl_gallery.c](examples/c/rtl_gallery.c) | `make run-rtl-gallery` |
 | C++23 | [counter.cpp](examples/cpp/counter.cpp) | `make run-counter` |
 | C++23 | [workspace.cpp](examples/cpp/workspace.cpp) | `make run-cpp-workspace` |
 | C++23 | [combobox.cpp](examples/cpp/combobox.cpp) | `make run-cpp-combobox` |
+| C++23 | [rtl_direction.cpp](examples/cpp/rtl_direction.cpp) | `make run-cpp-rtl-direction` |
 | Python | [counter.py](examples/python/counter.py) | `make run-python` |
 | Python | [notes.py](examples/python/notes.py) | `python examples/python/notes.py` |
 | Python | [workspace.py](examples/python/workspace.py) | `make run-python-workspace` |
 | Python | [combobox.py](examples/python/combobox.py) | `make run-python-combobox` |
+| Python | [rtl_direction.py](examples/python/rtl_direction.py) | `make run-python-rtl-direction` |
 | Java 25 | [HelloPt.java](examples/java/HelloPt.java) | `make run-java` |
 | Java 25 | [Workspace.java](examples/java/Workspace.java) | `make run-java-workspace` |
 | Java 25 | [Combobox.java](examples/java/Combobox.java) | `make run-java-combobox` |
+| Java 25 | [RtlDirection.java](examples/java/RtlDirection.java) | `make run-java-rtl-direction` |
 
 The C and C++ examples are built by `make`; the Python and Java run targets
 build or locate the library automatically. All examples run both natively and
@@ -759,7 +841,7 @@ continuously, which 0.10.0 fixed. Details, methodology and memory caveats are in
 - [Architecture](docs/architecture.md)
 - [Theming](docs/theming.md)
 - [Accessibility](docs/accessibility.md)
-- [Right-to-left text plan](docs/rtl.md)
+- [Right-to-left and bidirectional text](docs/rtl.md)
 - [Migrating to 1.0](docs/migration-1.0.md)
 - [API compatibility policy](docs/api-policy.md)
 - [Performance](docs/performance.md)
@@ -769,13 +851,13 @@ continuously, which 0.10.0 fixed. Details, methodology and memory caveats are in
 - [Engineering standards](docs/standards.md)
 - [Compositor and protocol matrix](docs/compositor-matrix.md)
 
-The quickstart, architecture, bindings, theming, accessibility, RTL plan,
+The quickstart, architecture, bindings, theming, accessibility, RTL/bidi,
 migration and comparison guides also have
 [Simplified Chinese translations](README.zh-CN.md); the generated API reference,
 release records, roadmap, performance notes and policy pages remain
 English-only.
 
-## Limitations in 1.4
+## Limitations in 2.0
 
 - Wayland only; there is no X11, Windows or macOS backend.
 - The 1.x ABI is append-only: removals require a major release and a SONAME
@@ -824,11 +906,25 @@ English-only.
   tracked but do not change the gesture metrics. Stylus support depends on
   `tablet-v2` from the compositor.
 - Styled runs cover weight, slant, color, underline, per-run font family and
-  per-run size over byte ranges of labels and text areas. There is no bidi
-  paragraph layout, no inline images and no per-run stretch or optical
-  alignment, and the text area still edits plain text with uniform paragraph
-  geometry. The post-1.0 design, compatibility rules and test obligations are
-  written down in the [RTL plan](docs/rtl.md).
+  per-run size over byte ranges of labels and text areas. There are no inline
+  images, no per-run stretch or optical alignment, and no per-run bidi
+  direction: `pt_text_span` stays frozen as styling only. Paragraph direction
+  comes from the widget or window, and an opposite-direction phrase inside a
+  paragraph uses Unicode isolate controls. The text area edits plain text with
+  one logical range while wrapped lines may have different paragraph bases.
+- Bidi and RTL have documented limits rather than hidden fallbacks. A table
+  needs its scrollbar or keyboard for horizontal scrolling because the tested
+  Wayland compositors expose no horizontal wheel axis. Shift+arrow across a
+  soft wrap in RTL stays an in-line visual move, and a multi-line mapped
+  selection collapses toward the logical edge at the mapped boundary while the
+  painted rectangles stay correct. `pt_text_span` has no direction field.
+  Missing Arabic/Hebrew glyphs are documented tofu with
+  `pt_app_font_uncovered_count`, not a hard error; install a covering font such
+  as Noto Sans Arabic/Hebrew or DejaVu Sans. Bidi control characters can
+  reorder displayed text (the Trojan-Source class of problem) and are not
+  sanitized automatically; an application that accepts untrusted text should
+  strip or display them. Details are in the
+  [RTL and bidi guide](docs/rtl.md).
 - Table columns keep application-set widths that survive rebinds and row
   recycling, can be hidden, are resizable by dragging and can be reordered by
   the user. Sorting reports up to four priority-ordered columns, and cell
