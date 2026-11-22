@@ -79,6 +79,17 @@ Pt uses semantic versioning with a pre-1.0 caveat.
   Applications compiled against an older header continue to work because
   handles are opaque and structs are only used for input events.
 
+The release major and the ABI major are tracked separately. The Makefile
+records `ABI_MAJOR` and derives the SONAME as `libpt.so.$(ABI_MAJOR)`.
+`VERSION` may advance to a new major while `ABI_MAJOR` stays put when the
+release only marks a behavior-contract correction and adds declarations
+without removing or changing an existing one; 2.0.0 is such a release, where
+bidi rendering changes pixels but the 2.0 direction API is purely additive.
+`ABI_MAJOR` and the SONAME bump only when a removal or a declaration change
+requires it, and `tools/release-check.sh` compares the SONAME against
+`ABI_MAJOR` rather than against the release major so a behavior-only major
+release cannot be misreported.
+
 ## Deprecation policy
 
 1. A deprecated declaration stays in the headers and remains functional for at

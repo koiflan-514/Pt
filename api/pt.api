@@ -237,6 +237,9 @@ enum pt_stylus_tool_unknown = 5
 enum pt_text_align_center = 1
 enum pt_text_align_end = 2
 enum pt_text_align_start = 0
+enum pt_text_direction_auto = 0
+enum pt_text_direction_ltr = 1
+enum pt_text_direction_rtl = 2
 enum pt_text_span_has_color = 8
 enum pt_text_span_has_family = 16
 enum pt_text_span_has_size = 32
@@ -297,6 +300,9 @@ enum pt_toast_error = 3
 enum pt_toast_info = 0
 enum pt_toast_success = 1
 enum pt_toast_warning = 2
+enum pt_ui_direction_inherit = 0
+enum pt_ui_direction_ltr = 1
+enum pt_ui_direction_rtl = 2
 enum pt_widget_box = 0
 enum pt_widget_button = 2
 enum pt_widget_card = 8
@@ -348,6 +354,7 @@ func pt_app_get_font_fallback_for_family constchar*pt_app_get_font_fallback_for_
 func pt_app_get_reduced_motion boolpt_app_get_reduced_motion(constpt_app*app)
 func pt_app_get_theme_color pt_colorpt_app_get_theme_color(constpt_app*app,pt_theme_tokentoken)
 func pt_app_get_theme_metric floatpt_app_get_theme_metric(constpt_app*app,pt_theme_metricmetric)
+func pt_app_get_ui_direction pt_ui_directionpt_app_get_ui_direction(constpt_app*app)
 func pt_app_is_running boolpt_app_is_running(constpt_app*app)
 func pt_app_quit voidpt_app_quit(pt_app*app)
 func pt_app_run intpt_app_run(pt_app*app)
@@ -362,6 +369,7 @@ func pt_app_set_quit_on_last_window_close voidpt_app_set_quit_on_last_window_clo
 func pt_app_set_reduced_motion voidpt_app_set_reduced_motion(pt_app*app,boolreduced)
 func pt_app_set_theme_color voidpt_app_set_theme_color(pt_app*app,pt_theme_tokentoken,pt_colorcolor)
 func pt_app_set_theme_metric voidpt_app_set_theme_metric(pt_app*app,pt_theme_metricmetric,floatvalue)
+func pt_app_set_ui_direction voidpt_app_set_ui_direction(pt_app*app,pt_ui_directiondirection)
 func pt_app_unwatch_fd voidpt_app_unwatch_fd(pt_app*app,uint64_twatch_id)
 func pt_app_watch_fd uint64_tpt_app_watch_fd(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
 func pt_app_watch_fd_owned uint64_tpt_app_watch_fd_owned(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
@@ -775,8 +783,10 @@ func pt_widget_get_input_purpose pt_input_purposept_widget_get_input_purpose(con
 func pt_widget_get_invalid boolpt_widget_get_invalid(constpt_widget*widget)
 func pt_widget_get_kind pt_widget_kindpt_widget_get_kind(constpt_widget*widget)
 func pt_widget_get_text constchar*pt_widget_get_text(constpt_widget*widget)
+func pt_widget_get_text_direction pt_text_directionpt_widget_get_text_direction(constpt_widget*widget)
 func pt_widget_get_text_span boolpt_widget_get_text_span(constpt_widget*widget,uint32_tindex,pt_text_span*span)
 func pt_widget_get_text_span_count uint32_tpt_widget_get_text_span_count(constpt_widget*widget)
+func pt_widget_get_ui_direction pt_ui_directionpt_widget_get_ui_direction(constpt_widget*widget)
 func pt_widget_has_focus boolpt_widget_has_focus(constpt_widget*widget)
 func pt_widget_parent pt_widget*pt_widget_parent(constpt_widget*widget)
 func pt_widget_request_redraw voidpt_widget_request_redraw(pt_widget*widget)
@@ -815,9 +825,11 @@ func pt_widget_set_radius voidpt_widget_set_radius(pt_widget*widget,floatradius)
 func pt_widget_set_size voidpt_widget_set_size(pt_widget*widget,floatwidth,floatheight)
 func pt_widget_set_text voidpt_widget_set_text(pt_widget*widget,constchar*text)
 func pt_widget_set_text_align voidpt_widget_set_text_align(pt_widget*widget,pt_text_alignalign)
+func pt_widget_set_text_direction voidpt_widget_set_text_direction(pt_widget*widget,pt_text_directiondirection)
 func pt_widget_set_text_spans boolpt_widget_set_text_spans(pt_widget*widget,constpt_text_span*spans,uint32_tcount)
 func pt_widget_set_tooltip voidpt_widget_set_tooltip(pt_widget*widget,constchar*text)
 func pt_widget_set_tooltip_delay voidpt_widget_set_tooltip_delay(pt_widget*widget,uint32_tmilliseconds)
+func pt_widget_set_ui_direction voidpt_widget_set_ui_direction(pt_widget*widget,pt_ui_directiondirection)
 func pt_widget_set_visible voidpt_widget_set_visible(pt_widget*widget,boolvisible)
 func pt_widget_set_width voidpt_widget_set_width(pt_widget*widget,floatwidth)
 func pt_window_app pt_app*pt_window_app(pt_window*window)
@@ -845,6 +857,7 @@ func pt_window_get_popup_policy pt_popup_policypt_window_get_popup_policy(constp
 func pt_window_get_scale floatpt_window_get_scale(constpt_window*window)
 func pt_window_get_theme_color pt_colorpt_window_get_theme_color(constpt_window*window,pt_theme_tokentoken)
 func pt_window_get_theme_metric floatpt_window_get_theme_metric(constpt_window*window,pt_theme_metricmetric)
+func pt_window_get_ui_direction pt_ui_directionpt_window_get_ui_direction(constpt_window*window)
 func pt_window_get_width intpt_window_get_width(constpt_window*window)
 func pt_window_hide voidpt_window_hide(pt_window*window)
 func pt_window_hide_input_panel boolpt_window_hide_input_panel(pt_window*window)
@@ -883,6 +896,7 @@ func pt_window_set_stylus_callback voidpt_window_set_stylus_callback(pt_window*w
 func pt_window_set_theme_color voidpt_window_set_theme_color(pt_window*window,pt_theme_tokentoken,pt_colorcolor)
 func pt_window_set_theme_metric voidpt_window_set_theme_metric(pt_window*window,pt_theme_metricmetric,floatvalue)
 func pt_window_set_title voidpt_window_set_title(pt_window*window,constchar*title)
+func pt_window_set_ui_direction voidpt_window_set_ui_direction(pt_window*window,pt_ui_directiondirection)
 func pt_window_show voidpt_window_show(pt_window*window)
 func pt_window_show_input_panel boolpt_window_show_input_panel(pt_window*window)
 func pt_window_show_toast pt_toast*pt_window_show_toast(pt_window*window,constchar*text,pt_toast_kindkind,uint32_tduration_ms)
