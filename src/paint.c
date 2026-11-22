@@ -700,7 +700,7 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         pt_canvas_draw_text_line_bidi(canvas, font, combined, combined_len,
                                       area.x - entry->scroll_x, baseline, 0.0f,
                                       pt_text_align_start, color, false,
-                                      paint_text_base(entry, combined, combined_len));
+                                      entry_paint_base(entry, combined, combined_len));
     }
     if (preedit_len > 0) {
         float preedit_x = area.x - entry->scroll_x +

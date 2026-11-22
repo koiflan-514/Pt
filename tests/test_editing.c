@@ -493,6 +493,21 @@ static void test_bidi_entry_editing(pt_app *app) {
     pt_check(pt_entry_get_selection(entry, &sel_start, &sel_end) == false);
     pt_check(strcmp(pt_widget_get_text(entry), HE_BET " abc") == 0);
 
+    /* With no explicit direction, the bullets' order still comes from the
+     * stored Hebrew text: End stays the visual right (byte 0). */
+    pt_widget_set_text_direction(entry, pt_text_direction_auto);
+    pt_widget_set_text(entry, HE_BET);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(entry->cursor == 0);
+    int password_right_x = 0;
+    pt_widget_ime_rect(entry, &password_right_x, NULL, NULL, NULL);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(entry->cursor == 6);
+    int password_left_x = 0;
+    pt_widget_ime_rect(entry, &password_left_x, NULL, NULL, NULL);
+    pt_check(password_right_x > password_left_x + 4);
+    pt_entry_set_password(entry, false);
+
     /* The text area shares the visual map: one line of the same mixed text
      * moves identically, and Home/End are visual edges. */
     pt_widget *area = pt_text_area_create(root, "");
