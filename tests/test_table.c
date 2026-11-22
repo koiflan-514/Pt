@@ -514,6 +514,33 @@ static void test_table_rtl(pt_app *app) {
         pt_check_near(bounds_of(head0).x, origin - 120.0, 0.01);
         pt_check_near(bounds_of(head1).x, origin - 120.0 - 140.0, 0.01);
         pt_check_near(bounds_of(head2).x, origin - 120.0 - 140.0 - 100.0, 0.01);
+
+        /* The column rule is painted on the trailing (left) edge. On the
+         * rightmost cell the table's right edge therefore carries no rule,
+         * while its left edge does. */
+        pt_rect h0 = bounds_of(head0);
+        int probe_y = (int)h0.y + 12;
+        int right = (int)(h0.x + h0.w);
+        int left = (int)h0.x;
+        pt_color at_right = pt_canvas_get_pixel(canvas, right - 2, probe_y);
+        pt_color right_plain = pt_canvas_get_pixel(canvas, right - 5, probe_y);
+        pt_color at_left = pt_canvas_get_pixel(canvas, left, probe_y);
+        pt_color left_plain = pt_canvas_get_pixel(canvas, left + 4, probe_y);
+        pt_check(at_right == right_plain);
+        pt_check(at_left != left_plain);
+    }
+
+    /* The selected row's accent bar hugs the right edge. */
+    pt_table_select_range(table, 1, 2);
+    pt_check(pt_window_paint(window, canvas));
+    pt_widget *selected = visible_row(table, 1);
+    pt_check(selected != NULL);
+    if (selected) {
+        pt_rect sr = bounds_of(selected);
+        pt_color accent = pt_app_get_theme_color(app, pt_theme_accent);
+        int mid_y = (int)(sr.y + sr.h * 0.5f);
+        pt_check(pt_canvas_get_pixel(canvas, (int)(sr.x + sr.w) - 2, mid_y) == accent);
+        pt_check(pt_canvas_get_pixel(canvas, (int)sr.x + 2, mid_y) != accent);
     }
 
     /* Cells follow the header, still bound in logical column order. */

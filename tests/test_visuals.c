@@ -696,6 +696,169 @@ static void test_snapshot_rtl_editing(pt_app *app) {
     pt_window_free(window);
 }
 
+/* RTL chrome goldens (2.0 wave 5b): the chrome painted around text must use
+ * the same mirrored geometry as layout — scrollbar in the left gutter, sidebar
+ * accent on the item's right edge, tree disclosure on the right, mirrored
+ * tabs/table, and CSD buttons on the left. Repainting hashes identically and
+ * flipping the root back to LTR changes pixels. */
+static void test_snapshot_rtl_chrome(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "rtl-chrome", 760, 560);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_gap(root, 12.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *row = pt_row_create(root);
+    pt_widget_set_gap(row, 12.0f);
+    pt_widget_set_align_self(row, pt_align_stretch);
+
+    pt_widget *sidebar = pt_sidebar_create(row);
+    pt_widget_set_size(sidebar, 180.0f, 240.0f);
+    pt_sidebar_set_header(sidebar, "Workspace");
+    pt_sidebar_add_item(sidebar, pt_icon_home, "Home");
+    pt_sidebar_add_item(sidebar, pt_icon_document, "Documents");
+    pt_sidebar_add_item(sidebar, pt_icon_settings, "Settings");
+    pt_sidebar_add_item(sidebar, pt_icon_bell, "Notifications");
+    pt_sidebar_add_item(sidebar, pt_icon_user, "Account");
+    pt_sidebar_add_item(sidebar, pt_icon_info, "About");
+    pt_sidebar_set_active(sidebar, 1);
+
+    pt_widget *tree = pt_tree_create(row);
+    pt_widget_set_size(tree, 200.0f, 240.0f);
+    pt_tree_set_row_height(tree, 30.0f);
+    pt_tree_node *folder = pt_tree_add_node(tree, NULL, "src");
+    pt_tree_node_set_expanded(folder, true);
+    pt_tree_add_node(tree, folder, "main.c");
+    pt_tree_add_node(tree, folder, "util.c");
+    pt_tree_add_node(tree, folder, "paint.c");
+    pt_tree_add_node(tree, NULL, "README");
+    pt_tree_add_node(tree, NULL, "docs");
+    pt_tree_add_node(tree, NULL, "build");
+    pt_tree_add_node(tree, NULL, "tests");
+    pt_tree_add_node(tree, NULL, "tools");
+    pt_tree_add_node(tree, NULL, "examples");
+    pt_tree_add_node(tree, NULL, "LICENSE");
+    pt_tree_add_node(tree, NULL, "Makefile");
+
+    pt_widget *table = pt_table_create(row);
+    pt_widget_set_size(table, 300.0f, 240.0f);
+    pt_table_set_column_count(table, 3);
+    pt_table_set_column_title(table, 0, "Name");
+    pt_table_set_column_title(table, 1, "Modified");
+    pt_table_set_column_title(table, 2, "Size");
+    pt_table_set_column_width(table, 0, 120.0f);
+    pt_table_set_column_width(table, 1, 120.0f);
+    pt_table_set_column_width(table, 2, 90.0f);
+    pt_table_set_row_height(table, 30.0f);
+    pt_table_set_header_height(table, 30.0f);
+    pt_table_set_row_count(table, 8);
+    pt_table_select_range(table, 1, 2);
+
+    pt_widget *tabs = pt_tabs_create(root);
+    pt_widget_set_size(tabs, 500.0f, 130.0f);
+    pt_tabs_add_page(tabs, "Overview");
+    pt_tabs_add_page(tabs, "Activity");
+    pt_tabs_add_page(tabs, "Settings");
+    pt_tabs_set_active(tabs, 1);
+
+    /* A scroll view whose content overflows paints its vertical bar in the
+     * left gutter. */
+    pt_widget *scroll = pt_scroll_create(root);
+    pt_widget_set_size(scroll, 240.0f, 70.0f);
+    for (int i = 0; i < 6; ++i) {
+        char label[32];
+        snprintf(label, sizeof(label), "Item %d", i);
+        pt_widget *item = pt_label_create(scroll, label);
+        pt_widget_set_height(item, 28.0f);
+    }
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(760, 560, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+    uint64_t rtl = 0;
+    snapshot_paint(window, canvas, directory, "rtl-chrome", &rtl);
+    uint64_t rtl_repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-chrome-repeat", &rtl_repeat);
+    pt_check(rtl == rtl_repeat);
+
+    /* The scrollbar lives in the 10px left gutter, not the right one. */
+    pt_rect inner = {scroll->x + scroll->padding_left, scroll->y + scroll->padding_top,
+                     scroll->width - scroll->padding_left - scroll->padding_right,
+                     scroll->height - scroll->padding_top - scroll->padding_bottom};
+    pt_color bar = pt_app_get_theme_color(app, pt_theme_scrollbar);
+    uint32_t bar_pixel = bar;
+    uint32_t left_pixels = 0;
+    uint32_t right_pixels = 0;
+    for (int y = (int)inner.y + 6; y < (int)(inner.y + inner.h) - 6; ++y) {
+        for (int x = (int)inner.x + 2; x < (int)inner.x + 8; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) == bar_pixel) {
+                ++left_pixels;
+            }
+        }
+        for (int x = (int)(inner.x + inner.w) - 8; x < (int)(inner.x + inner.w) - 2; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) == bar_pixel) {
+                ++right_pixels;
+            }
+        }
+    }
+    pt_check(left_pixels > 20);
+    pt_check(right_pixels == 0);
+
+    /* The selected sidebar item carries its accent bar on the right edge. */
+    pt_widget *active = pt_sidebar_get_item(sidebar, 1);
+    pt_check(active != NULL);
+    if (active) {
+        pt_color accent = pt_app_get_theme_color(app, pt_theme_accent);
+        uint32_t expected = accent;
+        int bar_y = (int)(active->y + active->height * 0.5f);
+        pt_check(pt_canvas_get_pixel(canvas, (int)(active->x + active->width - 2.0f),
+                                     bar_y) == expected);
+        pt_check(pt_canvas_get_pixel(canvas, (int)(active->x + 2.0f), bar_y) != expected);
+    }
+
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    uint64_t ltr_base = 0;
+    snapshot_paint(window, canvas, directory, "rtl-chrome-ltr-base", &ltr_base);
+    pt_check(ltr_base != rtl);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+
+    /* Client-side decorations: the button cluster mirrors to the left. */
+    pt_window *deco_rtl = pt_window_create(app, "rtl-csd", 520, 260);
+    pt_check(deco_rtl != NULL);
+    if (deco_rtl) {
+        pt_window_set_ui_direction(deco_rtl, pt_ui_direction_rtl);
+        pt_label_create(pt_window_root(deco_rtl), "Decorations");
+        pt_window_show(deco_rtl);
+        pt_canvas *csd_canvas = pt_canvas_create(520, 260, 1.0f);
+        pt_check(csd_canvas != NULL);
+        if (csd_canvas) {
+            uint64_t csd_rtl = 0;
+            snapshot_paint(deco_rtl, csd_canvas, directory, "rtl-csd", &csd_rtl);
+            uint64_t csd_repeat = 0;
+            snapshot_paint(deco_rtl, csd_canvas, directory, "rtl-csd-repeat", &csd_repeat);
+            pt_check(csd_rtl == csd_repeat);
+            pt_window_set_ui_direction(deco_rtl, pt_ui_direction_ltr);
+            uint64_t csd_ltr = 0;
+            snapshot_paint(deco_rtl, csd_canvas, directory, "rtl-csd-ltr-base", &csd_ltr);
+            pt_check(csd_ltr != csd_rtl);
+            pt_canvas_destroy(csd_canvas);
+        }
+        pt_window_free(deco_rtl);
+    }
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -711,6 +874,7 @@ int main(void) {
     test_snapshot_rtl(app);
     test_snapshot_rtl_wrapped(app);
     test_snapshot_rtl_editing(app);
+    test_snapshot_rtl_chrome(app);
     pt_app_destroy(app);
     return pt_test_finish("visuals");
 }

@@ -34,6 +34,16 @@ static void click_at(pt_window *window, float x, float y) {
     pt_window_input_pointer_button(window, 0x110u, false, x, y, 2, 20);
 }
 
+static uint64_t canvas_hash(const pt_canvas *canvas) {
+    uint64_t hash = 1469598103934665603ull;
+    size_t count = (size_t)canvas->width * (size_t)canvas->height;
+    for (size_t i = 0; i < count; ++i) {
+        hash ^= canvas->pixels[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
 static pt_widget *nth_button(pt_widget *panel, int index) {
     int seen = 0;
     for (pt_widget *child = panel ? panel->first_child : NULL; child;
@@ -257,6 +267,98 @@ static void test_tooltip(pt_app *app) {
     pt_window_free(window);
 }
 
+/* RTL overlays anchor to the trailing edge: a menu shown below an anchor hugs
+ * that anchor's right edge even on its first opening, and its painted rows
+ * hash stably; a tooltip sits to the pointer's left. */
+static void test_overlay_rtl(pt_app *app) {
+    pt_window *window = pt_window_create(app, "overlay-rtl", 640, 460);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *anchor = pt_button_create(root, "\xD7\xA4\xD7\xAA\xD7\x97");
+    pt_widget_set_size(anchor, 220.0f, 34.0f);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(640, 460, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect anchor_rect = bounds_of(anchor);
+
+    pt_menu *menu = pt_menu_create(window);
+    pt_check(menu != NULL);
+    if (!menu) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    pt_menu_add_item(menu, "\xD7\xA4\xD7\xAA\xD7\x97", "Ctrl+O", NULL, NULL);
+    pt_menu_add_item(menu, "\xD7\x99\xD7\xA6\xD7\x99\xD7\x90\xD7\x94", "Ctrl+Q", NULL, NULL);
+    pt_menu_show_below(menu, anchor);
+    pt_check(pt_menu_is_open(menu));
+    pt_check(menu->overlay.rect.w > 0.0f);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check_near(menu->overlay.rect.x + menu->overlay.rect.w,
+                  anchor_rect.x + anchor_rect.w, 0.6);
+    uint64_t rtl = canvas_hash(canvas);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(canvas_hash(canvas) == rtl);
+    pt_menu_destroy(menu);
+
+    /* The mirrored LTR menu hangs from the anchor's left edge, proving the
+     * RTL anchor really followed the direction rather than a stale width. */
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect ltr_anchor = bounds_of(anchor);
+    pt_menu *ltr_menu = pt_menu_create(window);
+    pt_check(ltr_menu != NULL);
+    if (ltr_menu) {
+        pt_menu_add_item(ltr_menu, "Open", "Ctrl+O", NULL, NULL);
+        pt_menu_add_item(ltr_menu, "Quit", "Ctrl+Q", NULL, NULL);
+        pt_menu_show_below(ltr_menu, anchor);
+        pt_check(pt_window_paint(window, canvas));
+        pt_check_near(ltr_menu->overlay.rect.x, ltr_anchor.x, 0.6);
+        pt_check(canvas_hash(canvas) != rtl);
+        pt_menu_destroy(ltr_menu);
+    }
+
+    /* Tooltip: RTL nudges the panel to the pointer's left. */
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget_set_tooltip(anchor, "Runs the build");
+    pt_widget_set_tooltip_delay(anchor, 0);
+    pt_check(pt_window_paint(window, canvas));
+    anchor_rect = bounds_of(anchor);
+    pt_window_input_pointer_enter(window, anchor_rect.x + anchor_rect.w * 0.75f,
+                                  anchor_rect.y + anchor_rect.h * 0.5f);
+    pt_check(window->hovered == anchor);
+    pt_app_run_for(app, 60);
+    pt_overlay *tooltip = NULL;
+    for (pt_overlay *overlay = window->overlays; overlay; overlay = overlay->next) {
+        if (overlay->open && overlay->kind == pt_overlay_kind_tooltip) {
+            tooltip = overlay;
+        }
+    }
+    pt_check(tooltip != NULL);
+    if (tooltip) {
+        pt_layout_ctx ctx = pt_layout_context_for(window->root);
+        pt_window_overlays_layout(window, &ctx);
+        pt_check(tooltip->rect.w > 0.0f && tooltip->rect.h > 0.0f);
+        pt_check(tooltip->rect.x < window->pointer_x);
+        pt_check(tooltip->rect.x + tooltip->rect.w <= window->pointer_x);
+        pt_check(tooltip->rect.x >= 0.0f);
+    }
+    pt_window_input_pointer_leave(window);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.overlay");
@@ -268,6 +370,7 @@ int main(void) {
     test_dialog(app);
     test_toasts(app);
     test_tooltip(app);
+    test_overlay_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("overlay");
 }

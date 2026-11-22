@@ -308,9 +308,9 @@ static void test_tree_rtl(pt_app *app) {
     tree_state_log log = {0};
     pt_tree_set_on_select(tree, select_node, &log);
 
-    pt_tree_node *alpha = pt_tree_add_node(tree, NULL, "alpha");
-    pt_tree_node *alpha_one = pt_tree_add_node(tree, alpha, "alpha/one");
-    pt_tree_node *alpha_two = pt_tree_add_node(tree, alpha, "alpha/two");
+    pt_tree_node *alpha = pt_tree_add_node(tree, NULL, "\xD7\x90\xD7\x91\xD7\x92");
+    pt_tree_node *alpha_one = pt_tree_add_node(tree, alpha, "\xD7\x90\xD7\x91\xD7\x92/\xD7\x90\xD7\x97\xD7\x93");
+    pt_tree_node *alpha_two = pt_tree_add_node(tree, alpha, "\xD7\x90\xD7\x91\xD7\x92/\xD7\xA9\xD7\xAA\xD7\x99\xD7\x99\xD7\x9D");
     pt_check(alpha && alpha_one && alpha_two);
     pt_tree_node_set_expanded(alpha, true);
 
@@ -324,6 +324,25 @@ static void test_tree_rtl(pt_app *app) {
     pt_check(row_alpha != NULL);
     if (row_alpha) {
         pt_rect rect = bounds_of(row_alpha);
+        /* The chevron is painted on the right; the old left slot stays plain
+         * row background. */
+        pt_color bg = pt_canvas_get_pixel(canvas, (int)(rect.x + rect.w * 0.4f),
+                                          (int)rect.y + 2);
+        int right_hits = 0;
+        int left_hits = 0;
+        int mid = (int)(rect.y + rect.h * 0.5f);
+        for (int y = mid - 6; y <= mid + 6; ++y) {
+            for (int x = 0; x < 13; ++x) {
+                if (pt_canvas_get_pixel(canvas, (int)(rect.x + rect.w) - 21 + x, y) != bg) {
+                    ++right_hits;
+                }
+                if (pt_canvas_get_pixel(canvas, (int)rect.x + 9 + x, y) != bg) {
+                    ++left_hits;
+                }
+            }
+        }
+        pt_check(right_hits > 4);
+        pt_check(left_hits == 0);
         /* The chevron sits at the row's right edge; a press just inside it
          * collapses the node, while the same spot used to be row background. */
         click_at(window, rect.x + rect.w - 10.0f, rect.y + rect.h * 0.5f);

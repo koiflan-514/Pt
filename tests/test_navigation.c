@@ -380,6 +380,16 @@ static void test_tabs_sidebar_rtl(pt_app *app) {
                   sidebar_rect.x + sidebar_rect.w - 10.0, 0.01);
     pt_check_near(bounds_of(docs).w, sidebar_rect.w - 20.0, 0.01);
 
+    /* The selected item's accent bar is painted on its right edge. */
+    pt_sidebar_set_active(sidebar, 0);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect home_rect = bounds_of(home);
+    pt_color accent = pt_app_get_theme_color(app, pt_theme_accent);
+    int bar_y = (int)(home_rect.y + home_rect.h * 0.5f);
+    pt_check(pt_canvas_get_pixel(canvas, (int)(home_rect.x + home_rect.w) - 2,
+                                 bar_y) == accent);
+    pt_check(pt_canvas_get_pixel(canvas, (int)home_rect.x + 2, bar_y) != accent);
+
     pt_canvas_destroy(canvas);
     pt_window_free(window);
 }
