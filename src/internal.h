@@ -451,6 +451,16 @@ size_t pt_icon_cache_pixel_count(void);
 bool pt_icon_window_buffer_geometry(int source_width, int source_height, float scale,
                                     int *out_size, int *out_scale);
 
+/* Bounded SVG icon integration (svg.c). Both functions parse a private copy of
+ * the document through the vendored nanosvg parser, reject empty documents,
+ * documents without a usable intrinsic size, documents above
+ * PT_ICON_MAX_DIMENSION and inputs above the 16 MiB icon cap. The rasteriser
+ * preserves the intrinsic aspect ratio, centres the artwork in the requested
+ * device-pixel box and returns caller-owned premultiplied 0xAARRGGBB pixels
+ * (release with pt_free); NULL is returned with the error set on failure. */
+bool pt_svg_measure(const void *data, size_t size, int *out_width, int *out_height);
+pt_color *pt_svg_rasterize(const void *data, size_t size, int width, int height);
+
 /* In-memory PNG codec shared by snapshots and clipboard images. The encoder
  * takes premultiplied 0xAARRGGBB pixels (pt_window_paint_pixels layout) and
  * produces a straight-alpha RGBA PNG. The decoder returns caller-owned
