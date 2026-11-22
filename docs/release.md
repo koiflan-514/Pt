@@ -958,7 +958,7 @@ the section an upgrading application must read:
 | Live Wayland (`make check-wayland`) | 48 checks under niri; focused-entry idle guard 21.7 ms / 5000 ms after one external-input retry |
 | Live typing (`make check-typing`) | pass under niri with text-input-v3 (ptdirect) |
 | Sanitizer (`make check-sanitize`) | pass: ASan+UBSan C suites, sanitized C++ 517 checks / Python 48 tests / Java 372 checks, 0 failures |
-| Staged install / reproducible tarball | pass: SONAME `libpt.so.1`, pkg-config 1.1.0, exported ABI matches the baseline, C/C++/Python/Java consumers, uninstall; two `make dist` runs reproduced sha256 `0aa2b1c7…3a446`, extracted tree rebuilds and passes `make check` |
+| Staged install / reproducible tarball | pass: SONAME `libpt.so.1`, pkg-config 1.1.0, exported ABI matches the baseline, C/C++/Python/Java consumers, uninstall; two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduced sha256 `0aa2b1c7…3a446`, extracted tree rebuilds and passes `make check` |
 | `tools/ci.sh` | pass end to end (`CI verification passed for Pt 1.1.0`): werror build, check, perf, install-check, sanitizers, tarball, live suites |
 | `tools/release-check.sh --full` | automated gates pass for 1.1.0; two human items remain (freeze commit/tag, live-suite sign-off — the live suites and example smoke tests above were run on this tree) |
 | `tools/check-bilingual-docs.py` | pass: 9 public guides, no structural drift |
@@ -1083,7 +1083,7 @@ observable behaviour must be listed here before the tag.
 | `make check` / `make check-bindings` | pass: all C suites green, C++ 763 checks, Python 64 tests, Java 620 checks, 0 failures; exported-symbol, baseline and generated-reference audits clean |
 | `make perf-check` | pass: every guard ceiling holds; dense full paint 6.078 ms, 4K full paint 8.571 ms, first frame 13.494 ms, idle 300 ms CPU 0.451 ms (startup bench: first frame 12.40 ms, idle 500 ms CPU 0.772 ms) |
 | Live Wayland / live typing | pass under niri: `check-wayland` 48 checks, focused-entry idle guard 26.6 ms over 5000 ms after one external-input retry; `check-typing` PASS live typing (ptdirect, text-input-v3) |
-| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pass: ASan+UBSan C suites with leak detection plus sanitized C++ 763 / Python 64 / Java 620, 0 failures; staged install reports SONAME `libpt.so.1`, pkg-config 1.2.0, exported ABI matching the baseline, C/C++/Python/Java consumers and uninstall; two `make dist` runs reproduced sha256 `54ce8abd…c521ac` (sidecar matches), the extracted tree rebuilt with `werror=1` and passed `make check`; `tools/ci.sh` exited 0 with `CI verification passed for Pt 1.2.0` |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pass: ASan+UBSan C suites with leak detection plus sanitized C++ 763 / Python 64 / Java 620, 0 failures; staged install reports SONAME `libpt.so.1`, pkg-config 1.2.0, exported ABI matching the baseline, C/C++/Python/Java consumers and uninstall; two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduced sha256 `54ce8abd…c521ac` (sidecar matches), the extracted tree rebuilt with `werror=1` and passed `make check`; `tools/ci.sh` exited 0 with `CI verification passed for Pt 1.2.0` |
 | `tools/release-check.sh --full` | automated gates pass for 1.2.0; two human items remain (freeze commit/tag, live-suite sign-off — the live suites above were run on this tree) |
 
 ### ABI statement
@@ -1349,6 +1349,18 @@ consecutive `dist` runs. Adding this note changes `docs/release.md` once more,
 so the final tree necessarily has a different digest; that is the
 self-reference of shipping the record inside the archive, not nondeterminism.
 `make dist` on the tagged tree reproduces its own digest exactly.
+
+All sha256 digests in this record — the gate-time `e989e6a4…`, the
+evidence-commit `aa6eb674…` and the final tree `589d2c8d…` (the tagged tree
+`58a561c`, which does not carry this note) — were measured with
+`SOURCE_DATE_EPOCH=1767225600`, the reproducible-build epoch that
+`tools/ci.sh` fixes. A bare `make dist` derives its epoch from the last
+commit time instead (`1795320732` for `58a561c`), and that epoch lands in the
+mtime field of every tar header, so the same tree digests to
+`1790853da866d320a37671000f3db9d0f863d000d6f052bd809b9a63be2eab80`. Extracting
+both archives gives byte-identical trees; only the timestamp header differs.
+To reproduce a digest quoted here, run
+`SOURCE_DATE_EPOCH=1767225600 make dist`, not a bare `make dist`.
 
 The annotated tag is created from the final gate tree once the owner confirms
 the freeze. `tools/release-check.sh --full` reports every automated gate green;
