@@ -31,6 +31,29 @@ inline std::string copy_string(std::string_view text) {
     return std::string(text);
 }
 
+namespace detail {
+
+/* RAII guard for memory that the C API documents as caller-owned and released
+ * with pt_free(). The wrapper services every getter through one of these, so a
+ * std::bad_alloc raised while the std::string/std::vector copy is constructed
+ * still releases the native buffer during unwinding. */
+template <typename T>
+class owned_pt_memory {
+  public:
+    explicit owned_pt_memory(T *value) noexcept : value_(value) {}
+    ~owned_pt_memory() { pt_free(value_); }
+    owned_pt_memory(const owned_pt_memory &) = delete;
+    owned_pt_memory &operator=(const owned_pt_memory &) = delete;
+    owned_pt_memory(owned_pt_memory &&) = delete;
+    owned_pt_memory &operator=(owned_pt_memory &&) = delete;
+    [[nodiscard]] T *get() const noexcept { return value_; }
+
+  private:
+    T *value_ = nullptr;
+};
+
+} // namespace detail
+
 class app;
 class window;
 class widget;
@@ -1206,12 +1229,11 @@ class widget {
      * here. */
     [[nodiscard]] std::string columns_save() const {
         char *value = pt_table_columns_save(handle_);
+        detail::owned_pt_memory<char> owned(value);
         if (!value) {
             return {};
         }
-        std::string copy(value);
-        pt_free(value);
-        return copy;
+        return std::string(value);
     }
     /* Replaces the current layout atomically on success. A rejected blob
      * leaves the table untouched and records the reason in pt::last_error(). */
@@ -2033,12 +2055,11 @@ class window {
      * release it here so callers never have to pair it with pt_free(). */
     [[nodiscard]] std::string primary() const {
         char *value = pt_window_primary_get(handle_);
+        detail::owned_pt_memory<char> owned(value);
         if (!value) {
             return {};
         }
-        std::string copy(value);
-        pt_free(value);
-        return copy;
+        return std::string(value);
     }
     bool set_primary(std::string_view text) const {
         std::string value = copy_string(text);
@@ -2150,12 +2171,11 @@ class window {
     }
     [[nodiscard]] std::string clipboard() const {
         char *value = pt_window_clipboard_get(handle_);
+        detail::owned_pt_memory<char> owned(value);
         if (!value) {
             return {};
         }
-        std::string copy(value);
-        pt_free(value);
-        return copy;
+        return std::string(value);
     }
     /* PNG clipboard image. Pixels are premultiplied 0xAARRGGBB, row-major with
      * a stride of width. The span must hold width * height pixels; a short span
@@ -2183,6 +2203,7 @@ class window {
         int width = 0;
         int height = 0;
         pt_color *pixels = pt_window_clipboard_get_image_png(handle_, &width, &height);
+        detail::owned_pt_memory<pt_color> owned(pixels);
         if (!pixels) {
             return std::nullopt;
         }
@@ -2193,7 +2214,6 @@ class window {
             image.pixels.assign(pixels, pixels + static_cast<size_t>(width) *
                                                  static_cast<size_t>(height));
         }
-        pt_free(pixels);
         return image;
     }
     /* text/uri-list write. Entries are absolute paths or already-formed URIs;
@@ -2455,12 +2475,11 @@ inline uint32_t uri_list_count(std::string_view text) {
 inline std::string uri_list_get(std::string_view text, uint32_t index) {
     std::string value = copy_string(text);
     char *uri = pt_uri_list_get(value.c_str(), index);
+    detail::owned_pt_memory<char> owned(uri);
     if (!uri) {
         return {};
     }
-    std::string copy(uri);
-    pt_free(uri);
-    return copy;
+    return std::string(uri);
 }
 
 inline std::string tree_text(const tree_node *node) {

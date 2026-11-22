@@ -7,6 +7,7 @@
 #include <pt/pt.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <span>
 #include <string>
 #include <string_view>
@@ -22,6 +24,43 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+
+/* Allocation-failure injection for the owned-API hardening test (M20). The
+ * budget stays -1 (disabled) for the whole suite except inside
+ * run_bad_alloc_hardening_test(), so the rest of the checks see the normal
+ * allocator. */
+namespace {
+std::atomic<long long> allocation_budget{-1};
+std::atomic<long long> allocation_attempts{0};
+} // namespace
+
+/* The replacement allocator intentionally pairs operator new with malloc and
+ * operator delete with free; GCC's cross-function check cannot see that and
+ * reports a false mismatch at inline call sites. */
+#if defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
+
+void *operator new(std::size_t size) {
+    const long long budget = allocation_budget.load(std::memory_order_relaxed);
+    if (budget >= 0) {
+        const long long attempt = allocation_attempts.fetch_add(1, std::memory_order_relaxed);
+        if (attempt >= budget) {
+            throw std::bad_alloc();
+        }
+    }
+    if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+        return memory;
+    }
+    throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
 
 /* Internal UI-thread hooks. The C suite uses the same entry points to drive
  * synthetic compositor input; they are not part of the public ABI, but the
@@ -694,6 +733,63 @@ void run_wire_dispatch_test() {
         setenv("PT_HEADLESS", saved_value.c_str(), 1);
     } else {
         unsetenv("PT_HEADLESS");
+    }
+}
+
+/* Runs `call` once per allocation budget 0..N, forcing std::bad_alloc at each
+ * successive allocation. The wrapper's RAII guard must free the C allocation
+ * on the throwing path, so the sanitized gate (LeakSanitizer) proves the
+ * native buffer is released even when the target container cannot be built. */
+template <typename Call>
+int count_bad_alloc_paths(Call call) {
+    int thrown = 0;
+    for (long long budget = 0; budget < 40; ++budget) {
+        allocation_attempts.store(0, std::memory_order_relaxed);
+        allocation_budget.store(budget, std::memory_order_relaxed);
+        try {
+            call();
+        } catch (const std::bad_alloc &) {
+            ++thrown;
+        }
+        allocation_budget.store(-1, std::memory_order_relaxed);
+    }
+    return thrown;
+}
+
+/* Every owned getter needs a payload longer than the small-string buffer so the
+ * injected failure really happens during the copy, not in SSO storage. */
+void run_bad_alloc_hardening_test(pt::window &window, pt::widget &table) {
+    const std::string long_text =
+        "owned getter payload that defeats the small string buffer 0123456789";
+
+    check(window.set_clipboard(long_text));
+    check(count_bad_alloc_paths([&window] { (void)window.clipboard(); }) > 0);
+    check(window.clipboard() == long_text);
+
+    table.set_sort_columns({{0, pt_sort_ascending}});
+    const std::string layout = table.columns_save();
+    check(!layout.empty());
+    check(count_bad_alloc_paths([&table] { (void)table.columns_save(); }) > 0);
+    check(table.columns_save() == layout);
+
+    static constexpr std::string_view uri_text =
+        "file:///tmp/bad-alloc-owned-path.txt\r\n";
+    check(count_bad_alloc_paths([] { (void)pt::uri_list_get(uri_text, 0); }) > 0);
+    check(pt::uri_list_get(uri_text, 0) == "file:///tmp/bad-alloc-owned-path.txt");
+
+    check(window.set_primary_serial(long_text, 23));
+    check(count_bad_alloc_paths([&window] { (void)window.primary(); }) > 0);
+    check(window.primary() == long_text);
+
+    const pt_color pixels[4] = {pt_rgb(0x11223344), pt_rgb(0x55667788),
+                                pt_rgb(0x99AABBCC), pt_rgb(0xDDEEFF00)};
+    check(window.set_clipboard_image(std::span<const pt_color>(pixels, 4), 2, 2));
+    check(count_bad_alloc_paths([&window] { (void)window.clipboard_image_png(); }) > 0);
+    const std::optional<pt::clipboard_image> decoded = window.clipboard_image_png();
+    check(decoded.has_value());
+    if (decoded) {
+        check(decoded->width == 2 && decoded->height == 2);
+        check(decoded->pixels.size() == 4);
     }
 }
 
@@ -2197,6 +2293,9 @@ int main() {
     check(!null_picker.set_number_text("1"));
     check(!null_picker.set_color_hex("#000000"));
     check(!null_picker.is_select_open());
+
+    /* ---- owned getters: bad_alloc must not leak the C allocation ---- */
+    run_bad_alloc_hardening_test(window, table);
 
     pt_canvas_destroy(canvas);
 
