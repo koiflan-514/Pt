@@ -1231,8 +1231,14 @@ void pt_combobox_layout(pt_widget *combobox, const pt_layout_ctx *ctx, pt_rect i
     if (!state || !state->field) {
         return;
     }
+    /* RTL mirrors the horizontal chrome: the chevron reserve is on the leading
+     * (left) edge, so the embedded editor starts after it. This matches
+     * pt_picker_layout and paint_combobox, and keeps a long filter value from
+     * sliding under the chevron. */
+    bool rtl = pt_widget_resolved_ui_direction(combobox) == pt_ui_direction_rtl;
     float text_width = pt_max_float(0.0f, inner.w - pt_combobox_chevron_reserve);
-    pt_widget_layout_child(state->field, inner.x, inner.y, text_width, inner.h, ctx);
+    float field_x = rtl ? inner.x + pt_combobox_chevron_reserve : inner.x;
+    pt_widget_layout_child(state->field, field_x, inner.y, text_width, inner.h, ctx);
 }
 
 void pt_combobox_free_extra(pt_widget *combobox) {

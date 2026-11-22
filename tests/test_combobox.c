@@ -517,6 +517,43 @@ static void test_filterable(pt_app *app) {
     fixture_close(&fx);
 }
 
+/* The embedded filterable editor mirrors its slot in RTL: the chevron reserve
+ * moves to the leading (left) edge and the field starts after it, so a long
+ * value cannot slide under the chevron. LTR keeps the original left slot. */
+static void test_filterable_rtl_slot(pt_app *app) {
+    fixture fx;
+    fixture_open(&fx, app, 300.0f, 0.0f);
+    pt_combobox_add_item(fx.combobox, "A very long filterable value that overflows");
+    pt_combobox_set_mode(fx.combobox, pt_combobox_filterable);
+    pt_widget *field = pt_combobox_field_widget(fx.combobox);
+    pt_check(field != NULL);
+    if (!field) {
+        fixture_close(&fx);
+        return;
+    }
+    pt_widget_set_text(field, "A very long filterable value that overflows");
+    fixture_paint(&fx);
+    float ltr_field_x = field->x;
+    float ltr_field_w = field->width;
+    pt_check(ltr_field_x - fx.combobox->x < pt_combobox_chevron_reserve);
+    pt_check(ltr_field_w > 0.0f);
+
+    pt_widget_set_ui_direction(fx.combobox, pt_ui_direction_rtl);
+    fixture_paint(&fx);
+    /* The field now starts to the right of the leading chevron reserve and has
+     * the same width as the LTR slot, so only the origin mirrored. */
+    pt_check(field->x - fx.combobox->x >= pt_combobox_chevron_reserve - 1.0f);
+    pt_check(field->x + field->width <= fx.combobox->x + fx.combobox->width + 0.5f);
+    pt_check_near(field->width, ltr_field_w, 0.5f);
+
+    /* Switching back is byte-identical to the LTR slot. */
+    pt_widget_set_ui_direction(fx.combobox, pt_ui_direction_ltr);
+    fixture_paint(&fx);
+    pt_check_near(field->x, ltr_field_x, 0.01f);
+    pt_check_near(field->width, ltr_field_w, 0.01f);
+    fixture_close(&fx);
+}
+
 static void test_a11y(pt_app *app) {
     fixture fx;
     fixture_open(&fx, app, 420.0f, 0.0f);
@@ -669,6 +706,7 @@ int main(void) {
     test_pointer(app);
     test_popup_geometry(app);
     test_filterable(app);
+    test_filterable_rtl_slot(app);
     test_a11y(app);
     test_destroy_while_open(app);
     test_callback_destroys_combobox(app);
