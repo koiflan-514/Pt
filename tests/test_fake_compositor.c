@@ -69,7 +69,7 @@ static bool id_in(const uint32_t *ids, size_t count, uint32_t id) {
 /* ---------- handshake, globals, event injection ---------- */
 
 static void test_handshake_and_events(void) {
-    fake_compositor fc;
+    static fake_compositor fc;
     pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
     if (fake_compositor_error(&fc)) {
         fprintf(stderr, "fake compositor start failed: %s\n",
@@ -188,9 +188,13 @@ static void test_handshake_and_events(void) {
     pt_check(fake_compositor_sync(&fc, app));
     pt_check(!window->keyboard_focused);
 
-    /* xdg_wm_base.ping is answered with pong carrying the same serial. */
+    /* xdg_wm_base.ping is answered with pong carrying the same serial. A single
+     * roundtrip can return before the pong queued while dispatching ping has
+     * been flushed, so poll several roundtrips for the reply. */
+    size_t pongs = fake_compositor_count_requests(&fc, FC_K_WM_BASE, xdg_wm_base_pong);
     fake_compositor_wm_ping(&fc, 0x7788u);
-    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_WM_BASE, xdg_wm_base_pong,
+                                          pongs + 1, 32));
     fc_request pong;
     pt_check(fake_compositor_last_request(&fc, FC_K_WM_BASE, xdg_wm_base_pong, &pong));
     pt_check(pong.nargs == 1 && pong.args[0].u == 0x7788u);
@@ -222,7 +226,7 @@ static void test_handshake_and_events(void) {
 /* ---------- toplevel-icon submission ---------- */
 
 static void test_icon_no_manager(void) {
-    fake_compositor fc;
+    static fake_compositor fc;
     pt_check(fake_compositor_start(&fc, FC_OPT_ALL & ~FC_OPT_ICON));
     if (fake_compositor_error(&fc)) {
         fprintf(stderr, "fake compositor start failed: %s\n",
@@ -263,7 +267,7 @@ static void test_icon_no_manager(void) {
 }
 
 static void test_icon_submission(void) {
-    fake_compositor fc;
+    static fake_compositor fc;
     pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
     if (fake_compositor_error(&fc)) {
         fprintf(stderr, "fake compositor start failed: %s\n",
@@ -358,6 +362,13 @@ static void test_icon_submission(void) {
         fc_request destroyed_buffer;
         pt_check(fake_compositor_last_request(&fc, FC_K_BUFFER, 0, &destroyed_buffer));
         pt_check(destroyed_buffer.object == icon_buffer1);
+        /* The icon object must die before its immutable buffer: the protocol
+         * object holds the buffer reference until destroy. */
+        ssize_t icon_destroy_index = fake_compositor_nth_request(&fc, FC_K_ICON, 0, 0, NULL);
+        ssize_t buffer_destroy_index =
+            fake_compositor_nth_request(&fc, FC_K_BUFFER, 0, 0, NULL);
+        pt_check(icon_destroy_index >= 0 && buffer_destroy_index >= 0);
+        pt_check(icon_destroy_index < buffer_destroy_index);
         fc_request create_icon2;
         pt_check(fake_compositor_last_request(&fc, FC_K_ICON_MANAGER, 1, &create_icon2));
         pt_check(create_icon2.new_id != 0 && create_icon2.new_id != icon_id1);
@@ -383,6 +394,11 @@ static void test_icon_submission(void) {
         fc_request destroyed_buffer2;
         pt_check(fake_compositor_last_request(&fc, FC_K_BUFFER, 0, &destroyed_buffer2));
         pt_check(destroyed_buffer2.object == icon_buffer2.args[0].u);
+        ssize_t icon_destroy_index2 = fake_compositor_nth_request(&fc, FC_K_ICON, 0, 0, NULL);
+        ssize_t buffer_destroy_index2 =
+            fake_compositor_nth_request(&fc, FC_K_BUFFER, 0, 0, NULL);
+        pt_check(icon_destroy_index2 >= 0 && buffer_destroy_index2 >= 0);
+        pt_check(icon_destroy_index2 < buffer_destroy_index2);
 
         pt_icon_image_destroy(icon2);
     }
@@ -398,7 +414,7 @@ static void test_icon_submission(void) {
 /* ---------- resource stability ---------- */
 
 static void test_fd_cycles(void) {
-    fake_compositor fc;
+    static fake_compositor fc;
     pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
     if (fake_compositor_error(&fc)) {
         fprintf(stderr, "fake compositor start failed: %s\n",

@@ -609,7 +609,7 @@ static void wait_popup_native(fake_compositor *fc, pt_app *app, pt_popup *popup)
 }
 
 static void test_native_wire(void) {
-    fake_compositor fc;
+    static fake_compositor fc;
     pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
     if (fake_compositor_error(&fc)) {
         fprintf(stderr, "%s\n", fake_compositor_error(&fc));
@@ -669,11 +669,13 @@ static void test_native_wire(void) {
         uint32_t anchor;
         uint32_t gravity;
         bool reposition;
+        int32_t expected_x;
+        int32_t expected_y;
     } cases[] = {
-        {pt_popup_placement_below, 6u, 8u, false}, /* bottom_left / bottom_right */
-        {pt_popup_placement_above, 5u, 7u, true},  /* top_left / top_right */
-        {pt_popup_placement_right, 7u, 8u, true},  /* top_right / bottom_right */
-        {pt_popup_placement_left, 5u, 6u, true},   /* top_left / bottom_left */
+        {pt_popup_placement_below, 6u, 8u, false, 30, 144},  /* bottom_left / bottom_right */
+        {pt_popup_placement_above, 5u, 7u, true, 30, 44},    /* top_left / top_right */
+        {pt_popup_placement_right, 7u, 8u, true, 110, 120},  /* top_right / bottom_right */
+        {pt_popup_placement_left, 5u, 6u, true, -86, 120},   /* top_left / bottom_left */
     };
     for (size_t i = 0; i < pt_len(cases); ++i) {
         fake_compositor_clear(&fc);
@@ -704,22 +706,18 @@ static void test_native_wire(void) {
         pt_check(record.pos.constraint == fc_constraint_all);
         pt_check(record.pos.offset_x == 0 && record.pos.offset_y == 0);
 
-        int32_t expected_x = 0;
-        int32_t expected_y = 0;
-        int32_t expected_w = 0;
-        int32_t expected_h = 0;
-        fake_compositor_popup_geometry(&record.pos, &expected_x, &expected_y, &expected_w,
-                                       &expected_h);
-        pt_check(record.width == expected_w && record.height == expected_h);
-        pt_check(record.x == expected_x && record.y == expected_y);
-        pt_check_near(popup->overlay.rect.x, (float)expected_x, 0.01);
-        pt_check_near(popup->overlay.rect.y, (float)expected_y, 0.01);
-        pt_check_near(popup->overlay.rect.w, (float)expected_w, 0.01);
-        pt_check_near(popup->overlay.rect.h, (float)expected_h, 0.01);
+        /* Literal expected configure geometry, independent of the facility's
+         * own positioner solver: anchor (30,120,80,24), panel 116x76. */
+        pt_check(record.width == 116 && record.height == 76);
+        pt_check(record.x == cases[i].expected_x && record.y == cases[i].expected_y);
+        pt_check_near(popup->overlay.rect.x, (float)cases[i].expected_x, 0.01);
+        pt_check_near(popup->overlay.rect.y, (float)cases[i].expected_y, 0.01);
+        pt_check_near(popup->overlay.rect.w, 116.0f, 0.01);
+        pt_check_near(popup->overlay.rect.h, 76.0f, 0.01);
 
         /* Hit-testing uses the compositor-placed rectangle. */
         pt_widget *hit = pt_window_overlay_hit_test(
-            window, (float)expected_x + 2.0f, (float)expected_y + 2.0f);
+            window, (float)cases[i].expected_x + 2.0f, (float)cases[i].expected_y + 2.0f);
         pt_check(hit != NULL);
         if (hit) {
             pt_check(hit == popup->overlay.panel ||

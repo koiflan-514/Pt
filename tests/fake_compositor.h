@@ -36,6 +36,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -246,7 +247,7 @@ typedef struct fake_compositor {
     char socket_path[320];
     pthread_t thread;
     bool thread_started;
-    bool stop;
+    _Atomic bool stop;
     bool connected;
     unsigned int options;
 
@@ -1369,9 +1370,6 @@ static inline bool fake_compositor_selection_offer(fake_compositor *fc,
     device = fc_find_live_locked(fc, FC_K_DATA_DEVICE);
     if (device) {
         offer = fc->next_server_id++;
-        if (offer < 0xff000000u) {
-            offer = fc->next_server_id++;
-        }
         fc_object_new_locked(fc, offer, FC_K_DATA_OFFER, 0);
         free(fc->selection_text);
         fc->selection_text = text ? strdup(text) : NULL;
@@ -1677,7 +1675,7 @@ static inline fc_request fc_decode_locked(fake_compositor *fc, uint32_t object_i
         if (new_kind == (uint32_t)FC_K_XDG_SURFACE) {
             /* default configured = false */
         }
-        if (new_kind == (uint32_t)FC_K_POSITIONER) {
+        if (created && new_kind == (uint32_t)FC_K_POSITIONER) {
             memset(&created->pos, 0, sizeof(created->pos));
         }
         if (new_kind == (uint32_t)FC_K_TOPLEVEL) {
@@ -2411,6 +2409,27 @@ static inline bool fake_compositor_settle(fake_compositor *fc, pt_app *app) {
         }
     }
     return true;
+}
+
+/* Roundtrips until at least `min_count` requests of kind/opcode have been
+ * logged, or `max_roundtrips` is exhausted. A single roundtrip only flushes
+ * requests queued after its flush, so slow clients need more than one before
+ * a reply to an injected event becomes visible. */
+static inline bool fake_compositor_wait_request(fake_compositor *fc, pt_app *app,
+                                                uint32_t kind, uint16_t opcode,
+                                                size_t min_count, int max_roundtrips) {
+    if (!fc || !app) {
+        return false;
+    }
+    for (int i = 0; i < max_roundtrips; ++i) {
+        if (fake_compositor_count_requests(fc, kind, opcode) >= min_count) {
+            return true;
+        }
+        if (!fake_compositor_sync(fc, app)) {
+            return false;
+        }
+    }
+    return fake_compositor_count_requests(fc, kind, opcode) >= min_count;
 }
 
 /* Dispatches for up to timeout_ms, processing frames and configured events. */
