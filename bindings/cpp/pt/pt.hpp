@@ -2275,6 +2275,19 @@ class window {
  * popup whose window outlives it. The dismiss callback may destroy or re-show
  * the popup through the C API, but must not reset this wrapper from inside the
  * callback. */
+/* A popup is a child of the window passed to the constructor, and that window
+ * owns the native popup object.
+ *
+ * Lifetime requirement: destroy this wrapper before its parent window. When
+ * the window is destroyed, the C library cascades to and frees the C popup;
+ * this wrapper's destructor would then call pt_popup_destroy() on freed memory
+ * (and is_open()/content()/dismiss() would be dangling too). Keep the popup in
+ * a scope that ends before the window scope, or call reset() while the window
+ * is still alive. A wrapper constructed with no owner (the default state) is
+ * safe to destroy in any order.
+ *
+ * The content widget is likewise borrowed: it must stay alive while the popup
+ * is open, and the wrapper must not outlive the window that owns it. */
 class popup {
   public:
     popup() = default;
