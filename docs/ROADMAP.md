@@ -1681,7 +1681,7 @@ Same gate set as M18 section 4. Final status on `859233f`:
 - A 1.2.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
 
-## M20 - 1.3.0: wire verification and contract completion (delivered; tag pending)
+## M20 - 1.3.0: wire verification and contract completion (delivered; tagged 1.3.0)
 
 Goal: close the appendable items carried past M19 without touching the 2.0
 structural horizon. 1.3.0 stays append-only within `libpt.so.1`; new functions
@@ -1823,6 +1823,48 @@ Measured on the final gate tree `fafbcae` (`tools/ci.sh` exit 0):
   items are the human ones (freeze commit/tag and live-suite sign-off).
 - A 1.3.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
+
+## M21 - 1.4.0: input wire matrix completion and format polish (in progress)
+
+Goal: close the remaining appendable items carried past M20 without touching
+the 2.0 structural horizon. 1.4.0 stays append-only within `libpt.so.1`; the
+expected public-symbol delta is zero (SVGZ extends the existing loaders by
+content sniffing, the wire work is test infrastructure). The M18/M19/M20
+process repeats: parallel workstreams in isolated worktrees with a
+pre-registered test slot, integration, bilingual docs and the full gate before
+the tag.
+
+### Wave 1 (parallel workstreams)
+
+1. **Input wire completion** (`m21/wire-input`): extend the fake compositor
+   with `wl_touch` (down/up/motion/frame/cancel, multi-contact), tablet-v2
+   (seat/tool lifecycle, proximity, pressure, motion, buttons) and
+   `wl_data_device` drag traffic (enter/motion/drop/leave, offer
+   accept/receive/finish) plus primary-selection offers; replay into Pt's
+   touch-to-pointer/pinch, stylus and drag-and-drop paths with wire-parameter
+   assertions in the pre-registered `test_wire_input` slot. Test
+   infrastructure only; no public ABI change; existing facility consumers
+   stay green.
+2. **SVGZ icons** (`m21/svgz`): the existing icon loaders accept
+   gzip-compressed SVG (SVGZ) by content sniffing, inflating with the zlib
+   already linked; bounded decompression, `scalable/` `.svgz` lookup, honest
+   limits in the header contract. Zero new public functions intended.
+3. **Live IME resolution** (`m21/live-ime`): determine whether niri implements
+   the input-method protocol needed to bridge fcitx5 into text-input-v3. If
+   the existing harness can orchestrate it, record a live niri+fcitx5
+   composition run; otherwise document the definitive environment blocker.
+   No new runtime dependencies; KWin/Mutter/ibus remain absent.
+
+Workstream rules: as M20 — implementation + C tests land together;
+`test_wire_input` is pre-registered; `src/*.c` is wildcard-built; workstreams
+do not edit bindings, generated artifacts or public guides.
+
+### Completion criteria
+
+Same gate set as M20: `make check`, `make check-bindings`, `make perf-check`,
+live suites, `tools/ci.sh`, `tools/release-check.sh --full`, bilingual sync,
+three-language parity with an empty allowlist, ABI pins and an append-only
+diff against `1.3.0`, and a 1.4.0 release record.
 
 ## Post-1.0 horizons
 
