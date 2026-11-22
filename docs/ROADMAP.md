@@ -1990,7 +1990,7 @@ Decisions (researched 2026-11-22):
 - `padding`/`margin` stay physical; table/tree keep logical column order.
 
 Waves: W0 engine + conformance parallel with W1 direction API + bindings +
-baseline (564 functions / 926 entries); W2 UBA + single-line rendering; W3
+baseline (564 functions / 924 entries); W2 UBA + single-line rendering; W3
 wrap / text area; W4 editing (highest risk); W5a UI mirroring (non-paint)
 parallel with W2-W4; W5b paint chrome; W6 accessibility / examples / docs; W7
 conformance / fuzz / perf / LTR-byte-stable / live hardening. `paint.c` is the

@@ -33,8 +33,12 @@ compiled by Pt's Makefile as a single translation unit with
 `-DSB_CONFIG_UNITY`; the experimental `SB_CONFIG_EXPERIMENTAL_TEXT_API` is not
 enabled.
 
-Every vendored source and header retains its upstream Apache-2.0 copyright
-header verbatim. The files are otherwise byte-identical to the tag.
+Every hand-written vendored source and header retains its upstream Apache-2.0
+copyright header verbatim. The four generated lookup tables in `Source/Data/`
+(`BidiTypeLookup.c`, `GeneralCategoryLookup.c`, `PairingLookup.c`,
+`ScriptLookup.c`) carry only the generator banner upstream, not an Apache-2.0
+header; they are also byte-identical to the tag and are covered by the
+directory's `LICENSE`. All files are otherwise byte-identical to the tag.
 
 ## Unicode data version
 

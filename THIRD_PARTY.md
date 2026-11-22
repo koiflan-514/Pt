@@ -4,7 +4,9 @@ Pt vendors standard Wayland protocol XML files so that a source checkout builds
 without depending on the exact wayland-protocols installation layout, one
 header-only SVG library so that icons work without an external SVG dependency,
 the SheenBidi Unicode bidi engine, and the Unicode conformance test data.
-Each vendored file retains its upstream license header.
+Each vendored file keeps its upstream license terms. The generated SheenBidi
+lookup tables carry only the generator banner; the engine's `LICENSE` covers
+them.
 
 | Path | Upstream | License |
 | --- | --- | --- |
@@ -65,8 +67,10 @@ misrepresented as being the original software.
 - License: Apache License 2.0. Upstream ships no separate NOTICE file, so no
   NOTICE is reproduced; the license text is in `third_party/sheenbidi/LICENSE`.
 - Modifications: none. The sources and headers are byte-identical to the tag
-  apart from the added `PROVENANCE.md`, and keep their upstream Apache-2.0
-  headers. Pt compiles the engine as one unity translation unit
+  apart from the added `PROVENANCE.md`; hand-written files keep their upstream
+  Apache-2.0 headers and the generated `Source/Data/*Lookup.c` files keep the
+  upstream generator banner (see `PROVENANCE.md`). Pt compiles the engine as
+  one unity translation unit
   (`-DSB_CONFIG_UNITY`) with third-party warnings isolated in the Makefile.
   UCD tables are from Unicode 17.0.0.
 - Upgrade policy: see `third_party/sheenbidi/PROVENANCE.md`.
