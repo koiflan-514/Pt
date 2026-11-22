@@ -1681,7 +1681,7 @@ Same gate set as M18 section 4. Final status on `859233f`:
 - A 1.2.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
 
-## M20 - 1.3.0: wire verification and contract completion (delivered; gate pending)
+## M20 - 1.3.0: wire verification and contract completion (delivered; tag pending)
 
 Goal: close the appendable items carried past M19 without touching the 2.0
 structural horizon. 1.3.0 stays append-only within `libpt.so.1`; new functions
@@ -1690,18 +1690,18 @@ isolated worktrees with pre-registered test slots, an integration phase that
 regenerated the baseline and reference, then wire consumers, C++ hardening,
 bilingual docs and the full gate before the tag.
 
-Status (2026-11-22): delivered on the integration tree `c9f7385`. The tree
+Status (2026-11-22): delivered and gated on the final integration tree
+`fafbcae`; the annotated tag awaits the owner's freeze confirmation. The tree
 exports **556 functions / 910 baseline entries** (556 `func`, 282 `enum`, 43
 `callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1 `type`); `VERSION` and the
 four macros, README, reference and this milestone say 1.3.0. All 556
 declarations carry a since marker (412 × 1.0, 36 × 1.1, 106 × 1.2, 2 × 1.3) and
 the generated reference exposes it per entry. The 35 headless C suites total
-7,701 checks; the three-language wrappers cover the surface except the two new
-IME entry points, whose wrappers are owned by the in-flight bind-final branch
-(the docs tree measures C++ 837, Python 66, Java 676 checks). The bilingual
-check is green. The final `make check`, `tools/ci.sh` and
-`tools/release-check.sh --full` figures are recorded as `pending final gate run`
-until bind-final lands.
+7,702 checks plus the 454,380-check property sweep (36 executables); the
+three-language wrappers cover the whole surface at 556/556 with an empty
+allowlist (C++ 844, Python 67, Java 685 checks). `tools/ci.sh` exits 0 end to
+end and `tools/release-check.sh --full` is green apart from its two human open
+items; the measured figures are in [release.md](release.md).
 
 ### Wave 1 (parallel C workstreams, delivered)
 
@@ -1755,8 +1755,9 @@ and generated reference (556 functions / 910 entries).
   M19 live-seat item is closed at wire level. The five owned-string/buffer
   getters release through an RAII guard so `std::bad_alloc` cannot leak, and
   `pt::popup` documents that it must be destroyed before its parent window.
-  C++ passes 837 checks, Python 66 tests and Java 676 checks on this tree. The
-  integration merge is `c9f7385`.
+  At that integration merge (`c9f7385`) C++ passed 837 checks, Python 66 tests
+  and Java 676 checks; the final tree closes parity at 556/556 with C++ 844,
+  Python 67 and Java 685.
 
 ### Open items (carried past M20)
 
@@ -1791,21 +1792,37 @@ live suites, `tools/ci.sh`, `tools/release-check.sh --full`, bilingual sync,
 three-language parity with an empty allowlist, ABI pins and an append-only diff
 against `1.2.0`, and a 1.3.0 release record.
 
-Measured on this documentation tree before the final gate:
+Measured on the final gate tree `fafbcae` (`tools/ci.sh` exit 0):
 
-- `make check` C suites: 35 executables, 7,701 checks plus the 454,380-check
-  property suite; `test_fake_compositor` 275, `test_ime` 314, `test_popup` 466,
-  `test_icon` 330, `test_picker` 553, `test_abi` 13.
-- Binding suites: C++ 837 checks, Python 66 tests, Java 676 checks, 0 failures.
-  Parity is 554/556 pending the bind-final wrappers for the two IME functions;
-  the target is 556/556 with an empty allowlist.
+- `make check` C suites: 36 executables (35 suites plus the property sweep),
+  7,702 checks plus the 454,380-check property sweep; `test_fake_compositor`
+  275, `test_ime` 314, `test_popup` 466, `test_icon` 330, `test_picker` 553,
+  `test_abi` 13.
+- Binding suites: C++ 844 checks, Python 67 tests, Java 685 checks, 0 failures.
+  Parity is 556/556 with an empty allowlist.
 - Version/bilingual/reference: 1.3.0 agrees across `Makefile`, `base.h`, the
   README status line and the reference header; the reference names 556
   functions; the bilingual check reports 9 clean pairs.
-- `make perf-check`, live suites, `tools/ci.sh`, `tools/release-check.sh
-  --full`, the sanitizer/staged-install/tarball rows and the ABI diff against
-  1.2.0: **pending final gate run**; the 1.3.0 release record carries the same
-  marker until bind-final lands.
+- `make perf-check`: every ceiling holds; dense full paint 5.262 ms, 4K full
+  paint 8.469 ms, first frame 14.512 ms, idle 300 ms CPU 0.598 ms.
+- Live suites: `check-wayland` 48 checks under niri (focused-entry idle
+  25.1 ms over 5000 ms after one external-input retry); `check-typing` PASS
+  (ptdirect, text-input-v3).
+- Sanitizer/staged install/tarball: the separate `build/ci/sanitize` tree is
+  rebuilt from empty with ASan+UBSan (all 36 C binaries, `test_cpp` 844,
+  Python 67, Java 685; `ldd` shows libasan/libubsan); the staged install runs
+  the C/C++/Python/Java consumers and `uninstall`; two `dist` runs reproduce
+  the gate-time archive
+  `e989e6a4c837145f2bc92247cdad27ded9ffa500331518bf904693260ea36a62` and the
+  extracted archive rebuilds and passes `make check`.
+- ABI against 1.2.0: 554 → 556 exported `pt_*` symbols, 0 removed, 2 added
+  (`pt_window_show_input_panel`/`hide_input_panel`), no type changes among the
+  554 common symbols, SONAME `libpt.so.1` unchanged; `abidiff` is unavailable
+  on the reference machine, so the run is symbol-level.
+- `tools/release-check.sh --full`: every automated gate passes; the two open
+  items are the human ones (freeze commit/tag and live-suite sign-off).
+- A 1.3.0 release record: **delivered** in [release.md](release.md) with the
+  figures above and no `pending final gate run` markers left.
 
 ## Post-1.0 horizons
 

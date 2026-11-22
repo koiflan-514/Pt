@@ -346,11 +346,11 @@ surface: the generated reference derives its module list from `include/pt/*.h`,
 the baseline and reference agree on the 556-function / 910-entry surface, every
 declaration carries a since marker (412 × 1.0, 36 × 1.1, 106 × 1.2, 2 × 1.3),
 the bilingual pairs are in sync, the version is 1.3.0 everywhere, and the ABI
-pins cover the new enums, structs and limits. The three-language wrappers target
-556/556 with the reviewed allowlist empty; the documentation tree measures
-554/556 until the in-flight bind-final branch adds the two IME entry points, so
-the parity gate is not yet green on this branch. The remaining deviations are
-explicit and tracked in [ROADMAP.md](ROADMAP.md) under M20:
+pins cover the new enums, structs and limits. The three-language wrappers cover
+556/556 with the reviewed allowlist empty (C++ 844 checks, Python 67 tests, Java
+685 checks on the final gate tree `fafbcae`), so the parity gate is green. The
+remaining deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under
+M20:
 
 - **The SVG subset is documented, not complete.** `pt_icon_image` accepts SVG
   through vendored nanosvg and resolves hicolor `scalable/`, but SVGZ and text,
@@ -377,10 +377,12 @@ explicit and tracked in [ROADMAP.md](ROADMAP.md) under M20:
   `tests/wire_driver.c` delivers real wire key and pointer events to the C++,
   Python and Java callbacks in the headless gate; a physical-seat run remains
   optional live coverage.
-- **The 1.3.0 final gate is pending.** `make check` parity, `tools/ci.sh`,
-  `tools/release-check.sh --full`, the live suites, the sanitizer/staged-install
-  rows and the ABI diff against 1.2.0 are recorded as `pending final gate run`
-  in [release.md](release.md) until bind-final lands.
+- **The 1.3.0 gate is complete on `fafbcae`.** `make check` parity,
+  `tools/ci.sh` (exit 0, including the forced-clean ASan+UBSan pass, the staged
+  install, the reproducible tarball and the live suites) and
+  `tools/release-check.sh --full` are recorded with measured figures in
+  [release.md](release.md); only the human freeze/tag and live-suite sign-off
+  items remain open.
 
 The 1.1.0 work-in-progress also violated the section 2 landing rule (headers,
 bindings, reference and tests did not land atomically). That history is kept in

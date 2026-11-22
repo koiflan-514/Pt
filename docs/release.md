@@ -1310,11 +1310,12 @@ infrastructure and add no installable artifact.
   under niri and `check-typing` PASS (ptdirect).
 
 Because this record ships inside the archive, the digest above is the gate-time
-archive of `fafbcae`; editing this file necessarily changes the digest.
-`tools/ci.sh` proves the archive is reproducible by building `dist` twice and
-comparing the two digests, so the tagged tree reproduces its own digest exactly
-— re-measure there rather than trusting a digest quoted from inside the
-archive.
+archive of the `fafbcae` tree with the `tools/ci.sh` sanitizer fix applied and
+before this record was backfilled; editing this file necessarily changes the
+digest. `tools/ci.sh` proves the archive is reproducible by building `dist`
+twice and comparing the two digests, so the tagged tree reproduces its own
+digest exactly — re-measure there rather than trusting a digest quoted from
+inside the archive.
 
 ### Known issues
 
@@ -1335,6 +1336,19 @@ archive.
 - Pickers are locale-independent by design (explicit date picture, `.` decimal
   separator, hex colour). Localized month and group separators remain the
   application's responsibility.
+
+### Committed-tree digest
+
+The gate-time digest above was measured on the `fafbcae` tree with the
+`tools/ci.sh` fix applied, before this record was backfilled, and the edit
+changes the archive. For a reproducible reference on
+the record itself, the evidence commit `852983d` (this record backfilled, but
+before this digest note was added) produced
+`aa6eb67443b717be1d3510bb983f14c22e5dcb8409c4ef821a521a9762c94aab` on two
+consecutive `dist` runs. Adding this note changes `docs/release.md` once more,
+so the final tree necessarily has a different digest; that is the
+self-reference of shipping the record inside the archive, not nondeterminism.
+`make dist` on the tagged tree reproduces its own digest exactly.
 
 The annotated tag is created from the final gate tree once the owner confirms
 the freeze. `tools/release-check.sh --full` reports every automated gate green;
