@@ -245,6 +245,9 @@ static void test_table(pt_app *app) {
     pt_widget *head = header_cell(table, 0);
     pt_check(head != NULL);
     if (head) {
+        pt_widget_set_icon(head, pt_icon_document);
+    }
+    if (head) {
         pt_check(strcmp(pt_widget_get_text(head), "Name") == 0);
         pt_check(pt_widget_get_a11y_role(head) == pt_a11y_role_column_header);
     }

@@ -714,6 +714,7 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         }
     }
     float line_origin = entry_line_origin(entry, font, scale, combined, combined_len, area);
+    pt_bidi_base line_base = entry_paint_base(entry, combined, combined_len);
     if (has_selection && selection_end > selection_start) {
         pt_color selection = color_from_theme(entry, pt_theme_selection);
         if (combined_map) {
@@ -796,7 +797,17 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         int caret_h = 0;
         pt_widget_ime_rect(entry, &caret_x, &caret_y, &caret_w, &caret_h);
         pt_color accent = color_from_theme(entry, pt_theme_accent);
-        pt_canvas_fill_rect(canvas, (float)caret_x, (float)caret_y, 1.6f,
+        /* The IME rectangle marks the logical insertion point. In an RTL entry
+         * the logical start sits on the area's right edge, which is exclusive
+         * in the clip, so the bar would be clipped away entirely. Pull it just
+         * inside the box for painting; the IME rectangle keeps its right-edge
+         * anchor for input methods and click mapping. */
+        float caret_width = 1.6f;
+        float caret_left = (float)caret_x;
+        if (line_base == pt_bidi_base_rtl && caret_left + caret_width > area.x + area.w) {
+            caret_left = area.x + area.w - caret_width;
+        }
+        pt_canvas_fill_rect(canvas, caret_left, (float)caret_y, caret_width,
                             pt_max_float(6.0f, (float)caret_h - 2.0f), accent);
     }
     pt_canvas_pop_clip(canvas);

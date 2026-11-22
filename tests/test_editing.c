@@ -653,6 +653,111 @@ static void test_rtl_entry_anchor(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Count exact-colored pixels along one scanline. Chrome colours are opaque, so
+ * a fully covered fill yields the token value byte for byte. */
+static int scan_color_count(const pt_canvas *canvas, int y, int x0, int x1,
+                            pt_color want) {
+    int count = 0;
+    for (int x = x0; x <= x1; ++x) {
+        if (x >= 0 && x < canvas->width && pt_canvas_get_pixel(canvas, x, y) == want) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/* RTL entries anchor their line to the content box's right edge, which is the
+ * exclusive clip boundary: the caret at the logical start must be painted just
+ * inside it. Regression for the wave 5b right-anchoring change, which left the
+ * caret invisible for empty and start-of-line RTL entries. */
+static void test_rtl_entry_caret_pixels(pt_app *app) {
+    pt_window *window = pt_window_create(app, "rtl-entry-caret", 640, 260);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget_set_gap(root, 8.0f);
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_check(entry != NULL);
+    pt_widget_set_size(entry, 200.0f, 32.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget *ltr = pt_entry_create(root, "");
+    pt_check(ltr != NULL);
+    pt_widget_set_size(ltr, 200.0f, 32.0f);
+    pt_widget_set_align_self(ltr, pt_align_start);
+    pt_widget_set_text_direction(ltr, pt_text_direction_ltr);
+    pt_window_show(window);
+    pt_canvas *canvas = NULL;
+    paint(window, &canvas);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_color accent = pt_app_get_theme_color(app, pt_theme_accent);
+    const char *long_rtl = HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE
+                           HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE
+                           HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE;
+    float area_left = entry->x + entry->padding_left;
+    float area_right = entry->x + entry->width - entry->padding_right;
+    int mid = (int)(entry->y + entry->height * 0.5f);
+
+    pt_check(pt_widget_focus(entry));
+    window->caret_visible = true;
+    paint(window, &canvas);
+    /* Empty RTL entry: the caret sits one pixel inside the right edge ... */
+    pt_check(pt_canvas_get_pixel(canvas, (int)area_right - 1, mid) == accent);
+    /* ... and not on the visual left. */
+    pt_check(scan_color_count(canvas, mid, (int)area_left, (int)area_left + 10,
+                              accent) == 0);
+
+    /* Short text, cursor 0: the logical start is still the right edge. */
+    pt_widget_set_text(entry, HE_BET);
+    pt_entry_set_selection(entry, 0, 0);
+    window->caret_visible = true;
+    paint(window, &canvas);
+    pt_check(pt_canvas_get_pixel(canvas, (int)area_right - 1, mid) == accent);
+
+    /* Overlong text, cursor 0: scroll stays zero at the anchor, so the caret
+     * stays on the right edge. */
+    pt_widget_set_text(entry, long_rtl);
+    pt_entry_set_selection(entry, 0, 0);
+    window->caret_visible = true;
+    paint(window, &canvas);
+    pt_check(entry->scroll_x == 0.0f);
+    pt_check(pt_canvas_get_pixel(canvas, (int)area_right - 1, mid) == accent);
+
+    /* Home runs to the logical end (visual left), End returns to the start:
+     * the caret must be visible in both places. */
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    window->caret_visible = true;
+    paint(window, &canvas);
+    pt_check(entry->cursor == strlen(long_rtl));
+    pt_check(scan_color_count(canvas, mid, (int)area_left, (int)area_right,
+                              accent) > 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    window->caret_visible = true;
+    paint(window, &canvas);
+    pt_check(entry->cursor == 0);
+    pt_check(pt_canvas_get_pixel(canvas, (int)area_right - 1, mid) == accent);
+
+    /* LTR control: unchanged, the caret stays on the left edge. */
+    pt_check(pt_widget_focus(ltr));
+    window->caret_visible = true;
+    paint(window, &canvas);
+    int ltr_left = (int)(ltr->x + ltr->padding_left);
+    int ltr_right = (int)(ltr->x + ltr->width - ltr->padding_right);
+    int ltr_mid = (int)(ltr->y + ltr->height * 0.5f);
+    pt_check(pt_canvas_get_pixel(canvas, ltr_left, ltr_mid) == accent);
+    pt_check(pt_canvas_get_pixel(canvas, ltr_right - 1, ltr_mid) != accent);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.editing");
@@ -664,6 +769,7 @@ int main(void) {
     test_tree_rename(app);
     test_bidi_entry_editing(app);
     test_rtl_entry_anchor(app);
+    test_rtl_entry_caret_pixels(app);
     pt_app_destroy(app);
     return pt_test_finish("editing");
 }
