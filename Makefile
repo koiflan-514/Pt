@@ -540,3 +540,8 @@ run-java-input-panel: java-example
 
 check-ime-live: $(TEST_BIN)/ime_live_probe $(TEST_BIN)/vkbd_type
 	BUILD=$(abspath $(BUILD)) tools/live-ime.sh
+
+.PHONY: check-ltr-compat
+
+check-ltr-compat:
+	$(abspath tools/ltr-compat.sh)
