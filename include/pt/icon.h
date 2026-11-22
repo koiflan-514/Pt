@@ -30,14 +30,35 @@
  * caller drops its own reference (whichever comes first).
  *
  * Errors. Loads and lookups return NULL and set pt_get_last_error on failure:
- * missing or unreadable files, corrupt or unsupported PNG data, dimensions
- * above PT_ICON_MAX_DIMENSION, and theme names that do not resolve. A failed
- * lookup never crashes or aborts. Setters return void and ignore NULL objects.
+ * missing or unreadable files, corrupt, empty or unsupported PNG/SVG data,
+ * dimensions above PT_ICON_MAX_DIMENSION, SVG documents with no drawable
+ * shape, and theme names that do not resolve. A failed lookup never crashes or
+ * aborts. Setters return void and ignore NULL objects.
  *
- * PNG support. 8-bit non-interlaced colour types 0/2/3/4/6, decoded through the
- * same bounded decoder as clipboard images (16 MiB input cap, 8192x8192 decoder
- * cap) with an icon-specific PT_ICON_MAX_DIMENSION cap applied before decoding.
- * SVG is deferred: it needs a new dependency and is not part of 1.2.
+ * Image support. The loader sniffs the payload: after an optional UTF-8 BOM and
+ * ASCII whitespace, a '<' that opens `<svg` or an `<?xml` declaration selects
+ * the SVG path; every other byte stream stays on the byte-for-byte PNG path.
+ *
+ * PNG. 8-bit non-interlaced colour types 0/2/3/4/6, decoded through the same
+ * bounded decoder as clipboard images (16 MiB input cap, 8192x8192 decoder cap)
+ * with an icon-specific PT_ICON_MAX_DIMENSION cap applied before decoding.
+ *
+ * SVG. Parsed by the vendored zlib-licensed nanosvg and rasterised at each
+ * requested device size into the same per-size/scale cache. Supported: rect,
+ * circle, ellipse, line, polyline, polygon and path (including arcs), groups,
+ * transforms, fill and stroke paints, stroke width/cap/join/dash, opacity,
+ * fill-rule, linear and radial gradients, defs, inline `style="..."`
+ * declarations and simple `.class` rules from a `<style>` element. Not
+ * supported: text, images, filters, masks, clipPath, use/symbol references,
+ * markers, animation and the full CSS cascade (id, type and descendant
+ * selectors). Unsupported elements are ignored by the parser; their
+ * descendants are still visited, so a `<text>` child shape would draw. A
+ * document with no usable intrinsic size, an empty document or a truncated
+ * document with no complete shape is rejected with an error. SVG source is
+ * capped at the same 16 MiB input limit and intrinsic dimensions at
+ * PT_ICON_MAX_DIMENSION. Rasterisation preserves the intrinsic aspect ratio
+ * and centres the artwork in the requested pixel box (PNG, by contrast, is
+ * resized to the exact box).
  *
  * Windows. pt_window_set_icon is best effort. When the compositor advertises
  * xdg_toplevel_icon_v1, Pt rasterises the image to a dedicated, immutable
@@ -60,7 +81,8 @@
 extern "C" {
 #endif
 
-/* Largest accepted source dimension on either side. Checked from the PNG IHDR
+/* Largest accepted source dimension on either side, for PNG pixels and for an
+ * SVG's intrinsic width/height and raster request. Checked from the PNG IHDR
  * before the full decode, so an oversized header fails without allocating a
  * frame-sized buffer. */
 #define PT_ICON_MAX_DIMENSION 4096
@@ -86,20 +108,21 @@ extern "C" {
 /* Opaque reference-counted raster icon. */
 typedef struct pt_icon_image pt_icon_image;
 
-/* Loads a PNG file. The file must be a regular file no larger than the 16 MiB
- * decoder cap. Since 1.2. */
+/* Loads a PNG or SVG file, sniffed by content. The file must be a regular file
+ * no larger than the 16 MiB decoder cap. Since 1.2. */
 pt_api pt_icon_image *pt_icon_image_load_file(const char *path);
 
-/* Loads PNG bytes from memory. The data is copied during the call; the caller
- * keeps ownership of the input buffer. Since 1.2. */
+/* Loads PNG or SVG bytes from memory, sniffed by content. The data is copied
+ * during the call; the caller keeps ownership of the input buffer. Since 1.2. */
 pt_api pt_icon_image *pt_icon_image_load_memory(const void *data, size_t size);
 
 /* Looks a name up in the hicolor theme, following the XDG base directories
  * ($XDG_DATA_HOME/icons, $XDG_DATA_DIRS/icons) plus ~/.icons. `size` is the
  * preferred logical size in pixels and selects the closest available size.
- * index.theme is parsed for its Directories/Size fields; without a usable
- * index.theme the NxN directories are scanned. Only PNG files are considered;
- * SVG is deferred. A name containing a path separator, an empty name or a miss
+ * index.theme is parsed for its Directories/Size/Type fields; without a usable
+ * index.theme the NxN and scalable directories are scanned. Fixed size
+ * directories are searched for .png files, scalable directories for .svg first
+ * and .png second. A name containing a path separator, an empty name or a miss
  * returns NULL. Since 1.2. */
 pt_api pt_icon_image *pt_icon_image_from_name(const char *name, int size);
 

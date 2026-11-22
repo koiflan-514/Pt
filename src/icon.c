@@ -1,6 +1,6 @@
 /*
- * Raster icons: bounded PNG loading, hicolor lookup, a bounded per-size cache
- * and the button/window icon slots.
+ * Raster icons: bounded PNG and SVG loading (content-sniffed), hicolor lookup,
+ * a bounded per-size cache and the button/window icon slots.
  * Copyright 2026 The Pt Authors.
  * Licensed under the Apache License, Version 2.0.
  */
@@ -34,6 +34,11 @@ struct pt_icon_image {
     int width;
     int height;
     pt_color *pixels;
+    /* SVG sources keep the original bytes: nanosvg's parser destroys its input,
+     * so every rasterisation parses a fresh copy. PNG handles leave this NULL
+     * and own the decoded pixels instead. */
+    unsigned char *svg_data;
+    size_t svg_size;
     pt_icon_cache_entry *entries;
     unsigned int entry_count;
 };
@@ -227,7 +232,10 @@ const uint32_t *pt_icon_image_raster(pt_icon_image *image, int pixel_width, int 
     if (!icon_cache_make_room(image, pixel_count)) {
         return NULL;
     }
-    uint32_t *pixels = icon_resize(image, pixel_width, pixel_height);
+    uint32_t *pixels = image->svg_data
+                           ? (uint32_t *)pt_svg_rasterize(image->svg_data, image->svg_size,
+                                                          pixel_width, pixel_height)
+                           : icon_resize(image, pixel_width, pixel_height);
     if (!pixels) {
         return NULL;
     }
@@ -387,10 +395,64 @@ static pt_icon_image *icon_image_wrap(pt_color *pixels, int width, int height) {
     return image;
 }
 
+static pt_icon_image *icon_image_wrap_svg(const uint8_t *data, size_t size, int width,
+                                          int height) {
+    if (!data || size == 0 || width <= 0 || height <= 0) {
+        return NULL;
+    }
+    unsigned char *copy = pt_alloc(size);
+    memcpy(copy, data, size);
+    pt_icon_image *image = pt_alloc_zeroed(1, sizeof(*image));
+    image->references = 1;
+    image->width = width;
+    image->height = height;
+    image->svg_data = copy;
+    image->svg_size = size;
+    return image;
+}
+
+/* Content sniffing for the shared loader. PNG's signature never starts with
+ * '<', so a payload whose first significant byte (after an optional UTF-8 BOM
+ * and ASCII whitespace) is '<' and that mentions the '<svg' root or opens with
+ * an '<?xml' declaration takes the SVG path. Everything else stays on the
+ * byte-for-byte PNG path. */
+static bool icon_data_is_svg(const uint8_t *data, size_t size) {
+    size_t start = 0;
+    if (size >= 3u && data[0] == 0xEFu && data[1] == 0xBBu && data[2] == 0xBFu) {
+        start = 3u;
+    }
+    while (start < size) {
+        uint8_t ch = data[start];
+        if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\v' && ch != '\f' && ch != '\r') {
+            break;
+        }
+        ++start;
+    }
+    if (start >= size || data[start] != '<') {
+        return false;
+    }
+    size_t remaining = size - start;
+    size_t probe = remaining < 4096u ? remaining : 4096u;
+    for (size_t i = 0; i + 4u <= probe; ++i) {
+        if (memcmp(data + start + i, "<svg", 4u) == 0) {
+            return true;
+        }
+    }
+    return remaining >= 5u && memcmp(data + start, "<?xml", 5u) == 0;
+}
+
 pt_icon_image *pt_icon_image_load_memory(const void *data, size_t size) {
     if (!data || size == 0 || size > pt_icon_input_max_bytes) {
-        pt_set_error("invalid or oversized icon PNG data");
+        pt_set_error("invalid or oversized icon data");
         return NULL;
+    }
+    if (icon_data_is_svg(data, size)) {
+        int width = 0;
+        int height = 0;
+        if (!pt_svg_measure(data, size, &width, &height)) {
+            return NULL;
+        }
+        return icon_image_wrap_svg(data, size, width, height);
     }
     int peek_width = 0;
     int peek_height = 0;
@@ -476,6 +538,7 @@ void pt_icon_image_destroy(pt_icon_image *image) {
         icon_cache_evict(image->entries);
     }
     free(image->pixels);
+    free(image->svg_data);
     free(image);
 }
 
@@ -492,6 +555,7 @@ int pt_icon_image_height(const pt_icon_image *image) {
 typedef struct icon_theme_dir {
     char name[256];
     int size;
+    bool scalable;
 } icon_theme_dir;
 
 static bool icon_path_join(char *out, size_t capacity, const char *a, const char *b,
@@ -592,6 +656,11 @@ static int icon_theme_dir_compare(const void *left, const void *right, void *req
     if (da != db) {
         return da < db ? -1 : 1;
     }
+    /* At the same distance prefer a fixed size: scalable entries are the
+     * fallback when no fixed raster matches the request. */
+    if (a->scalable != b->scalable) {
+        return a->scalable ? 1 : -1;
+    }
     if (a->size >= want && b->size < want) {
         return -1;
     }
@@ -601,22 +670,54 @@ static int icon_theme_dir_compare(const void *left, const void *right, void *req
     return a->size < b->size ? -1 : (a->size > b->size ? 1 : 0);
 }
 
-static void icon_theme_add_dir(icon_theme_dir *dirs, int *count, const char *name, int size) {
-    if (*count >= (int)PT_ICON_SEARCH_DIRS_MAX * 2 || size <= 0 || !name || !*name ||
-        strlen(name) >= sizeof(dirs[0].name)) {
+static void icon_theme_add_dir(icon_theme_dir *dirs, int *count, const char *name, int size,
+                               bool scalable) {
+    if (*count >= (int)PT_ICON_SEARCH_DIRS_MAX * 2 || (size <= 0 && !scalable) || !name ||
+        !*name || strlen(name) >= sizeof(dirs[0].name)) {
         return;
     }
     for (int i = 0; i < *count; ++i) {
         if (strcmp(dirs[i].name, name) == 0) {
+            if (scalable) {
+                dirs[i].scalable = true;
+            }
+            if (dirs[i].size <= 0 && size > 0) {
+                dirs[i].size = size;
+            }
             return;
         }
     }
     snprintf(dirs[*count].name, sizeof(dirs[*count].name), "%s", name);
     dirs[*count].size = size;
+    dirs[*count].scalable = scalable;
     ++*count;
 }
 
-/* Minimal index.theme reader: Directories= and one Size= per section. */
+/* Minimal index.theme reader: Directories= and one section per size class. A
+ * fixed section carries Size=; a scalable section carries Type=Scalable and
+ * usually Size/MinSize/MaxSize, any of which can supply the sort key. */
+typedef struct icon_theme_section {
+    char name[256];
+    int size;
+    int min_size;
+    int max_size;
+    bool scalable;
+} icon_theme_section;
+
+/* Commits one section. Size wins, then MaxSize, then MinSize; a scalable
+ * directory may omit all three and still participate, sorted behind fixed
+ * entries at the same distance. */
+static void icon_theme_commit_section(const icon_theme_section *section,
+                                      icon_theme_dir *dirs, int *count) {
+    if (!section->name[0]) {
+        return;
+    }
+    int size = section->size > 0 ? section->size
+                                 : (section->max_size > 0 ? section->max_size
+                                                          : section->min_size);
+    icon_theme_add_dir(dirs, count, section->name, size, section->scalable);
+}
+
 static int icon_theme_read_index(const char *theme_path, icon_theme_dir *dirs) {
     char path[PT_ICON_PATH_MAX];
     if (!icon_path_join(path, sizeof(path), theme_path, "/index.theme", NULL, NULL)) {
@@ -632,7 +733,7 @@ static int icon_theme_read_index(const char *theme_path, icon_theme_dir *dirs) {
     int count = 0;
     int pending_count = 0;
     char pending[PT_ICON_SEARCH_DIRS_MAX][256];
-    char section[256] = {0};
+    icon_theme_section section = {0};
     while (fgets(line, sizeof(line), file)) {
         char *text = line;
         while (*text == ' ' || *text == '\t') {
@@ -650,7 +751,9 @@ static int icon_theme_read_index(const char *theme_path, icon_theme_dir *dirs) {
             char *close = strchr(text, ']');
             if (close) {
                 *close = '\0';
-                snprintf(section, sizeof(section), "%s", text + 1);
+                icon_theme_commit_section(&section, dirs, &count);
+                memset(&section, 0, sizeof(section));
+                snprintf(section.name, sizeof(section.name), "%s", text + 1);
             }
             continue;
         }
@@ -666,12 +769,19 @@ static int icon_theme_read_index(const char *theme_path, icon_theme_dir *dirs) {
         }
         if (strcmp(key, "Directories") == 0) {
             snprintf(directories, sizeof(directories), "%s", value);
-        } else if (strcmp(key, "Size") == 0 && section[0]) {
-            int size = atoi(value);
-            icon_theme_add_dir(dirs, &count, section, size);
+        } else if (section.name[0] && strcmp(key, "Size") == 0) {
+            section.size = atoi(value);
+        } else if (section.name[0] && strcmp(key, "MinSize") == 0) {
+            section.min_size = atoi(value);
+        } else if (section.name[0] && strcmp(key, "MaxSize") == 0) {
+            section.max_size = atoi(value);
+        } else if (section.name[0] && strcmp(key, "Type") == 0 &&
+                   strcmp(value, "Scalable") == 0) {
+            section.scalable = true;
         }
     }
     fclose(file);
+    icon_theme_commit_section(&section, dirs, &count);
     if (count > 0) {
         return count;
     }
@@ -699,9 +809,13 @@ static int icon_theme_read_index(const char *theme_path, icon_theme_dir *dirs) {
     }
     for (int i = 0; i < pending_count; ++i) {
         const char *name = pending[i];
+        if (strcmp(name, "scalable") == 0) {
+            icon_theme_add_dir(dirs, &count, name, 0, true);
+            continue;
+        }
         const char *x = strchr(name, 'x');
         int size = x ? atoi(name) : 0;
-        icon_theme_add_dir(dirs, &count, name, size);
+        icon_theme_add_dir(dirs, &count, name, size, false);
     }
     return count;
 }
@@ -715,6 +829,16 @@ static int icon_theme_scan(const char *theme_path, icon_theme_dir *dirs) {
     struct dirent *entry;
     while ((entry = readdir(dir)) && count < (int)PT_ICON_SEARCH_DIRS_MAX * 2) {
         if (entry->d_name[0] == '.') {
+            continue;
+        }
+        if (strcmp(entry->d_name, "scalable") == 0) {
+            char probe[PT_ICON_PATH_MAX];
+            if (icon_path_join(probe, sizeof(probe), theme_path, "/", entry->d_name, NULL)) {
+                struct stat info;
+                if (stat(probe, &info) == 0 && S_ISDIR(info.st_mode)) {
+                    icon_theme_add_dir(dirs, &count, entry->d_name, 0, true);
+                }
+            }
             continue;
         }
         const char *x = strchr(entry->d_name, 'x');
@@ -734,46 +858,81 @@ static int icon_theme_scan(const char *theme_path, icon_theme_dir *dirs) {
         if (stat(probe, &info) != 0 || !S_ISDIR(info.st_mode)) {
             continue;
         }
-        icon_theme_add_dir(dirs, &count, entry->d_name, (int)size);
+        icon_theme_add_dir(dirs, &count, entry->d_name, (int)size, false);
     }
     closedir(dir);
     return count;
+}
+
+/* Builds `<theme>/<dir>[/<context>]/<name><extension>` and loads it. */
+static pt_icon_image *icon_theme_try(const char *theme_path, const char *dir,
+                                     const char *context, const char *name,
+                                     const char *extension) {
+    char path[PT_ICON_PATH_MAX];
+    if (!icon_path_join(path, sizeof(path), theme_path, "/", dir, NULL)) {
+        return NULL;
+    }
+    size_t length = strlen(path);
+    if (context) {
+        if (!icon_path_join(path + length, sizeof(path) - length, "/", context, NULL, NULL)) {
+            return NULL;
+        }
+        length = strlen(path);
+    }
+    if (!icon_path_join(path + length, sizeof(path) - length, "/", name, extension, NULL)) {
+        return NULL;
+    }
+    return pt_icon_image_load_file(path);
 }
 
 static pt_icon_image *icon_theme_load(const char *theme_path, const char *name,
                                       const icon_theme_dir *dirs, int dir_count, bool scanned) {
     static const char *const contexts[] = {"apps", "devices", "places", "mimetypes", "status",
                                            "actions"};
+    static const char *const scalable_extensions[] = {".svg", ".png"};
     for (int i = 0; i < dir_count; ++i) {
-        char path[PT_ICON_PATH_MAX];
+        const icon_theme_dir *entry = &dirs[i];
         if (!scanned) {
-            if (!icon_path_join(path, sizeof(path), theme_path, "/", dirs[i].name, NULL)) {
-                continue;
-            }
-            if (!icon_path_join(path + strlen(path), sizeof(path) - strlen(path), "/", name,
-                                ".png", NULL)) {
-                continue;
-            }
-            pt_icon_image *image = pt_icon_image_load_file(path);
-            if (image) {
-                return image;
+            if (entry->scalable) {
+                for (size_t e = 0; e < 2; ++e) {
+                    pt_icon_image *image = icon_theme_try(theme_path, entry->name, NULL, name,
+                                                          scalable_extensions[e]);
+                    if (image) {
+                        return image;
+                    }
+                }
+            } else {
+                pt_icon_image *image = icon_theme_try(theme_path, entry->name, NULL, name, ".png");
+                if (image) {
+                    return image;
+                }
             }
         } else {
             for (size_t c = 0; c < sizeof(contexts) / sizeof(contexts[0]); ++c) {
-                if (!icon_path_join(path, sizeof(path), theme_path, "/", dirs[i].name, NULL)) {
-                    continue;
+                if (entry->scalable) {
+                    for (size_t e = 0; e < 2; ++e) {
+                        pt_icon_image *image = icon_theme_try(theme_path, entry->name, contexts[c],
+                                                              name, scalable_extensions[e]);
+                        if (image) {
+                            return image;
+                        }
+                    }
+                } else {
+                    pt_icon_image *image = icon_theme_try(theme_path, entry->name, contexts[c],
+                                                          name, ".png");
+                    if (image) {
+                        return image;
+                    }
                 }
-                if (!icon_path_join(path + strlen(path), sizeof(path) - strlen(path), "/",
-                                    contexts[c], NULL, NULL)) {
-                    continue;
-                }
-                if (!icon_path_join(path + strlen(path), sizeof(path) - strlen(path), "/", name,
-                                    ".png", NULL)) {
-                    continue;
-                }
-                pt_icon_image *image = pt_icon_image_load_file(path);
-                if (image) {
-                    return image;
+            }
+            /* A user theme may place the SVG directly in scalable/. */
+            if (entry->scalable) {
+                for (size_t e = 0; e < 2; ++e) {
+                    pt_icon_image *image = icon_theme_try(theme_path, entry->name, NULL, name,
+                                                          scalable_extensions[e]);
+                    if (image) {
+                        return image;
+                    }
                 }
             }
         }
