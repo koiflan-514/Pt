@@ -367,7 +367,7 @@ int main(void) {
         pt_icon_image *found = pt_icon_image_from_name(THEME_ICON_NAME, 24);
         if (found) {
             pt_button_set_icon_image(state.lookup_button, found);
-            char text[224];
+            char text[PT_ICON_PATH_MAX + 128];
             snprintf(text, sizeof(text),
                      "hicolor lookup: %s at %dx%d through $XDG_DATA_HOME=%s",
                      THEME_ICON_NAME, pt_icon_image_width(found), pt_icon_image_height(found),
