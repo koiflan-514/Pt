@@ -56,6 +56,19 @@ static float scrollbar_x(const pt_widget *widget) {
     return widget->x + widget->width - 8.0f;
 }
 
+/* Chrome labels start at the layout's leading edge, not the paragraph's: an
+ * English file name in an RTL tree still hugs the right, next to its chevron.
+ * Bidi reordering inside the line is handled by the text pipeline. */
+static pt_text_align chrome_text_align(const pt_widget *widget, const char *text,
+                                       size_t len) {
+    if (!paint_rtl(widget)) {
+        return pt_text_align_start;
+    }
+    return pt_widget_text_base(widget, text, len) == pt_bidi_base_rtl
+               ? pt_text_align_start
+               : pt_text_align_end;
+}
+
 static void paint_focus_ring(pt_canvas *canvas, const pt_widget *widget) {
     if (!widget->focused || !widget->enabled) {
         return;
@@ -1227,7 +1240,8 @@ static void paint_menu_item(pt_canvas *canvas, pt_widget *item) {
     /* The label starts on the reading edge and the shortcut sits on the
      * trailing edge: right in LTR, left in RTL. */
     float label_x = rtl ? area.x + shortcut_width + gap : area.x;
-    paint_single_line(canvas, item, label, text_color(item), pt_text_align_start, true, 0.0f,
+    paint_single_line(canvas, item, label, text_color(item),
+                      chrome_text_align(item, label, strlen(label)), true, 0.0f,
                       (pt_rect){label_x, area.y, label_width, area.h});
     if (shortcut_width > 0.0f && shortcut_font) {
         pt_color muted = color_from_theme(item, pt_theme_text_muted);
@@ -1812,8 +1826,11 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
                     pt_max_float(0.0f, cell->width - cell->padding_left -
                                            cell->padding_right - icon_space),
                     cell->height};
-    paint_single_line(canvas, cell, cell->text ? cell->text : "", text_color(cell),
-                      cell->text_align, true, 0.0f, area);
+    const char *title = cell->text ? cell->text : "";
+    pt_text_align title_align = cell->text_align == pt_text_align_start
+                                    ? chrome_text_align(cell, title, strlen(title))
+                                    : cell->text_align;
+    paint_single_line(canvas, cell, title, text_color(cell), title_align, true, 0.0f, area);
     if (cell->icon != pt_icon_none) {
         pt_color icon_color = color_from_theme(cell, pt_theme_accent);
         float icon_x = rtl ? cell->x + cell->padding_right + 7.0f
@@ -1875,8 +1892,11 @@ static void paint_table_cell(pt_canvas *canvas, pt_widget *cell) {
                     pt_max_float(0.0f, cell->width - cell->padding_left -
                                            cell->padding_right - icon_space),
                     cell->height};
-    paint_single_line(canvas, cell, cell->text ? cell->text : "", text_color(cell),
-                      cell->text_align, true, 0.0f, area);
+    const char *text = cell->text ? cell->text : "";
+    pt_text_align align = cell->text_align == pt_text_align_start
+                              ? chrome_text_align(cell, text, strlen(text))
+                              : cell->text_align;
+    paint_single_line(canvas, cell, text, text_color(cell), align, true, 0.0f, area);
 }
 
 static void paint_tree(pt_canvas *canvas, pt_widget *tree) {
@@ -1936,8 +1956,8 @@ static void paint_tree_row(pt_canvas *canvas, pt_widget *row) {
     pt_rect area = {area_x, row->y,
                     pt_max_float(0.0f, row->width - offset - 36.0f),
                     row->height};
-    paint_single_line(canvas, row, text, text_color(row), pt_text_align_start, true, 0.0f,
-                      area);
+    paint_single_line(canvas, row, text, text_color(row),
+                      chrome_text_align(row, text, strlen(text)), true, 0.0f, area);
 }
 
 static void paint_tabs_strip(pt_canvas *canvas, pt_widget *tabs) {
@@ -2008,10 +2028,22 @@ static void paint_sidebar(pt_canvas *canvas, pt_widget *sidebar) {
     }
     float line_height = font->line_height / scale;
     float baseline = inner.y + 24.0f + line_height * 0.5f + font->ascent / scale;
-    pt_canvas_draw_text_line(canvas, font, state->header, strlen(state->header),
-                             inner.x + 16.0f, baseline,
-                             pt_max_float(0.0f, inner.w - 32.0f), pt_text_align_start,
-                             color_from_theme(sidebar, pt_theme_text_muted), true);
+    if (paint_rtl(sidebar)) {
+        pt_canvas_draw_text_line_bidi(canvas, font, state->header,
+                                      strlen(state->header), inner.x + 16.0f, baseline,
+                                      pt_max_float(0.0f, inner.w - 32.0f),
+                                      chrome_text_align(sidebar, state->header,
+                                                        strlen(state->header)),
+                                      color_from_theme(sidebar, pt_theme_text_muted), true,
+                                      paint_text_base(sidebar, state->header,
+                                                      strlen(state->header)));
+    } else {
+        pt_canvas_draw_text_line(canvas, font, state->header, strlen(state->header),
+                                 inner.x + 16.0f, baseline,
+                                 pt_max_float(0.0f, inner.w - 32.0f),
+                                 pt_text_align_start,
+                                 color_from_theme(sidebar, pt_theme_text_muted), true);
+    }
 }
 
 static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
@@ -2059,8 +2091,9 @@ static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
                         item->height};
         pt_color color = item->row_selected ? color_from_theme(item, pt_theme_text)
                                             : text_color(item);
-        paint_single_line(canvas, item, item->text ? item->text : "", color,
-                          pt_text_align_start, true, 0.0f, area);
+        const char *label = item->text ? item->text : "";
+        paint_single_line(canvas, item, label, color,
+                          chrome_text_align(item, label, strlen(label)), true, 0.0f, area);
     }
 }
 
