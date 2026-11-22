@@ -1508,7 +1508,7 @@ P1 — required before the tag, may land alongside P0:
   They are already declared, implemented and C-tested; only the wrappers and
   their dispatch tests remain before the tag.
 
-## M19 - 1.2.0: common-but-missing surface (delivered; tag pending)
+## M19 - 1.2.0: common-but-missing surface (delivered; tagged 1.2.0)
 
 Goal: ship the first post-1.0 horizon wave. 1.2.0 stays append-only within
 `libpt.so.1`; every new function follows [standards.md](standards.md) section 2.
@@ -1668,6 +1668,59 @@ Same gate set as M18 section 4. Final status on `859233f`:
 - A 1.2.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
 
+## M20 - 1.3.0: wire verification and contract completion (in progress)
+
+Goal: close the appendable items carried past M19 without touching the 2.0
+structural horizon. 1.3.0 stays append-only within `libpt.so.1`; new functions
+are marked since 1.3. The M18/M19 process repeats: parallel C workstreams in
+isolated worktrees with pre-registered test slots, an integration phase that
+regenerates the baseline and reference, then wrappers, examples, bilingual docs
+and the full gate before the tag.
+
+### Wave 1 (parallel C workstreams)
+
+1. **Fake-compositor replay facility** (`m20/fake-compositor`): an in-process
+   test compositor — a server-side `wl_display` on a private socket that the
+   library connects to as an ordinary client — advertising the globals Pt uses
+   (xdg-shell, wl_seat, wl_data_device_manager, text-input, xdg-decoration,
+   xdg-toplevel-icon) and injecting wire events: key/pointer sequences, popup
+   configure/repositioned/popup_done, selection offers. First consumers replay
+   the app-owned popup's native placement path and record the toplevel-icon
+   submission. Test infrastructure only; no public ABI change.
+2. **IME visual completion** (`m20/ime-visuals`): render `preedit_hint` ranges
+   in the preedit presentation and add the input-panel requests deferred from
+   M18 (`show_input_panel`/`hide_input_panel`, since 1.3), completing the M18
+   IME contract's two visual items.
+3. **SVG icons** (`m20/svg-icons`): vendor nanosvg (zlib, header-only) as the
+   research recommended; `pt_icon_image` accepts SVG content alongside PNG,
+   hicolor `scalable/` lookup resolves, rasterization feeds the existing
+   per-size/scale cache. The supported SVG subset is documented honestly;
+   unsupported features follow a documented rejection/ignore rule.
+4. **Spin-button accessibility role** (`m20/a11y-spin`): append
+   `pt_a11y_role_spin_button`, report it from the number picker and map it in
+   the AT-SPI bridge — the minor addition the 1.2 record anticipated.
+
+Workstream rules: as M19 — header + implementation + C tests + ABI pins land
+together; `test_fake_compositor` is pre-registered; `src/*.c` is
+wildcard-built; workstreams do not edit bindings, generated artifacts, the
+Makefile or public guides.
+
+### Wave 2 (after wave 1 integrates)
+
+- Wire consumers on the fake compositor: IME text-input replay, raw key/pointer
+  dispatch into wrapped callbacks in all three bindings (the M19 live-seat
+  item, closed at wire level), and the remaining popup/decoration sequences.
+- C++ binding hardening: close the `bad_alloc` leak windows in the owned-string
+  and owned-buffer getters and document the `pt::popup` parent-window lifetime
+  constraint.
+
+### Completion criteria
+
+Same gate set as M19: `make check`, `make check-bindings`, `make perf-check`,
+live suites, `tools/ci.sh`, `tools/release-check.sh --full`, bilingual sync,
+three-language parity with an empty allowlist, ABI pins and an append-only
+diff against `1.2.0`, and a 1.3.0 release record.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
@@ -1675,7 +1728,7 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 [compositor-matrix.md](compositor-matrix.md); the engineering rules are in
 [standards.md](standards.md).
 
-### 1.2 — common but missing (delivered in M19; tag pending)
+### 1.2 — common but missing (delivered in M19; tagged 1.2.0)
 
 - Application-owned popups via the existing `xdg_popup` backend (content widget,
   anchor, dismiss, reposition). This is the prerequisite for searchable select

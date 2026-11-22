@@ -75,7 +75,7 @@ TEST_NAMES := test_core test_abi test_canvas test_font test_layout test_widget t
 	test_table test_tree test_navigation test_property test_theme test_editing test_visuals \
 	test_combobox test_selection \
 	test_popup test_font_fallback test_clipboard_media test_column_persist \
-	test_picker test_icon
+	test_picker test_icon test_fake_compositor
 TEST_BINS := $(addprefix $(TEST_BIN)/,$(TEST_NAMES))
 TEST_OBJECTS := $(CORE_OBJECTS)
 TEST_DEPS := $(CORE_OBJECTS:.o=.d)
