@@ -454,7 +454,9 @@ bool pt_icon_window_buffer_geometry(int source_width, int source_height, float s
 /* Bounded SVG icon integration (svg.c). Both functions parse a private copy of
  * the document through the vendored nanosvg parser, reject empty documents,
  * documents without a usable intrinsic size, documents above
- * PT_ICON_MAX_DIMENSION and inputs above the 16 MiB icon cap. The rasteriser
+ * PT_ICON_MAX_DIMENSION and inputs above the 16 MiB icon cap. The icon loader
+ * inflates an SVGZ container before calling these, so both functions only ever
+ * see plain SVG text. The rasteriser
  * preserves the intrinsic aspect ratio, centres the artwork in the requested
  * device-pixel box and returns caller-owned premultiplied 0xAARRGGBB pixels
  * (release with pt_free); NULL is returned with the error set on failure. */
