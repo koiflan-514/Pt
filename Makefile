@@ -476,3 +476,11 @@ run-java-popup-demo: java-example
 run-java-icon-button: java-example
 	$(JAVA) --enable-native-access=ALL-UNNAMED -Dpt.library=$(abspath $(BUILD)/libpt.so) \
 		-cp $(BUILD)/java IconButton
+
+run-svg-icon: $(EXAMPLES)/c/svg_icon
+	$(EXAMPLES)/c/svg_icon
+
+run-input-panel: $(EXAMPLES)/c/input_panel
+	$(EXAMPLES)/c/input_panel
+
+.PHONY: run-svg-icon run-input-panel
