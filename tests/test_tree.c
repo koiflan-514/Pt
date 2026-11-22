@@ -287,6 +287,77 @@ static void test_hierarchy(pt_app *app) {
     pt_window_free(window);
 }
 
+
+/* RTL puts the disclosure and the indent on the right and swaps Left/Right so
+ * the arrow pointing at the chevron opens the node. */
+static void test_tree_rtl(pt_app *app) {
+    pt_window *window = pt_window_create(app, "tree-rtl", 480, 400);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *tree = pt_tree_create(root);
+    pt_check(tree != NULL);
+    pt_widget_set_align_self(tree, pt_align_start);
+    pt_widget_set_width(tree, 320.0f);
+    pt_widget_set_height(tree, 240.0f);
+    pt_tree_set_row_height(tree, 32.0f);
+    pt_tree_set_indent(tree, 22.0f);
+    tree_state_log log = {0};
+    pt_tree_set_on_select(tree, select_node, &log);
+
+    pt_tree_node *alpha = pt_tree_add_node(tree, NULL, "alpha");
+    pt_tree_node *alpha_one = pt_tree_add_node(tree, alpha, "alpha/one");
+    pt_tree_node *alpha_two = pt_tree_add_node(tree, alpha, "alpha/two");
+    pt_check(alpha && alpha_one && alpha_two);
+    pt_tree_node_set_expanded(alpha, true);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(480, 400, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_tree_get_visible_count(tree) == 3);
+
+    pt_widget *row_alpha = visible_row(tree, 0);
+    pt_check(row_alpha != NULL);
+    if (row_alpha) {
+        pt_rect rect = bounds_of(row_alpha);
+        /* The chevron sits at the row's right edge; a press just inside it
+         * collapses the node, while the same spot used to be row background. */
+        click_at(window, rect.x + rect.w - 10.0f, rect.y + rect.h * 0.5f);
+        pt_check(!pt_tree_node_get_expanded(alpha));
+        pt_check(pt_tree_get_visible_count(tree) == 1);
+        /* The mirrored side no longer toggles: a press near the left edge is a
+         * plain selection. */
+        pt_check(pt_window_paint(window, canvas));
+        row_alpha = visible_row(tree, 0);
+        pt_check(row_alpha != NULL);
+        if (row_alpha) {
+            pt_rect again = bounds_of(row_alpha);
+            click_at(window, again.x + 6.0f, again.y + again.h * 0.5f);
+            pt_check(!pt_tree_node_get_expanded(alpha));
+            pt_check(pt_tree_get_selected(tree) == alpha);
+        }
+    }
+
+    /* Left opens and descends in RTL; Right collapses and returns. */
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(pt_tree_node_get_expanded(alpha));
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(pt_tree_get_selected(tree) == alpha_one);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(pt_tree_get_selected(tree) == alpha);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(!pt_tree_node_get_expanded(alpha));
+    pt_check(pt_tree_get_visible_count(tree) == 1);
+    pt_check(log.selects >= 3);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.tree");
@@ -295,6 +366,7 @@ int main(void) {
         return pt_test_finish("tree");
     }
     test_hierarchy(app);
+    test_tree_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("tree");
 }

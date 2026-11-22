@@ -242,6 +242,21 @@ static float table_column_right(const pt_widget *table, uint32_t column) {
     return right;
 }
 
+/* Every child of a header or row container keeps its logical slot; mirroring
+ * flips each box around the container's centre so column 0 lands on the right
+ * edge while the child order stays column order. */
+static void table_mirror_cells(pt_widget *container) {
+    float left = container->x;
+    float right = container->x + container->width;
+    for (pt_widget *cell = container->first_child; cell; cell = cell->next_sibling) {
+        if (!cell->visible) {
+            continue;
+        }
+        cell->x = left + (right - (cell->x + cell->width));
+        cell->clip = container->clip;
+    }
+}
+
 static int32_t table_sort_index(const pt_table_state *state, uint32_t column) {
     if (!state) {
         return -1;
@@ -1473,14 +1488,17 @@ void pt_table_reveal_column(pt_widget *table, uint32_t column) {
                                            table->padding_right);
     float max_scroll = pt_max_float(0.0f, table_content_width(table) - viewport);
     if (table_is_rtl(table)) {
-        /* RTL scroll 0 keeps the right edge in view; the offset is measured
-         * from the right so the reveal math only swaps the two edges. */
+        /* RTL scroll 0 keeps the right edge in view. The offset grows as the
+         * right-hand columns leave to the right, so a column is visible when its
+         * offset from the right edge lies inside [scroll_x, scroll_x + viewport].
+         * Column 0 always starts at offset 0. */
         float right = table_column_right(table, column);
-        float left = right - state->column_widths[column];
-        if (right > table->scroll_x + viewport) {
-            table->scroll_x = right - viewport;
-        } else if (left < table->scroll_x) {
-            table->scroll_x = left;
+        float from_right = table_content_width(table) - right;
+        if (from_right < table->scroll_x) {
+            table->scroll_x = from_right;
+        } else if (from_right + state->column_widths[column] >
+                   table->scroll_x + viewport) {
+            table->scroll_x = from_right + state->column_widths[column] - viewport;
         }
     } else {
         float left = table_column_left(table, column);
@@ -2358,19 +2376,23 @@ void pt_table_layout(pt_widget *table, const pt_layout_ctx *ctx, pt_rect inner) 
 
     pt_rect header_area = {inner.x, inner.y, inner.w, header_h};
     pt_rect rows_area = {inner.x, inner.y + header_h, inner.w, rows_h};
-    /* RTL keeps columns in logical order inside the header and each row; the
-     * container's origin moves to the right edge and cells are placed right to
-     * left because they are laid out with rtl_logical_order disabled mirroring.
-     * Scroll offset 0 therefore keeps the right edge in view. */
+    /* RTL keeps columns in logical order inside the header and each row: the
+     * containers lay their cells out left to right as always (rtl_logical_order
+     * keeps flex from reversing them), and this pass mirrors each cell's slot
+     * inside the row so column 0 lands on the right edge. Scroll offset 0
+     * therefore keeps the right edge in view. */
     bool rtl = table_is_rtl(table);
     float row_x = rtl ? inner.x + inner.w - content_w + table->scroll_x
                       : inner.x - table->scroll_x;
     table->clip = pt_rect_intersect(inherited, header_area);
     state->header->visible = has_columns;
     if (state->header->visible) {
-        pt_widget_layout_child(state->header, row_x, inner.y, content_w, header_h, ctx);
         state->header->rtl_logical_order = true;
+        pt_widget_layout_child(state->header, row_x, inner.y, content_w, header_h, ctx);
         state->header->clip = table->clip;
+        if (rtl) {
+            table_mirror_cells(state->header);
+        }
         uint32_t column = 0;
         for (pt_widget *cell = state->header->first_child; cell;
              cell = cell->next_sibling) {
@@ -2425,6 +2447,9 @@ void pt_table_layout(pt_widget *table, const pt_layout_ctx *ctx, pt_rect inner) 
         float row_y = rows_area.y - table->scroll_y + (float)row_index * row_height;
         pt_widget_layout_child(row, row_x, row_y, content_w, row_height, ctx);
         row->rtl_logical_order = true;
+        if (rtl) {
+            table_mirror_cells(row);
+        }
         row->clip = table->clip;
         ++index;
     }

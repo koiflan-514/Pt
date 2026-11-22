@@ -463,6 +463,113 @@ static void test_table(pt_app *app) {
     pt_window_free(window);
 }
 
+
+static pt_table_state *rtl_state(pt_widget *table) {
+    return table && table->kind == pt_widget_table ? table->extra : NULL;
+}
+
+/* RTL keeps the columns in logical order, mirrors the origin to the right edge
+ * and flips the resize delta. */
+static void test_table_rtl(pt_app *app) {
+    pt_window *window = pt_window_create(app, "table-rtl", 640, 480);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_width(table, 400.0f);
+    pt_widget_set_height(table, 220.0f);
+    pt_table_set_column_title(table, 0, "Name");
+    pt_table_set_column_title(table, 1, "Modified");
+    pt_table_set_column_title(table, 2, "Size");
+    pt_table_set_column_width(table, 0, 120.0f);
+    pt_table_set_column_width(table, 1, 140.0f);
+    pt_table_set_column_width(table, 2, 100.0f);
+    pt_table_set_row_height(table, 40.0f);
+    pt_table_set_header_height(table, 38.0f);
+    table_state_log log = {0};
+    pt_table_set_on_bind_cell(table, bind_cell, &log);
+    pt_table_set_row_count(table, 10);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(640, 480, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+
+    /* The header keeps column 0 first in the child list, so its text is still
+     * "Name"; only the geometry mirrors. */
+    pt_widget *head0 = header_cell(table, 0);
+    pt_widget *head1 = header_cell(table, 1);
+    pt_widget *head2 = header_cell(table, 2);
+    pt_check(head0 && head1 && head2);
+    if (head0 && head1 && head2) {
+        pt_check(strcmp(pt_widget_get_text(head0), "Name") == 0);
+        pt_check(strcmp(pt_widget_get_text(head2), "Size") == 0);
+        pt_check(rtl_state(table)->header->rtl_logical_order);
+        float origin = bounds_of(table).x + bounds_of(table).w;
+        pt_check_near(bounds_of(head0).x, origin - 120.0, 0.01);
+        pt_check_near(bounds_of(head1).x, origin - 120.0 - 140.0, 0.01);
+        pt_check_near(bounds_of(head2).x, origin - 120.0 - 140.0 - 100.0, 0.01);
+    }
+
+    /* Cells follow the header, still bound in logical column order. */
+    pt_widget *first = visible_row(table, 0);
+    pt_check(first != NULL);
+    if (first) {
+        pt_check(log.last_column == 2);
+        pt_widget *cell0 = row_cell(first, 0);
+        pt_widget *cell2 = row_cell(first, 2);
+        pt_check(cell0 && cell2);
+        if (cell0 && cell2) {
+            pt_check(strcmp(pt_widget_get_text(cell0), "r0c0") == 0);
+            float origin = bounds_of(table).x + bounds_of(table).w;
+            pt_check_near(bounds_of(cell0).x, origin - 120.0, 0.01);
+            pt_check_near(bounds_of(cell2).x, origin - 120.0 - 140.0 - 100.0, 0.01);
+        }
+    }
+
+    /* The horizontal offset keeps 0 at the right edge. */
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+    pt_table_scroll_to_column(table, 0);
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+
+    /* A resize drag on the grip (now the left edge of the column) widens by the
+     * same leftwards motion. */
+    pt_check(pt_window_paint(window, canvas));
+    pt_widget *resize_head = header_cell(table, 1);
+    pt_check(resize_head != NULL);
+    if (resize_head) {
+        pt_rect rect = bounds_of(resize_head);
+        /* The grip sits on the column's trailing (left) edge; start just inside
+         * it so the press lands on this header cell, then drag left. */
+        float grip = rect.x + 2.0f;
+        float mid_y = rect.y + rect.h * 0.5f;
+        pt_window_input_pointer_enter(window, grip, mid_y);
+        pt_check(pt_widget_cursor_at(table, grip, mid_y) == pt_cursor_resize_h);
+        pt_window_input_pointer_button(window, 0x110u, true, grip, mid_y, 3, 100);
+        pt_window_input_pointer_motion(window, grip - 40.0f, mid_y, 110);
+        pt_check_near(pt_table_get_column_width(table, 1), 180.0, 0.6);
+        pt_window_input_pointer_button(window, 0x110u, false, grip - 40.0f, mid_y, 4, 120);
+    }
+
+    /* The reveal helper clamps into the same mirrored range. */
+    pt_table_set_column_width(table, 0, 240.0f);
+    pt_table_set_column_width(table, 1, 240.0f);
+    pt_table_set_column_width(table, 2, 240.0f);
+    pt_check(pt_window_paint(window, canvas));
+    pt_table_reveal_column(table, 2);
+    pt_check(table->scroll_x > 0.0f);
+    pt_table_reveal_column(table, 0);
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.table");
@@ -471,6 +578,7 @@ int main(void) {
         return pt_test_finish("table");
     }
     test_table(app);
+    test_table_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("table");
 }

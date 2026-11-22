@@ -654,10 +654,18 @@ static void layout_flex_children(pt_widget *parent, const pt_layout_ctx *ctx, pt
     }
 
     float cursor = (row ? inner.x : inner.y) + offset;
+    if (row && rtl) {
+        /* justify_end packs against the trailing (left) edge, so the run starts
+         * at the right edge and the free space is spent on the left instead: the
+         * right edge minus the free space, then children walk leftwards. */
+        cursor = inner.x + inner.w - offset;
+    }
     for (int i = 0; i < count; ++i) {
-        pt_widget *child = children[rtl ? count - 1 - i : i];
-        float child_w = widths[rtl ? count - 1 - i : i];
-        float child_h = heights[rtl ? count - 1 - i : i];
+        /* In RTL a row keeps packing the cursor from the start edge, but walks
+         * the children back to front: child 0 lands in the rightmost slot. */
+        pt_widget *child = children[i];
+        float child_w = widths[i];
+        float child_h = heights[i];
         float child_x;
         float child_y;
         pt_align align = effective_align(parent, child);
@@ -665,7 +673,7 @@ static void layout_flex_children(pt_widget *parent, const pt_layout_ctx *ctx, pt
             if (rtl) {
                 /* The cursor walks from the right edge; the slot's near margin is
                  * still its physical left margin so spacing stays symmetrical. */
-                child_x = inner.x + inner.w - (cursor - inner.x) - child_w - child->margin_right;
+                child_x = cursor - child_w - child->margin_right;
             } else {
                 child_x = cursor + child->margin_left;
             }
@@ -682,7 +690,11 @@ static void layout_flex_children(pt_widget *parent, const pt_layout_ctx *ctx, pt
                 child_h = pt_max_float(0.0f, inner.h - child->margin_top -
                                                  child->margin_bottom);
             }
-            cursor += child_w + child->margin_left + child->margin_right + between;
+            if (rtl) {
+                cursor -= child_w + child->margin_left + child->margin_right + between;
+            } else {
+                cursor += child_w + child->margin_left + child->margin_right + between;
+            }
         } else {
             child_y = cursor + child->margin_top;
             /* lead is the offset from inner.x to the child; the trailing offset
@@ -964,10 +976,10 @@ static void layout_grid_children(pt_widget *grid, const pt_layout_ctx *ctx, pt_r
                                                                child->margin_bottom));
         float cell_x = inner.x + (float)cells[i].column * (column_width + grid->gap);
         if (widget_rtl(grid)) {
-            /* Column 0 sits at the right edge; a span grows leftwards. */
+            /* Column 0 sits at the right edge; a span grows leftwards, so the
+             * cell starts where its rightmost covered column ends. */
             cell_x = inner.x + inner.w -
-                     (float)(cells[i].column + cells[i].span) *
-                         (column_width + grid->gap) +
+                     (float)(cells[i].column + cells[i].span) * (column_width + grid->gap) +
                      grid->gap;
         }
         float child_x = cell_x + child->margin_left;
