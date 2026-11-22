@@ -959,7 +959,7 @@ static void test_csd_title_bidi(pt_app *app) {
                             titlebar);
         pt_canvas_fill_rect(legacy_ref, 0.0f, 0.0f, 520.0f, window->header_height,
                             titlebar);
-        pt_canvas_push_clip(bidi_ref, 8.0f, 0.0f, title_width,
+        pt_canvas_push_clip(bidi_ref, left, 0.0f, title_width,
                             window->header_height - 1.0f);
         pt_canvas_draw_text_line_bidi(bidi_ref, font, window->title,
                                       strlen(window->title), left, baseline,
@@ -967,7 +967,7 @@ static void test_csd_title_bidi(pt_app *app) {
                                       probe_title_base(window, window->title,
                                                        strlen(window->title)));
         pt_canvas_pop_clip(bidi_ref);
-        pt_canvas_push_clip(legacy_ref, 8.0f, 0.0f, title_width,
+        pt_canvas_push_clip(legacy_ref, left, 0.0f, title_width,
                             window->header_height - 1.0f);
         pt_canvas_draw_text_line(legacy_ref, font, window->title,
                                  strlen(window->title), left, baseline, title_width,
@@ -975,7 +975,7 @@ static void test_csd_title_bidi(pt_app *app) {
         pt_canvas_pop_clip(legacy_ref);
 
         int band0 = (int)left;
-        int band1 = (int)pt_min_float((float)window->width, 8.0f + title_width) - 1;
+        int band1 = (int)pt_min_float((float)window->width, left + title_width) - 1;
         pt_check(band1 >= band0);
         int band_y1 = (int)window->header_height - 2;
         painted_hash = region_hash(canvas, band0, band1, 0, band_y1);

@@ -1082,29 +1082,32 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
             float baseline = (window->header_height - line_height) * 0.5f +
                              font->ascent / scale;
             /* The title fills the band between the window edge and the button
-             * cluster, which sits on the trailing side (right in LTR). */
+             * cluster, which sits on the trailing side (right in LTR). The
+             * drawing origin is the band's leading edge, exactly like 1.4.0 in
+             * LTR; in RTL the band itself mirrors to the right of the cluster
+             * and its leading edge moves with it. */
             bool rtl = window_rtl(window);
-            float left = minimize.x - 16.0f;
-            float title_width = pt_max_float(0.0f, left - 8.0f);
+            float title_left = 8.0f;
+            float title_width = pt_max_float(0.0f, minimize.x - 16.0f - 8.0f);
             if (title_width < 20.0f) {
                 title_width = (float)window->width - 16.0f;
-                left = 8.0f;
             }
             if (rtl) {
                 float cluster_right = minimize.x + minimize.w;
-                left = cluster_right + 16.0f;
-                title_width = pt_max_float(0.0f, (float)window->width - 8.0f - left);
+                title_left = cluster_right + 16.0f;
+                title_width = pt_max_float(0.0f, (float)window->width - 8.0f - title_left);
                 if (title_width < 20.0f) {
                     title_width = (float)window->width - 16.0f;
-                    left = 8.0f;
+                    title_left = 8.0f;
                 }
             }
             pt_color color = window_theme_color(window, pt_theme_text, 0xE6EDF3FFu);
             if (!window->keyboard_focused) {
                 color = pt_color_alpha(color, 190);
             }
-            pt_canvas_push_clip(canvas, 8.0f, 0.0f, title_width, window->header_height - 1.0f);
-            pt_canvas_draw_text_line_bidi(canvas, font, title, strlen(title), left,
+            pt_canvas_push_clip(canvas, title_left, 0.0f, title_width,
+                                window->header_height - 1.0f);
+            pt_canvas_draw_text_line_bidi(canvas, font, title, strlen(title), title_left,
                                           baseline, title_width, pt_text_align_center,
                                           color, true,
                                           window_title_base(window, title, strlen(title)));
