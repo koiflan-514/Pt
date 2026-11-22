@@ -63,6 +63,12 @@ __all__ = [
     "align_stretch",
     "direction_row",
     "direction_column",
+    "ui_direction_inherit",
+    "ui_direction_ltr",
+    "ui_direction_rtl",
+    "text_direction_auto",
+    "text_direction_ltr",
+    "text_direction_rtl",
     "justify_start",
     "justify_center",
     "justify_end",
@@ -361,6 +367,14 @@ align_stretch = 4
 
 direction_row = 0
 direction_column = 1
+
+ui_direction_inherit = 0
+ui_direction_ltr = 1
+ui_direction_rtl = 2
+
+text_direction_auto = 0
+text_direction_ltr = 1
+text_direction_rtl = 2
 
 justify_start = 0
 justify_center = 1
@@ -1366,6 +1380,8 @@ _pt_app_add_timeout = _proto("pt_app_add_timeout", _c_uint64, _c_void_p, _c_uint
 _pt_app_cancel_timeout = _proto("pt_app_cancel_timeout", None, _c_void_p, _c_uint64)
 _pt_app_set_color_scheme = _proto("pt_app_set_color_scheme", None, _c_void_p, _c_int)
 _pt_app_get_color_scheme = _proto("pt_app_get_color_scheme", _c_int, _c_void_p)
+_pt_app_set_ui_direction = _proto("pt_app_set_ui_direction", None, _c_void_p, _c_int)
+_pt_app_get_ui_direction = _proto("pt_app_get_ui_direction", _c_int, _c_void_p)
 _pt_app_set_accent_color = _proto("pt_app_set_accent_color", None, _c_void_p, _c_uint32)
 _pt_app_set_theme_color = _proto("pt_app_set_theme_color", None, _c_void_p, _c_int, _c_uint32)
 _pt_app_get_theme_color = _proto("pt_app_get_theme_color", _c_uint32, _c_void_p, _c_int)
@@ -1404,6 +1420,8 @@ _pt_window_get_width = _proto("pt_window_get_width", _c_int, _c_void_p)
 _pt_window_get_height = _proto("pt_window_get_height", _c_int, _c_void_p)
 _pt_window_get_scale = _proto("pt_window_get_scale", _c_float, _c_void_p)
 _pt_window_set_title = _proto("pt_window_set_title", None, _c_void_p, _c_char_p)
+_pt_window_set_ui_direction = _proto("pt_window_set_ui_direction", None, _c_void_p, _c_int)
+_pt_window_get_ui_direction = _proto("pt_window_get_ui_direction", _c_int, _c_void_p)
 _pt_window_set_size = _proto("pt_window_set_size", None, _c_void_p, _c_int, _c_int)
 _pt_window_set_min_size = _proto("pt_window_set_min_size", None, _c_void_p, _c_int, _c_int)
 _pt_window_set_resizable = _proto("pt_window_set_resizable", None, _c_void_p, _c_bool)
@@ -1767,6 +1785,10 @@ _pt_widget_set_radius = _proto("pt_widget_set_radius", None, _c_void_p, _c_float
 _pt_widget_set_font_size = _proto("pt_widget_set_font_size", None, _c_void_p, _c_float)
 _pt_widget_set_font_weight = _proto("pt_widget_set_font_weight", None, _c_void_p, _c_int)
 _pt_widget_set_text_align = _proto("pt_widget_set_text_align", None, _c_void_p, _c_int)
+_pt_widget_set_ui_direction = _proto("pt_widget_set_ui_direction", None, _c_void_p, _c_int)
+_pt_widget_get_ui_direction = _proto("pt_widget_get_ui_direction", _c_int, _c_void_p)
+_pt_widget_set_text_direction = _proto("pt_widget_set_text_direction", None, _c_void_p, _c_int)
+_pt_widget_get_text_direction = _proto("pt_widget_get_text_direction", _c_int, _c_void_p)
 _pt_widget_set_visible = _proto("pt_widget_set_visible", None, _c_void_p, _c_bool)
 _pt_widget_set_enabled = _proto("pt_widget_set_enabled", None, _c_void_p, _c_bool)
 _pt_widget_set_busy = _proto("pt_widget_set_busy", None, _c_void_p, _c_bool)
@@ -3334,6 +3356,32 @@ class Widget:
 
     def set_text_align(self, align: int) -> "Widget":
         _pt_widget_set_text_align(self._ptr, align)
+        return self
+
+    @property
+    def ui_direction(self) -> int:
+        """Stored widget UI direction (``ui_direction_inherit`` when unset)."""
+        return int(_pt_widget_get_ui_direction(self._ptr))
+
+    @ui_direction.setter
+    def ui_direction(self, direction: int) -> None:
+        _pt_widget_set_ui_direction(self._ptr, int(direction))
+
+    def set_ui_direction(self, direction: int) -> "Widget":
+        self.ui_direction = direction
+        return self
+
+    @property
+    def text_direction(self) -> int:
+        """Stored text direction (``text_direction_auto`` when unset)."""
+        return int(_pt_widget_get_text_direction(self._ptr))
+
+    @text_direction.setter
+    def text_direction(self, direction: int) -> None:
+        _pt_widget_set_text_direction(self._ptr, int(direction))
+
+    def set_text_direction(self, direction: int) -> "Widget":
+        self.text_direction = direction
         return self
 
     def set_visible(self, visible: bool) -> "Widget":
@@ -5323,6 +5371,19 @@ class Window:
         _pt_window_set_title(self._ptr, _string(title))
         return self
 
+    @property
+    def ui_direction(self) -> int:
+        """Stored window UI direction (``ui_direction_inherit`` follows app)."""
+        return int(_pt_window_get_ui_direction(self._ptr))
+
+    @ui_direction.setter
+    def ui_direction(self, direction: int) -> None:
+        _pt_window_set_ui_direction(self._ptr, int(direction))
+
+    def set_ui_direction(self, direction: int) -> "Window":
+        self.ui_direction = direction
+        return self
+
     def set_size(self, width: int, height: int) -> "Window":
         _pt_window_set_size(self._ptr, int(width), int(height))
         return self
@@ -6200,6 +6261,19 @@ class App:
     @color_scheme.setter
     def color_scheme(self, scheme: int) -> None:
         _pt_app_set_color_scheme(self._ptr, int(scheme))
+
+    @property
+    def ui_direction(self) -> int:
+        """Stored application UI direction (``ui_direction_inherit`` unset)."""
+        return int(_pt_app_get_ui_direction(self._ptr))
+
+    @ui_direction.setter
+    def ui_direction(self, direction: int) -> None:
+        _pt_app_set_ui_direction(self._ptr, int(direction))
+
+    def set_ui_direction(self, direction: int) -> "App":
+        self.ui_direction = direction
+        return self
 
     @property
     def accent_color(self) -> int:

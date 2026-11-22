@@ -479,6 +479,57 @@ public final class PtTest {
             Pt.widget_set_gap(column, 8.0f);
             Pt.widget_set_padding(column, 12.0f, 12.0f, 12.0f, 12.0f);
 
+            /* ---- 2.0 direction properties: zero defaults and storage ---- */
+            check(Pt.ui_direction_inherit == 0 && Pt.ui_direction_ltr == 1
+                    && Pt.ui_direction_rtl == 2, "ui direction constants");
+            check(Pt.text_direction_auto == 0 && Pt.text_direction_ltr == 1
+                    && Pt.text_direction_rtl == 2, "text direction constants");
+            MemorySegment directionLabel = Pt.label(column, "direction");
+            check(Pt.app_get_ui_direction(app) == Pt.ui_direction_inherit,
+                    "app direction default");
+            check(Pt.window_get_ui_direction(window) == Pt.ui_direction_inherit,
+                    "window direction default");
+            check(Pt.widget_get_ui_direction(column) == Pt.ui_direction_inherit,
+                    "widget direction default");
+            check(Pt.widget_get_text_direction(directionLabel) == Pt.text_direction_auto,
+                    "text direction default");
+            Pt.app_set_ui_direction(app, Pt.ui_direction_rtl);
+            check(Pt.app_get_ui_direction(app) == Pt.ui_direction_rtl,
+                    "app direction stored");
+            Pt.window_set_ui_direction(window, Pt.ui_direction_ltr);
+            check(Pt.window_get_ui_direction(window) == Pt.ui_direction_ltr,
+                    "window direction stored");
+            Pt.widget_set_ui_direction(column, Pt.ui_direction_rtl);
+            Pt.widget_set_text_direction(column, Pt.text_direction_rtl);
+            check(Pt.widget_get_ui_direction(column) == Pt.ui_direction_rtl,
+                    "widget direction stored");
+            check(Pt.widget_get_text_direction(column) == Pt.text_direction_rtl,
+                    "widget text direction stored");
+            Pt.widget_set_ui_direction(directionLabel, Pt.ui_direction_ltr);
+            Pt.widget_set_text_direction(directionLabel, Pt.text_direction_ltr);
+            check(Pt.widget_get_ui_direction(directionLabel) == Pt.ui_direction_ltr,
+                    "label direction stored");
+            check(Pt.widget_get_text_direction(directionLabel) == Pt.text_direction_ltr,
+                    "label text direction stored");
+            /* Out-of-range values are rejected by the C entry point. */
+            Pt.app_set_ui_direction(app, 99);
+            Pt.window_set_ui_direction(window, 99);
+            Pt.widget_set_text_direction(column, 99);
+            check(Pt.app_get_ui_direction(app) == Pt.ui_direction_rtl,
+                    "app direction rejects invalid");
+            check(Pt.window_get_ui_direction(window) == Pt.ui_direction_ltr,
+                    "window direction rejects invalid");
+            check(Pt.widget_get_text_direction(column) == Pt.text_direction_rtl,
+                    "text direction rejects invalid");
+            Pt.app_set_ui_direction(app, Pt.ui_direction_inherit);
+            Pt.window_set_ui_direction(window, Pt.ui_direction_inherit);
+            Pt.widget_set_ui_direction(column, Pt.ui_direction_inherit);
+            Pt.widget_set_text_direction(column, Pt.text_direction_auto);
+            Pt.widget_set_ui_direction(directionLabel, Pt.ui_direction_inherit);
+            Pt.widget_set_text_direction(directionLabel, Pt.text_direction_auto);
+            check(Pt.app_get_ui_direction(app) == Pt.ui_direction_inherit,
+                    "app direction reset");
+
             MemorySegment label = Pt.label(column, "hello");
             check(Pt.widget_get_text(label).equals("hello"), "label text");
             Pt.widget_set_text(label, "changed");

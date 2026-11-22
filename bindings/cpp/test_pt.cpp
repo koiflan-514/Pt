@@ -854,6 +854,41 @@ int main() {
     column.set_gap(8.0f).set_padding(12.0f, 12.0f, 12.0f, 12.0f);
 
     pt::widget title = pt::label(column.get(), "hello");
+    /* ---- 2.0 direction properties: zero defaults and explicit storage ---- */
+    check(application.ui_direction() == pt_ui_direction_inherit);
+    check(window.ui_direction() == pt_ui_direction_inherit);
+    check(column.ui_direction() == pt_ui_direction_inherit);
+    check(title.ui_direction() == pt_ui_direction_inherit);
+    check(title.text_direction() == pt_text_direction_auto);
+    check(pt_ui_direction_inherit == 0 && pt_ui_direction_ltr == 1 &&
+          pt_ui_direction_rtl == 2);
+    check(pt_text_direction_auto == 0 && pt_text_direction_ltr == 1 &&
+          pt_text_direction_rtl == 2);
+    application.set_ui_direction(pt_ui_direction_rtl);
+    check(application.ui_direction() == pt_ui_direction_rtl);
+    window.set_ui_direction(pt_ui_direction_ltr);
+    check(window.ui_direction() == pt_ui_direction_ltr);
+    column.set_ui_direction(pt_ui_direction_rtl).set_text_direction(pt_text_direction_rtl);
+    check(column.ui_direction() == pt_ui_direction_rtl);
+    check(column.text_direction() == pt_text_direction_rtl);
+    title.set_ui_direction(pt_ui_direction_ltr).set_text_direction(pt_text_direction_ltr);
+    check(title.ui_direction() == pt_ui_direction_ltr);
+    check(title.text_direction() == pt_text_direction_ltr);
+    // Out-of-range values are rejected by the C entry point.
+    application.set_ui_direction(static_cast<pt_ui_direction>(99));
+    check(application.ui_direction() == pt_ui_direction_rtl);
+    window.set_ui_direction(static_cast<pt_ui_direction>(99));
+    check(window.ui_direction() == pt_ui_direction_ltr);
+    column.set_text_direction(static_cast<pt_text_direction>(99));
+    check(column.text_direction() == pt_text_direction_rtl);
+    // Restore the zero values for the remaining checks.
+    application.set_ui_direction(pt_ui_direction_inherit);
+    window.set_ui_direction(pt_ui_direction_inherit);
+    column.set_ui_direction(pt_ui_direction_inherit).set_text_direction(pt_text_direction_auto);
+    title.set_ui_direction(pt_ui_direction_inherit).set_text_direction(pt_text_direction_auto);
+    check(application.ui_direction() == pt_ui_direction_inherit);
+    check(title.text_direction() == pt_text_direction_auto);
+
     title.set_font_size(20.0f).set_font_weight(pt_font_weight_bold).set_wrap(true);
     check(title.text() == "hello");
     title.set_text("changed");

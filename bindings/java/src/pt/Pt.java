@@ -358,6 +358,14 @@ public final class Pt {
     public static final int direction_row = 0;
     public static final int direction_column = 1;
 
+    public static final int ui_direction_inherit = 0;
+    public static final int ui_direction_ltr = 1;
+    public static final int ui_direction_rtl = 2;
+
+    public static final int text_direction_auto = 0;
+    public static final int text_direction_ltr = 1;
+    public static final int text_direction_rtl = 2;
+
     public static final int justify_start = 0;
     public static final int justify_center = 1;
     public static final int justify_end = 2;
@@ -766,6 +774,10 @@ public final class Pt {
             desc(i32, ptr));
     private static final MethodHandle app_set_color_scheme = bind("pt_app_set_color_scheme",
             FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle app_set_ui_direction = bind("pt_app_set_ui_direction",
+            FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle app_get_ui_direction = bind("pt_app_get_ui_direction",
+            desc(i32, ptr));
     private static final MethodHandle app_set_accent_color = bind("pt_app_set_accent_color",
             FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle app_set_font_family = bind("pt_app_set_font_family",
@@ -836,6 +848,10 @@ public final class Pt {
             FunctionDescriptor.ofVoid(ptr, i32, i32));
     private static final MethodHandle window_set_resizable = bind("pt_window_set_resizable",
             FunctionDescriptor.ofVoid(ptr, bool));
+    private static final MethodHandle window_set_ui_direction = bind(
+            "pt_window_set_ui_direction", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle window_get_ui_direction = bind(
+            "pt_window_get_ui_direction", desc(i32, ptr));
     private static final MethodHandle window_set_resize_callback = bind(
             "pt_window_set_resize_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_popup_policy = bind(
@@ -1184,6 +1200,14 @@ public final class Pt {
             FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle widget_set_text_align = bind("pt_widget_set_text_align",
             FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle widget_set_ui_direction = bind(
+            "pt_widget_set_ui_direction", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle widget_get_ui_direction = bind(
+            "pt_widget_get_ui_direction", desc(i32, ptr));
+    private static final MethodHandle widget_set_text_direction = bind(
+            "pt_widget_set_text_direction", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle widget_get_text_direction = bind(
+            "pt_widget_get_text_direction", desc(i32, ptr));
     private static final MethodHandle widget_set_visible = bind("pt_widget_set_visible",
             FunctionDescriptor.ofVoid(ptr, bool));
     private static final MethodHandle widget_set_enabled = bind("pt_widget_set_enabled",
@@ -2613,6 +2637,16 @@ public final class Pt {
         return (int) invoke(app_get_color_scheme, app);
     }
 
+    /** Stores the explicit application UI direction; inherit is zero. */
+    public static void app_set_ui_direction(MemorySegment app, int direction) {
+        invoke(app_set_ui_direction, app, direction);
+    }
+
+    /** Returns the stored application UI direction, not the resolved one. */
+    public static int app_get_ui_direction(MemorySegment app) {
+        return (int) invoke(app_get_ui_direction, app);
+    }
+
     public static boolean app_enable_a11y(MemorySegment app) {
         return (boolean) invoke(app_enable_a11y, app);
     }
@@ -2867,6 +2901,16 @@ public final class Pt {
 
     public static void window_set_min_size(MemorySegment window, int width, int height) {
         invoke(window_set_min_size, window, width, height);
+    }
+
+    /** Stores the explicit window UI direction; inherit is zero. */
+    public static void window_set_ui_direction(MemorySegment window, int direction) {
+        invoke(window_set_ui_direction, window, direction);
+    }
+
+    /** Returns the stored window UI direction, not the resolved one. */
+    public static int window_get_ui_direction(MemorySegment window) {
+        return (int) invoke(window_get_ui_direction, window);
     }
 
     public static void window_set_decorated(MemorySegment window, boolean decorated) {
@@ -3968,6 +4012,26 @@ public final class Pt {
 
     public static void widget_set_text_align(MemorySegment widget, int align) {
         invoke(widget_set_text_align, widget, align);
+    }
+
+    /** Stores the explicit widget UI direction; inherit is zero. */
+    public static void widget_set_ui_direction(MemorySegment widget, int direction) {
+        invoke(widget_set_ui_direction, widget, direction);
+    }
+
+    /** Returns the stored widget UI direction, not the resolved one. */
+    public static int widget_get_ui_direction(MemorySegment widget) {
+        return (int) invoke(widget_get_ui_direction, widget);
+    }
+
+    /** Stores the explicit text direction; auto is zero. */
+    public static void widget_set_text_direction(MemorySegment widget, int direction) {
+        invoke(widget_set_text_direction, widget, direction);
+    }
+
+    /** Returns the stored widget text direction, not the resolved one. */
+    public static int widget_get_text_direction(MemorySegment widget) {
+        return (int) invoke(widget_get_text_direction, widget);
     }
 
     public static void widget_set_visible(MemorySegment widget, boolean visible) {
