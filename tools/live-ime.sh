@@ -40,19 +40,49 @@ if [ "${1:-}" = "--inner" ]; then
     fcitx_pid=
     probe_pid=
     out=
+    # Stop a child without ever blocking the harness on it: TERM, a bounded
+    # grace period, then KILL. SIGKILL cannot be ignored, so the following
+    # wait() is guaranteed to return promptly even for a wedged probe.
+    stop_pid() {
+        local pid=${1:-}
+        [ -n "$pid" ] || return 0
+        kill "$pid" 2>/dev/null
+        sleep 0.2
+        kill -KILL "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    }
     cleanup() {
-        if [ -n "$probe_pid" ] && kill -0 "$probe_pid" 2>/dev/null; then
-            kill "$probe_pid" 2>/dev/null
-            wait "$probe_pid" 2>/dev/null
-        fi
-        if [ -n "$fcitx_pid" ] && kill -0 "$fcitx_pid" 2>/dev/null; then
-            kill "$fcitx_pid" 2>/dev/null
-            wait "$fcitx_pid" 2>/dev/null
-        fi
+        # A signal racing with normal exit must not interrupt cleanup itself;
+        # it is bounded, so block further INT/TERM until the process is gone.
+        trap '' INT TERM
+        stop_pid "$probe_pid"
+        stop_pid "$fcitx_pid"
         [ -n "$out" ] && rm -f "$out"
         rm -rf "$tmp"
     }
-    trap cleanup EXIT INT TERM
+    # Signals clean up and then leave immediately; the EXIT trap still owns the
+    # normal path, so a signal can never fall through to a misleading FAIL.
+    trap cleanup EXIT
+    trap 'trap - EXIT; cleanup; exit 130' INT
+    trap 'trap - EXIT; cleanup; exit 143' TERM
+
+    # Focus the nested window through the parent's tiny IPC and confirm the
+    # parent really reports it as focused. This is used immediately before key
+    # injection: the focus-window action is asynchronous, so an unverified
+    # action could still leave the user's own window focused.
+    focus_nested() {
+        local focused
+        for _ in $(seq 1 20); do
+            NIRI_SOCKET=$PT_PARENT_NIRI_SOCKET niri msg action focus-window \
+                --id "$PT_NESTED_WINDOW_ID" >/dev/null 2>&1 || true
+            focused=$(NIRI_SOCKET=$PT_PARENT_NIRI_SOCKET niri msg --json focused-window 2>/dev/null |
+                grep -Eo '"id"[[:space:]]*:[[:space:]]*[0-9]+' | head -n1 |
+                grep -Eo '[0-9]+$')
+            [ "$focused" = "$PT_NESTED_WINDOW_ID" ] && return 0
+            sleep 0.05
+        done
+        return 1
+    }
 
     # Keep every fcitx5 file inside the harness: the user's profile, engine
     # state and IM history must not be read or rewritten by a live test.
@@ -119,11 +149,21 @@ PROFILE
             sleep 0.05
         done
         if [ "$ready" != 1 ]; then
-            wait "$probe_pid" 2>/dev/null
+            # The probe never printed READY (or died first). Reap it under the
+            # same bounded guard as every other exit path instead of waiting
+            # forever on a wedged process.
+            stop_pid "$probe_pid"
             probe_pid=
-            echo "FAIL live IME probe did not become ready"
+            echo "live IME attempt $attempt did not become ready"
             cat "$out"
             tail -n 20 "$tmp/fcitx5.log"
+            rm -f "$out"
+            out=
+            if [ "$attempt" -lt 3 ]; then
+                sleep 0.3
+                continue
+            fi
+            echo "FAIL live IME probe did not become ready"
             exit 1
         fi
 
@@ -150,6 +190,17 @@ PROFILE
             exit 1
         fi
 
+        # Engine selection can take seconds, and the parent focus may have
+        # moved meanwhile. Re-focus and verify right before injecting so keys
+        # cannot land in whatever window the user switched to: if the parent
+        # does not report the nested window as focused, refuse to type at all.
+        if ! focus_nested; then
+            echo "FAIL refusing to inject keys (nested window is not the parent's focused window)"
+            cat "$out"
+            tail -n 20 "$tmp/fcitx5.log"
+            exit 1
+        fi
+
         if ! env WAYLAND_DISPLAY="$PT_PARENT_WAYLAND_DISPLAY" \
             timeout 15 "$inject" "nihao "; then
             echo "FAIL could not inject keys through the parent compositor"
@@ -168,8 +219,7 @@ PROFILE
             sleep 0.05
         done
         if kill -0 "$probe_pid" 2>/dev/null; then
-            kill "$probe_pid" 2>/dev/null
-            wait "$probe_pid" 2>/dev/null
+            stop_pid "$probe_pid"
         fi
         probe_pid=
         cat "$out"
@@ -208,7 +258,8 @@ command -v dbus-run-session >/dev/null 2>&1 || {
     echo "skip live IME (dbus-run-session not installed)"
     exit 0
 }
-if [ ! -f /usr/share/fcitx5/addon/pinyin.conf ]; then
+if [ ! -f /usr/share/fcitx5/addon/pinyin.conf ] &&
+    [ ! -f /usr/local/share/fcitx5/addon/pinyin.conf ]; then
     echo "skip live IME (fcitx5 pinyin engine not installed)"
     exit 0
 fi
