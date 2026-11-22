@@ -450,6 +450,25 @@ void pt_window_set_resizable(pt_window *window, bool resizable) {
     pt_platform_window_schedule_draw(window);
 }
 
+void pt_window_set_ui_direction(pt_window *window, pt_ui_direction direction) {
+    if (!window || (direction != pt_ui_direction_inherit && direction != pt_ui_direction_ltr &&
+                    direction != pt_ui_direction_rtl)) {
+        return;
+    }
+    if (window->ui_direction == (uint8_t)direction) {
+        return;
+    }
+    window->ui_direction = (uint8_t)direction;
+    pt_window_invalidate_layout(window, NULL);
+    window->needs_draw = true;
+    pt_window_damage_all(window);
+    pt_platform_window_schedule_draw(window);
+}
+
+pt_ui_direction pt_window_get_ui_direction(const pt_window *window) {
+    return window ? (pt_ui_direction)window->ui_direction : pt_ui_direction_inherit;
+}
+
 void pt_window_set_decorated(pt_window *window, bool decorated) {
     if (!window) {
         return;

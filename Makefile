@@ -8,8 +8,9 @@ PYTHON ?= python3
 JAVA ?= java
 JAVAC ?= javac
 
-VERSION := 1.4.0
-SONAME := libpt.so.1
+VERSION := 2.0.0
+ABI_MAJOR := 1
+SONAME := libpt.so.$(ABI_MAJOR)
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 1767225600)
 .DEFAULT_GOAL := all
 BUILD := build

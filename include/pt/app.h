@@ -183,6 +183,22 @@ pt_api const char *pt_app_get_font_fallback_for_family(const pt_app *app,
 pt_api int pt_app_font_uncovered_count(const pt_app *app, const char *family,
                                        const char *text, size_t length);
 
+/* Application-wide interface direction (since 2.0). The value is the last
+ * fallback in the resolution chain widget -> nearest explicit ancestor ->
+ * window -> application -> LTR. The setter stores the explicit value, ignores a
+ * NULL app and rejects values outside pt_ui_direction; a change invalidates the
+ * layout and requests a repaint of every window. pt_ui_direction_inherit is the
+ * zero value and is equivalent to LTR for an application.
+ *
+ * The getter reports the stored explicit value, not the resolved one, so a
+ * fresh application returns pt_ui_direction_inherit. Direction is presentation
+ * only: it never changes stored UTF-8 bytes, selections or accessibility
+ * character offsets. Auto text direction uses the resolved value only as the
+ * last-strong fallback for a neutral-only paragraph. Since 2.0. */
+pt_api void pt_app_set_ui_direction(pt_app *app, pt_ui_direction direction);
+/* Since 2.0. */
+pt_api pt_ui_direction pt_app_get_ui_direction(const pt_app *app);
+
 /* Since 1.0. */
 pt_api void pt_app_set_quit_on_last_window_close(pt_app *app, bool enabled);
 

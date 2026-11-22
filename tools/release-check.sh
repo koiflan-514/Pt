@@ -1,5 +1,5 @@
 #!/bin/sh
-# 1.0 readiness gate for Pt.
+# Release readiness gate for Pt.
 #
 # Checks the machine-verifiable items of the checklist in docs/api-policy.md:
 # the version agrees across the tree, the public headers carry no draft
@@ -57,7 +57,9 @@ section "Version agreement"
 header_version=$(sed -n 's/^#define pt_version_string "\(.*\)"/\1/p' include/pt/base.h)
 readme_version=$(sed -n 's/^Status: \*\*\([0-9.]*\)\*\*.*/\1/p' README.md)
 reference_version=$(sed -n 's/^Version \*\*\([0-9.]*\)\*\* · .*/\1/p' docs/api-reference.md)
-soname=$(sed -n 's/^SONAME := \(.*\)/\1/p' Makefile)
+abi_major=$(sed -n 's/^ABI_MAJOR := //p' Makefile)
+# Expand the Make variable so the comparison sees the effective object name.
+soname=$(sed -n 's/^SONAME := //p' Makefile | sed "s/\$(ABI_MAJOR)/$abi_major/g")
 if [ "$header_version" = "$version" ]; then
     pass "include/pt/base.h reports $version"
 else
@@ -73,22 +75,13 @@ if [ "$reference_version" = "$version" ]; then
 else
     problem "docs/api-reference.md reports '${reference_version:-nothing}', expected $version"
 fi
-case $version in
-1.*)
-    if [ "$soname" = "libpt.so.1" ]; then
-        pass "SONAME $soname matches a 1.x release"
-    else
-        problem "SONAME $soname must become libpt.so.1 for 1.0"
-    fi
-    ;;
-*)
-    if [ "$soname" = "libpt.so.0" ]; then
-        pass "SONAME $soname matches the 0.x series"
-    else
-        problem "SONAME $soname is neither libpt.so.0 (0.x) nor libpt.so.1 (1.x)"
-    fi
-    ;;
-esac
+if [ -z "$abi_major" ]; then
+    problem "Makefile does not define ABI_MAJOR; the SONAME cannot be checked"
+elif [ "$soname" = "libpt.so.$abi_major" ]; then
+    pass "SONAME $soname matches ABI_MAJOR $abi_major"
+else
+    problem "SONAME $soname must be libpt.so.$abi_major (ABI_MAJOR $abi_major)"
+fi
 
 section "Public header surface"
 draft=$(grep -n -E 'TODO|FIXME|XXX|experimental|pt_draft|PT_DRAFT' include/pt/*.h || true)

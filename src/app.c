@@ -518,6 +518,27 @@ pt_color_scheme pt_app_get_color_scheme(const pt_app *app) {
     return app ? app->theme.scheme : pt_color_scheme_dark;
 }
 
+void pt_app_set_ui_direction(pt_app *app, pt_ui_direction direction) {
+    if (!app || (direction != pt_ui_direction_inherit && direction != pt_ui_direction_ltr &&
+                 direction != pt_ui_direction_rtl)) {
+        return;
+    }
+    if (app->ui_direction == (uint8_t)direction) {
+        return;
+    }
+    app->ui_direction = (uint8_t)direction;
+    for (pt_window *window = app->first_window; window; window = window->next) {
+        pt_window_invalidate_layout(window, NULL);
+        window->needs_draw = true;
+        pt_window_damage_all(window);
+        pt_platform_window_schedule_draw(window);
+    }
+}
+
+pt_ui_direction pt_app_get_ui_direction(const pt_app *app) {
+    return app ? (pt_ui_direction)app->ui_direction : pt_ui_direction_inherit;
+}
+
 void pt_app_set_accent_color(pt_app *app, pt_color color) {
     if (!app) {
         return;

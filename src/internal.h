@@ -881,6 +881,9 @@ typedef struct pt_widget {
     int font_weight;
     pt_text_align text_align;
     pt_button_variant button_variant;
+    /* Explicit direction properties (since 2.0). Zero is inherit/auto. */
+    uint8_t ui_direction;
+    uint8_t text_direction;
 
     bool has_background;
     bool has_foreground;
@@ -1036,6 +1039,20 @@ pt_widget *pt_widget_new(pt_widget *parent, pt_widget_kind kind);
 void pt_widget_append(pt_widget *parent, pt_widget *child);
 pt_window *pt_widget_window(const pt_widget *widget);
 pt_app *pt_widget_app(const pt_widget *widget);
+
+/* ---------- direction properties (since 2.0) ---------- */
+
+/* Resolves the explicit values through widget -> nearest ancestor -> window ->
+ * application -> LTR. The text helper also runs P2/P3 first-strong detection
+ * when the inherited value is auto; a neutral-only paragraph falls back to the
+ * resolved UI direction. Both are side-effect free and never look at layout. */
+pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget);
+pt_text_direction pt_widget_resolved_text_direction(const pt_widget *widget,
+                                                    const char *text, size_t length);
+/* P2/P3 over one paragraph: R/AL -> RTL, L -> LTR, no strong character ->
+ * auto. Isolate contents are skipped. Exposed to tests and the W2 bidi pass,
+ * which cross-validates it against SheenBidi. */
+pt_text_direction pt_text_first_strong_direction(const char *text, size_t length);
 /* Liveness check usable after a user callback that may have destroyed widget:
  * it scans the window's live trees (root and overlay panels) instead of
  * dereferencing widget. A NULL window means "not attached". */
@@ -1277,6 +1294,8 @@ struct pt_app {
     int fd_dispatch_depth;
     uint64_t next_timer_id;
     uint64_t next_fd_watch_id;
+    /* Explicit application UI direction (since 2.0); zero means inherit/LTR. */
+    uint8_t ui_direction;
     bool running;
     bool quit_requested;
     bool quit_on_last_window_close;
@@ -1322,6 +1341,8 @@ struct pt_window {
     bool needs_layout;
     bool needs_draw;
     bool decorated;
+    /* Explicit window UI direction (since 2.0); zero means inherit from app. */
+    uint8_t ui_direction;
     pt_decoration_mode decoration_mode;
     pt_decoration_mode effective_decoration;
     bool csd;

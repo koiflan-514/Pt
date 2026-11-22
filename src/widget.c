@@ -1913,6 +1913,169 @@ void pt_widget_set_text_align(pt_widget *widget, pt_text_align align) {
     }
 }
 
+/* ---------- direction properties (since 2.0) ---------- */
+
+/* Strong-character classes for UBA P2/P3. The tables are intentionally
+ * compact: common Latin, Hebrew and Arabic must resolve correctly, while the
+ * less common ranges are best-effort until the W2 pass can cross-validate
+ * every paragraph against the SheenBidi UBA implementation. Weak and neutral
+ * characters (digits, punctuation, spaces, combining marks in the excluded
+ * subranges) are not listed and therefore do not break first-strong order. */
+static bool direction_cp_is_rtl_strong(uint32_t cp) {
+    return (cp >= 0x0590 && cp <= 0x05FF) ||   /* Hebrew */
+           (cp >= 0x07C0 && cp <= 0x07FF) ||   /* NKo */
+           (cp >= 0x0800 && cp <= 0x083F) ||   /* Samaritan */
+           (cp >= 0x0840 && cp <= 0x085F) ||   /* Mandaic */
+           (cp >= 0x1E900 && cp <= 0x1E95F) || /* Adlam */
+           (cp >= 0xFB1D && cp <= 0xFB4F) ||   /* Hebrew presentation forms */
+           cp == 0x200F;                       /* RIGHT-TO-LEFT MARK (R) */
+}
+
+static bool direction_cp_is_arabic_strong(uint32_t cp) {
+    return (cp >= 0x0620 && cp <= 0x064A) ||   /* Arabic letters + tatweel */
+           (cp >= 0x0671 && cp <= 0x06D3) ||   /* Arabic letters (not NSM) */
+           cp == 0x06D5 ||                     /* Arabic letter AE */
+           (cp >= 0x06E5 && cp <= 0x06E6) ||   /* Arabic small waw/yeh */
+           (cp >= 0x06FA && cp <= 0x06FF) ||   /* Arabic supplements */
+           (cp >= 0x0750 && cp <= 0x077F) ||   /* Arabic Supplement */
+           (cp >= 0x08A0 && cp <= 0x08FF) ||   /* Arabic Extended-A */
+           (cp >= 0xFB50 && cp <= 0xFDFF) ||   /* Presentation Forms-A */
+           (cp >= 0xFE70 && cp <= 0xFEFE) ||   /* Presentation Forms-B (not BOM) */
+           (cp >= 0x1EE00 && cp <= 0x1EEFF);   /* Arabic mathematical symbols */
+}
+
+static bool direction_cp_is_ltr_strong(uint32_t cp) {
+    return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') ||
+           (cp >= 0x00C0 && cp <= 0x00D6) || /* Latin-1 letters (not U+00D7) */
+           (cp >= 0x00D8 && cp <= 0x00F6) || /* Latin-1 letters (not U+00F7) */
+           (cp >= 0x00F8 && cp <= 0x02AF) || /* Latin Extended + IPA */
+           (cp >= 0x0370 && cp <= 0x03FF) || /* Greek */
+           (cp >= 0x0400 && cp <= 0x052F) || /* Cyrillic */
+           (cp >= 0x1E00 && cp <= 0x1EFF) || /* Latin Extended Additional */
+           (cp >= 0x2C60 && cp <= 0x2C7F) || /* Latin Extended-C */
+           (cp >= 0xA720 && cp <= 0xA7FF) || /* Latin Extended-D */
+           (cp >= 0xAB30 && cp <= 0xAB6F) || /* Latin Extended-E */
+           (cp >= 0xFF21 && cp <= 0xFF3A) || /* Fullwidth Latin capitals */
+           (cp >= 0xFF41 && cp <= 0xFF5A) || /* Fullwidth Latin small */
+           cp == 0x200E;                     /* LEFT-TO-RIGHT MARK (L) */
+}
+
+/* Formatting controls that never participate in first-strong detection.
+ * Isolate initiators and PDI are handled separately because their contents are
+ * skipped as a balanced region; embedding and override controls are skipped as
+ * single characters while their contents still participate (UBA P2). */
+static bool direction_cp_is_ignored_control(uint32_t cp) {
+    return cp <= 0x1F || (cp >= 0x7F && cp <= 0x9F) || cp == 0x00AD ||
+           (cp >= 0x200B && cp <= 0x200D) || (cp >= 0x202A && cp <= 0x202E) ||
+           (cp >= 0x2060 && cp <= 0x2064) || (cp >= 0x2066 && cp <= 0x2069) ||
+           cp == 0xFEFF;
+}
+
+pt_text_direction pt_text_first_strong_direction(const char *text, size_t length) {
+    if (!text || length == 0) {
+        return pt_text_direction_auto;
+    }
+    int isolate_depth = 0;
+    size_t pos = 0;
+    while (pos < length) {
+        size_t next = pos;
+        uint32_t cp = pt_utf8_decode(text, length, pos, &next);
+        if (next <= pos) {
+            next = pos + 1;
+        }
+        if (cp == 0x2066 || cp == 0x2067 || cp == 0x2068) { /* LRI/RLI/FSI */
+            ++isolate_depth;
+            pos = next;
+            continue;
+        }
+        if (cp == 0x2069) { /* PDI */
+            if (isolate_depth > 0) {
+                --isolate_depth;
+            }
+            pos = next;
+            continue;
+        }
+        if (isolate_depth > 0 || direction_cp_is_ignored_control(cp)) {
+            pos = next;
+            continue;
+        }
+        if (direction_cp_is_rtl_strong(cp) || direction_cp_is_arabic_strong(cp)) {
+            return pt_text_direction_rtl;
+        }
+        if (direction_cp_is_ltr_strong(cp)) {
+            return pt_text_direction_ltr;
+        }
+        pos = next;
+    }
+    return pt_text_direction_auto;
+}
+
+pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget) {
+    for (const pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
+        if (cursor->ui_direction != pt_ui_direction_inherit) {
+            return (pt_ui_direction)cursor->ui_direction;
+        }
+    }
+    pt_window *window = pt_widget_window(widget);
+    if (window) {
+        if (window->ui_direction != pt_ui_direction_inherit) {
+            return (pt_ui_direction)window->ui_direction;
+        }
+        if (window->app && window->app->ui_direction != pt_ui_direction_inherit) {
+            return (pt_ui_direction)window->app->ui_direction;
+        }
+    }
+    return pt_ui_direction_ltr;
+}
+
+pt_text_direction pt_widget_resolved_text_direction(const pt_widget *widget,
+                                                    const char *text, size_t length) {
+    for (const pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
+        if (cursor->text_direction != pt_text_direction_auto) {
+            return (pt_text_direction)cursor->text_direction;
+        }
+    }
+    pt_text_direction detected = pt_text_first_strong_direction(text, length);
+    if (detected != pt_text_direction_auto) {
+        return detected;
+    }
+    return pt_widget_resolved_ui_direction(widget) == pt_ui_direction_rtl
+               ? pt_text_direction_rtl
+               : pt_text_direction_ltr;
+}
+
+void pt_widget_set_ui_direction(pt_widget *widget, pt_ui_direction direction) {
+    if (!widget || (direction != pt_ui_direction_inherit &&
+                    direction != pt_ui_direction_ltr && direction != pt_ui_direction_rtl)) {
+        return;
+    }
+    if (widget->ui_direction == (uint8_t)direction) {
+        return;
+    }
+    widget->ui_direction = (uint8_t)direction;
+    pt_widget_mark_dirty(widget, true);
+}
+
+pt_ui_direction pt_widget_get_ui_direction(const pt_widget *widget) {
+    return widget ? (pt_ui_direction)widget->ui_direction : pt_ui_direction_inherit;
+}
+
+void pt_widget_set_text_direction(pt_widget *widget, pt_text_direction direction) {
+    if (!widget || (direction != pt_text_direction_auto &&
+                    direction != pt_text_direction_ltr && direction != pt_text_direction_rtl)) {
+        return;
+    }
+    if (widget->text_direction == (uint8_t)direction) {
+        return;
+    }
+    widget->text_direction = (uint8_t)direction;
+    pt_widget_mark_dirty(widget, true);
+}
+
+pt_text_direction pt_widget_get_text_direction(const pt_widget *widget) {
+    return widget ? (pt_text_direction)widget->text_direction : pt_text_direction_auto;
+}
+
 void pt_widget_set_visible(pt_widget *widget, bool visible) {
     if (widget) {
         widget->visible = visible;

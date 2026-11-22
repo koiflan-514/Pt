@@ -68,6 +68,55 @@ class BindingTests(unittest.TestCase):
         self.assertFalse(self.window.drag_active)
         self.window.drag_timeout = 0
 
+    def test_direction_properties(self) -> None:
+        self.assertEqual(pt.ui_direction_inherit, 0)
+        self.assertEqual(pt.ui_direction_ltr, 1)
+        self.assertEqual(pt.ui_direction_rtl, 2)
+        self.assertEqual(pt.text_direction_auto, 0)
+        self.assertEqual(pt.text_direction_ltr, 1)
+        self.assertEqual(pt.text_direction_rtl, 2)
+
+        label = pt.label(self.column, "direction")
+        self.assertEqual(self.app.ui_direction, pt.ui_direction_inherit)
+        self.assertEqual(self.window.ui_direction, pt.ui_direction_inherit)
+        self.assertEqual(self.column.ui_direction, pt.ui_direction_inherit)
+        self.assertEqual(label.ui_direction, pt.ui_direction_inherit)
+        self.assertEqual(label.text_direction, pt.text_direction_auto)
+
+        self.app.set_ui_direction(pt.ui_direction_rtl)
+        self.assertEqual(self.app.ui_direction, pt.ui_direction_rtl)
+        self.window.ui_direction = pt.ui_direction_ltr
+        self.assertEqual(self.window.ui_direction, pt.ui_direction_ltr)
+        self.column.set_ui_direction(pt.ui_direction_rtl).set_text_direction(
+            pt.text_direction_rtl
+        )
+        self.assertEqual(self.column.ui_direction, pt.ui_direction_rtl)
+        self.assertEqual(self.column.text_direction, pt.text_direction_rtl)
+        label.ui_direction = pt.ui_direction_ltr
+        label.text_direction = pt.text_direction_ltr
+        self.assertEqual(label.ui_direction, pt.ui_direction_ltr)
+        self.assertEqual(label.text_direction, pt.text_direction_ltr)
+
+        # Out-of-range values are rejected; the stored value is unchanged.
+        self.app.ui_direction = 99
+        self.window.ui_direction = 99
+        self.column.text_direction = 99
+        self.assertEqual(self.app.ui_direction, pt.ui_direction_rtl)
+        self.assertEqual(self.window.ui_direction, pt.ui_direction_ltr)
+        self.assertEqual(self.column.text_direction, pt.text_direction_rtl)
+
+        # Restore the zero values.
+        self.app.set_ui_direction(pt.ui_direction_inherit)
+        self.window.set_ui_direction(pt.ui_direction_inherit)
+        self.column.set_ui_direction(pt.ui_direction_inherit).set_text_direction(
+            pt.text_direction_auto
+        )
+        label.set_ui_direction(pt.ui_direction_inherit).set_text_direction(
+            pt.text_direction_auto
+        )
+        self.assertEqual(self.app.ui_direction, pt.ui_direction_inherit)
+        self.assertEqual(label.text_direction, pt.text_direction_auto)
+
     def test_a11y_status(self) -> None:
         self.assertEqual(self.app.a11y_status, pt.a11y_status_disabled)
         enabled = self.app.enable_a11y()

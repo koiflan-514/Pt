@@ -244,6 +244,14 @@ class app {
     [[nodiscard]] pt_color_scheme color_scheme() const {
         return pt_app_get_color_scheme(handle_);
     }
+    /* Application UI direction. The getter reports the stored explicit value
+     * (inherit when unset), not the resolved widget direction. */
+    void set_ui_direction(pt_ui_direction direction) const {
+        pt_app_set_ui_direction(handle_, direction);
+    }
+    [[nodiscard]] pt_ui_direction ui_direction() const {
+        return pt_app_get_ui_direction(handle_);
+    }
     void set_quit_on_last_window_close(bool enabled) const {
         pt_app_set_quit_on_last_window_close(handle_, enabled);
     }
@@ -601,6 +609,23 @@ class widget {
     widget &set_text_align(pt_text_align align) {
         pt_widget_set_text_align(handle_, align);
         return *this;
+    }
+    /* Direction properties; inherit/auto are the zero values, so an untouched
+     * widget follows its parent, window and application. The getters report
+     * the stored explicit value, not the resolved one. */
+    widget &set_ui_direction(pt_ui_direction direction) {
+        pt_widget_set_ui_direction(handle_, direction);
+        return *this;
+    }
+    [[nodiscard]] pt_ui_direction ui_direction() const {
+        return pt_widget_get_ui_direction(handle_);
+    }
+    widget &set_text_direction(pt_text_direction direction) {
+        pt_widget_set_text_direction(handle_, direction);
+        return *this;
+    }
+    [[nodiscard]] pt_text_direction text_direction() const {
+        return pt_widget_get_text_direction(handle_);
     }
     widget &set_visible(bool visible) {
         pt_widget_set_visible(handle_, visible);
@@ -1961,6 +1986,15 @@ class window {
     window &set_resizable(bool resizable) {
         pt_window_set_resizable(handle_, resizable);
         return *this;
+    }
+    /* Window UI direction; inherit (zero) follows the application. The getter
+     * reports the stored explicit value. */
+    window &set_ui_direction(pt_ui_direction direction) {
+        pt_window_set_ui_direction(handle_, direction);
+        return *this;
+    }
+    [[nodiscard]] pt_ui_direction ui_direction() const {
+        return pt_window_get_ui_direction(handle_);
     }
     window &set_decorated(bool decorated) {
         pt_window_set_decorated(handle_, decorated);
