@@ -217,6 +217,31 @@ static float table_column_left(const pt_widget *table, uint32_t column) {
     return left;
 }
 
+static bool table_is_rtl(const pt_widget *table) {
+    return table && pt_widget_resolved_ui_direction(table) == pt_ui_direction_rtl;
+}
+
+/* A column's logical offset from the visual origin of its row. The row keeps
+ * column 0 first in the child list; in RTL its origin sits at the right edge of
+ * the content box, so a column's trailing (right) edge is that offset. */
+static float table_column_right(const pt_widget *table, uint32_t column) {
+    pt_table_state *state = table_state((pt_widget *)table);
+    if (!state) {
+        return 0.0f;
+    }
+    uint32_t count = state->column_count;
+    if (column > count) {
+        column = count;
+    }
+    float right = 0.0f;
+    for (uint32_t i = column; i < count; ++i) {
+        if (!table_column_hidden(state, i)) {
+            right += state->column_widths[i];
+        }
+    }
+    return right;
+}
+
 static int32_t table_sort_index(const pt_table_state *state, uint32_t column) {
     if (!state) {
         return -1;
@@ -1444,16 +1469,28 @@ void pt_table_reveal_column(pt_widget *table, uint32_t column) {
     if (!state || column >= state->column_count || table_column_hidden(state, column)) {
         return;
     }
-    float left = table_column_left(table, column);
-    float right = left + state->column_widths[column];
     float viewport = pt_max_float(1.0f, table->width - table->padding_left -
                                            table->padding_right);
-    if (left < table->scroll_x) {
-        table->scroll_x = left;
-    } else if (right > table->scroll_x + viewport) {
-        table->scroll_x = right - viewport;
-    }
     float max_scroll = pt_max_float(0.0f, table_content_width(table) - viewport);
+    if (table_is_rtl(table)) {
+        /* RTL scroll 0 keeps the right edge in view; the offset is measured
+         * from the right so the reveal math only swaps the two edges. */
+        float right = table_column_right(table, column);
+        float left = right - state->column_widths[column];
+        if (right > table->scroll_x + viewport) {
+            table->scroll_x = right - viewport;
+        } else if (left < table->scroll_x) {
+            table->scroll_x = left;
+        }
+    } else {
+        float left = table_column_left(table, column);
+        float right = left + state->column_widths[column];
+        if (left < table->scroll_x) {
+            table->scroll_x = left;
+        } else if (right > table->scroll_x + viewport) {
+            table->scroll_x = right - viewport;
+        }
+    }
     table->scroll_x = pt_clamp_float(table->scroll_x, 0.0f, max_scroll);
     pt_widget_mark_dirty(table, true);
 }
@@ -1655,8 +1692,13 @@ void pt_table_header_down(pt_widget *table, pt_widget *cell, float x) {
         return;
     }
     uint32_t column = cell->column_index;
-    float edge = cell->x + cell->width;
-    if (state->column_resizable[column] && x >= edge - 6.0f && x <= edge + 2.0f) {
+    bool rtl = table_is_rtl(table);
+    /* The resize grip sits on the trailing edge of a header: the right edge in
+     * LTR, the left edge in RTL, so it always faces the neighbouring column. */
+    float edge = rtl ? cell->x : cell->x + cell->width;
+    float grip_low = rtl ? edge - 2.0f : edge - 6.0f;
+    float grip_high = rtl ? edge + 6.0f : edge + 2.0f;
+    if (state->column_resizable[column] && x >= grip_low && x <= grip_high) {
         state->resizing_column = (int32_t)column;
         state->resize_start_x = x;
         state->resize_start_width = state->column_widths[column];
@@ -1683,7 +1725,13 @@ void pt_table_pointer_drag(pt_widget *table, float x) {
     }
     if (state->resizing_column >= 0 &&
         (uint32_t)state->resizing_column < state->column_count) {
-        float width = state->resize_start_width + (x - state->resize_start_x);
+        /* In RTL the grip is on the left edge, so dragging left grows the
+         * column: the same motion moves the trailing edge outwards. */
+        float delta = x - state->resize_start_x;
+        if (table_is_rtl(table)) {
+            delta = -delta;
+        }
+        float width = state->resize_start_width + delta;
         pt_table_set_column_width(table, (uint32_t)state->resizing_column, width);
         return;
     }
@@ -1694,6 +1742,7 @@ void pt_table_pointer_drag(pt_widget *table, float x) {
     if (!cell) {
         return;
     }
+    bool rtl = table_is_rtl(table);
     if (!state->reorder_active &&
         (x < cell->x + 4.0f || x > cell->x + cell->width - 4.0f)) {
         state->reorder_active = true;
@@ -1701,13 +1750,16 @@ void pt_table_pointer_drag(pt_widget *table, float x) {
     if (!state->reorder_active) {
         return;
     }
+    /* The drop slot counts the columns whose midpoint the pointer has passed.
+     * RTL runs right to left, so a passed midpoint means x > centre. */
     int32_t target = 0;
     for (pt_widget *header_cell = state->header->first_child; header_cell;
          header_cell = header_cell->next_sibling) {
         if (header_cell->kind != pt_widget_table_header_cell || !header_cell->visible) {
             continue;
         }
-        if (x > header_cell->x + header_cell->width * 0.5f) {
+        float centre = header_cell->x + header_cell->width * 0.5f;
+        if (rtl ? x < centre : x > centre) {
             ++target;
         }
     }
@@ -1762,6 +1814,20 @@ pt_cursor pt_table_cursor(const pt_widget *table, float x, float y) {
         return pt_cursor_default;
     }
     float left = table->x + table->padding_left - table->scroll_x;
+    if (table_is_rtl(table)) {
+        /* The grip follows the trailing (left) edge in RTL. */
+        float right = table->x + table->width - table->padding_right + table->scroll_x;
+        for (uint32_t i = 0; i < state->column_count; ++i) {
+            if (table_column_hidden(state, i)) {
+                continue;
+            }
+            right -= state->column_widths[i];
+            if (state->column_resizable[i] && fabsf(x - right) <= 6.0f) {
+                return pt_cursor_resize_h;
+            }
+        }
+        return pt_cursor_default;
+    }
     for (uint32_t i = 0; i < state->column_count; ++i) {
         if (table_column_hidden(state, i)) {
             continue;
@@ -2292,11 +2358,18 @@ void pt_table_layout(pt_widget *table, const pt_layout_ctx *ctx, pt_rect inner) 
 
     pt_rect header_area = {inner.x, inner.y, inner.w, header_h};
     pt_rect rows_area = {inner.x, inner.y + header_h, inner.w, rows_h};
+    /* RTL keeps columns in logical order inside the header and each row; the
+     * container's origin moves to the right edge and cells are placed right to
+     * left because they are laid out with rtl_logical_order disabled mirroring.
+     * Scroll offset 0 therefore keeps the right edge in view. */
+    bool rtl = table_is_rtl(table);
+    float row_x = rtl ? inner.x + inner.w - content_w + table->scroll_x
+                      : inner.x - table->scroll_x;
     table->clip = pt_rect_intersect(inherited, header_area);
     state->header->visible = has_columns;
     if (state->header->visible) {
-        pt_widget_layout_child(state->header, inner.x - table->scroll_x, inner.y,
-                               content_w, header_h, ctx);
+        pt_widget_layout_child(state->header, row_x, inner.y, content_w, header_h, ctx);
+        state->header->rtl_logical_order = true;
         state->header->clip = table->clip;
         uint32_t column = 0;
         for (pt_widget *cell = state->header->first_child; cell;
@@ -2350,8 +2423,8 @@ void pt_table_layout(pt_widget *table, const pt_layout_ctx *ctx, pt_rect inner) 
         }
         row->row_selected = table_row_is_selected(table, state, row_index);
         float row_y = rows_area.y - table->scroll_y + (float)row_index * row_height;
-        pt_widget_layout_child(row, inner.x - table->scroll_x, row_y, content_w,
-                               row_height, ctx);
+        pt_widget_layout_child(row, row_x, row_y, content_w, row_height, ctx);
+        row->rtl_logical_order = true;
         row->clip = table->clip;
         ++index;
     }

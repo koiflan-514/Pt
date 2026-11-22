@@ -518,8 +518,18 @@ static float child_height_for(const pt_widget *parent, pt_widget *child, const p
 static void layout_widget_internal(pt_widget *widget, float x, float y, float width,
                                    float height, const pt_layout_ctx *ctx);
 
+static bool widget_rtl(const pt_widget *widget) {
+    return widget && pt_widget_resolved_ui_direction(widget) == pt_ui_direction_rtl;
+}
+
 static void layout_flex_children(pt_widget *parent, const pt_layout_ctx *ctx, pt_rect inner) {
     bool row = parent->direction == pt_direction_row;
+    /* UI mirroring (2.0). An RTL row lays its children out from the right edge,
+     * in reverse child order, with start/end justifying on the right. A column
+     * mirrors only the horizontal axis: start packs right, end packs left. The
+     * row cross axis is vertical, so pt_align_start/_end there never mirror.
+     * Table and tree column containers opt out and keep logical order. */
+    bool rtl = widget_rtl(parent) && !parent->rtl_logical_order;
     int count = 0;
     float total_gap = 0.0f;
     float total_margin_main = 0.0f;
@@ -645,14 +655,20 @@ static void layout_flex_children(pt_widget *parent, const pt_layout_ctx *ctx, pt
 
     float cursor = (row ? inner.x : inner.y) + offset;
     for (int i = 0; i < count; ++i) {
-        pt_widget *child = children[i];
-        float child_w = widths[i];
-        float child_h = heights[i];
+        pt_widget *child = children[rtl ? count - 1 - i : i];
+        float child_w = widths[rtl ? count - 1 - i : i];
+        float child_h = heights[rtl ? count - 1 - i : i];
         float child_x;
         float child_y;
         pt_align align = effective_align(parent, child);
         if (row) {
-            child_x = cursor + child->margin_left;
+            if (rtl) {
+                /* The cursor walks from the right edge; the slot's near margin is
+                 * still its physical left margin so spacing stays symmetrical. */
+                child_x = inner.x + inner.w - (cursor - inner.x) - child_w - child->margin_right;
+            } else {
+                child_x = cursor + child->margin_left;
+            }
             float start = inner.y + child->margin_top;
             float end = inner.y + inner.h - child->margin_bottom - child_h;
             if (align == pt_align_center) {
@@ -666,23 +682,26 @@ static void layout_flex_children(pt_widget *parent, const pt_layout_ctx *ctx, pt
                 child_h = pt_max_float(0.0f, inner.h - child->margin_top -
                                                  child->margin_bottom);
             }
-            cursor += child->margin_left + child_w + child->margin_right + between;
+            cursor += child_w + child->margin_left + child->margin_right + between;
         } else {
             child_y = cursor + child->margin_top;
-            float start = inner.x + child->margin_left;
-            float end = inner.x + inner.w - child->margin_right - child_w;
+            /* lead is the offset from inner.x to the child; the trailing offset
+             * is what an LTR start leaves on the right. */
+            float lead = child->margin_left;
+            float trailing = inner.w - child_w - child->margin_right;
             if (align == pt_align_center) {
-                child_x = inner.x + (inner.w - child_w) * 0.5f;
-            } else if (align == pt_align_end) {
-                child_x = end;
-            } else {
-                child_x = start;
-            }
-            if (align == pt_align_stretch) {
+                lead = (inner.w - child_w) * 0.5f;
+            } else if (align == pt_align_stretch) {
                 child_w = pt_max_float(0.0f, inner.w - child->margin_left -
                                                      child->margin_right);
-                child_x = start;
+                lead = child->margin_left;
+            } else if (align == pt_align_end) {
+                lead = rtl ? child->margin_right : trailing;
+            } else if (rtl) {
+                /* pt_align_start packs against the right edge in RTL. */
+                lead = trailing;
             }
+            child_x = inner.x + lead;
             cursor += child->margin_top + child_h + child->margin_bottom + between;
         }
         layout_widget_internal(child, child_x, child_y, child_w, child_h, ctx);
@@ -735,6 +754,9 @@ static float justify_offset(pt_justify justify, float free_space, int count,
 }
 
 static void layout_wrap_children(pt_widget *wrap, const pt_layout_ctx *ctx, pt_rect inner) {
+    /* RTL fills each line from the right edge in reverse child order; the
+     * justify offset then applies to the right edge. */
+    bool rtl = widget_rtl(wrap);
     int count = 0;
     for (pt_widget *child = wrap->first_child; child; child = child->next_sibling) {
         if (child->visible) {
@@ -806,9 +828,10 @@ static void layout_wrap_children(pt_widget *wrap, const pt_layout_ctx *ctx, pt_r
                                       wrap->gap);
         float cursor_x = inner.x + offset;
         for (int i = start; i < end; ++i) {
-            pt_widget *child = children[i];
-            float child_w = widths[i] - child->margin_left - child->margin_right;
-            float child_h = heights[i] - child->margin_top - child->margin_bottom;
+            int slot = rtl ? start + (end - 1 - i) : i;
+            pt_widget *child = children[slot];
+            float child_w = widths[slot] - child->margin_left - child->margin_right;
+            float child_h = heights[slot] - child->margin_top - child->margin_bottom;
             pt_align align = effective_align(wrap, child);
             if (align == pt_align_stretch) {
                 child_h = pt_max_float(0.0f, line_height - child->margin_top -
@@ -820,10 +843,12 @@ static void layout_wrap_children(pt_widget *wrap, const pt_layout_ctx *ctx, pt_r
             } else if (align == pt_align_end) {
                 child_y = cursor_y + line_height - child->margin_bottom - child_h;
             }
+            float slot_x = rtl ? inner.x + inner.w - (cursor_x - inner.x) - widths[slot]
+                               : cursor_x;
             pt_layout_ctx local = *ctx;
-            layout_widget_internal(child, cursor_x + child->margin_left, child_y, child_w,
+            layout_widget_internal(child, slot_x + child->margin_left, child_y, child_w,
                                    child_h, &local);
-            cursor_x += widths[i] + between;
+            cursor_x += widths[slot] + between;
         }
         cursor_y += line_height + wrap->row_gap;
         start = end;
@@ -938,6 +963,13 @@ static void layout_grid_children(pt_widget *grid, const pt_layout_ctx *ctx, pt_r
                                                                child->margin_top -
                                                                child->margin_bottom));
         float cell_x = inner.x + (float)cells[i].column * (column_width + grid->gap);
+        if (widget_rtl(grid)) {
+            /* Column 0 sits at the right edge; a span grows leftwards. */
+            cell_x = inner.x + inner.w -
+                     (float)(cells[i].column + cells[i].span) *
+                         (column_width + grid->gap) +
+                     grid->gap;
+        }
         float child_x = cell_x + child->margin_left;
         if (align_x == pt_align_center) {
             child_x = cell_x + (cell_width - child_w) * 0.5f;
@@ -1028,8 +1060,12 @@ static void layout_list_children(pt_widget *list, const pt_layout_ctx *ctx, pt_r
 }
 
 static void layout_scroll_children(pt_widget *scroll, const pt_layout_ctx *ctx, pt_rect inner) {
+    /* The scrollbar occupies a gutter on the trailing side: the right in LTR,
+     * the left in RTL. Its painting lives in paint.c. */
+    bool rtl = widget_rtl(scroll);
     float gutter = 10.0f;
     float content_w = pt_max_float(0.0f, inner.w - gutter);
+    float content_x = rtl ? inner.x + gutter : inner.x;
     float total_height = 0.0f;
     int count = 0;
     for (pt_widget *child = scroll->first_child; child; child = child->next_sibling) {
@@ -1055,12 +1091,13 @@ static void layout_scroll_children(pt_widget *scroll, const pt_layout_ctx *ctx, 
         }
         float child_w = child_width_for(scroll, child, ctx, content_w, inner.h);
         float child_h = child_height_for(scroll, child, ctx, content_w, inner.h, child_w);
-        float child_x = inner.x + child->margin_left;
+        float child_x = content_x + child->margin_left;
         pt_align align = effective_align(scroll, child);
         if (align == pt_align_center) {
-            child_x = inner.x + (content_w - child_w) * 0.5f;
+            child_x = content_x + (content_w - child_w) * 0.5f;
         } else if (align == pt_align_end) {
-            child_x = inner.x + content_w - child_w;
+            child_x = rtl ? content_x + child->margin_right
+                          : content_x + content_w - child_w;
         }
         layout_widget_internal(child, child_x, cursor + child->margin_top, child_w, child_h,
                                ctx);
@@ -1109,6 +1146,11 @@ static void layout_widget_internal(pt_widget *widget, float x, float y, float wi
 
     if (!layout_container(widget)) {
         return;
+    }
+    if (widget->kind == pt_widget_table_header || widget->kind == pt_widget_table_row) {
+        /* Table geometry is mirrored per column by pt_table_layout; the flex row
+         * that holds the cells keeps logical child order. */
+        widget->rtl_logical_order = true;
     }
     pt_rect inner = content_rect(widget);
     switch (widget->kind) {

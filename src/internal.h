@@ -952,6 +952,12 @@ typedef struct pt_widget {
     /* Explicit direction properties (since 2.0). Zero is inherit/auto. */
     uint8_t ui_direction;
     uint8_t text_direction;
+    /* Set on the column containers a table or tree owns. In RTL their children
+     * keep logical order (column 0 stays first in the child list) and the
+     * container mirrors only its origin, so the data views place each column
+     * themselves. Set by pt_widget_new for pt_widget_table_header and
+     * pt_widget_table_row; never touches the public header. */
+    bool rtl_logical_order;
 
     bool has_background;
     bool has_foreground;

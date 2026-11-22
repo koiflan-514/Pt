@@ -734,6 +734,7 @@ bool pt_tree_key(pt_widget *tree, uint32_t keysym, uint32_t modifiers) {
         }
     } else {
         pt_tree_node *node = state->visible[current];
+        bool rtl = pt_widget_resolved_ui_direction(tree) == pt_ui_direction_rtl;
         switch (keysym) {
         case XKB_KEY_Down:
             next = current + 1 < state->visible_count ? current + 1 : current;
@@ -755,16 +756,34 @@ bool pt_tree_key(pt_widget *tree, uint32_t keysym, uint32_t modifiers) {
             next = state->visible_count - 1;
             break;
         case XKB_KEY_Right:
-            if (node->first_child) {
-                if (!node->expanded) {
-                    pt_tree_node_set_expanded(node, true);
-                } else {
-                    pt_tree_select(tree, node->first_child, true);
+            /* Arrows follow the disclosure side. LTR: Right opens or steps into
+             * a node, Left closes or steps out. RTL mirrors that: the chevron
+             * is on the right, so Right closes or steps out and Left opens or
+             * steps in. */
+            if (!rtl) {
+                if (node->first_child) {
+                    if (!node->expanded) {
+                        pt_tree_node_set_expanded(node, true);
+                    } else {
+                        pt_tree_select(tree, node->first_child, true);
+                    }
                 }
+            } else if (node->expanded && node->first_child) {
+                pt_tree_node_set_expanded(node, false);
+            } else if (node->parent) {
+                pt_tree_select(tree, node->parent, true);
             }
             return true;
         case XKB_KEY_Left:
-            if (node->expanded && node->first_child) {
+            if (rtl) {
+                if (node->first_child) {
+                    if (!node->expanded) {
+                        pt_tree_node_set_expanded(node, true);
+                    } else {
+                        pt_tree_select(tree, node->first_child, true);
+                    }
+                }
+            } else if (node->expanded && node->first_child) {
                 pt_tree_node_set_expanded(node, false);
             } else if (node->parent) {
                 pt_tree_select(tree, node->parent, true);
@@ -839,8 +858,12 @@ void pt_tree_row_down(pt_widget *tree, pt_widget *row, float x, float y) {
     }
     pt_tree_node *node = row->tree_node;
     if (node->first_child) {
+        /* The disclosure sits on the trailing side: left in LTR, right in RTL,
+         * with the indent accumulating inwards from that edge. */
+        bool rtl = pt_widget_resolved_ui_direction(tree) == pt_ui_direction_rtl;
         float indent = pt_max_float(8.0f, state->indent);
-        float left = row->x + (float)node->depth * indent + 4.0f;
+        float offset = (float)node->depth * indent + 4.0f;
+        float left = rtl ? row->x + row->width - offset - 24.0f : row->x + offset;
         if (x >= left && x <= left + 24.0f && y >= row->y && y <= row->y + row->height) {
             pt_tree_node_set_expanded(node, !node->expanded);
             return;
@@ -1045,12 +1068,22 @@ void pt_tree_layout(pt_widget *tree, const pt_layout_ctx *ctx, pt_rect inner) {
         if (!target) {
             state->rename_editor->visible = false;
         } else {
+            /* Rename editor: starts after the indent and disclosure. */
             float offset = (float)state->rename_node->depth * state->indent;
+            bool rtl = pt_widget_resolved_ui_direction(tree) == pt_ui_direction_rtl;
             state->rename_editor->visible = true;
-            pt_widget_layout_child(state->rename_editor, target->x + offset + 28.0f,
-                                   target->y + 2.0f,
-                                   pt_max_float(48.0f, target->width - offset - 36.0f),
-                                   pt_max_float(20.0f, target->height - 4.0f), ctx);
+            if (rtl) {
+                float width = pt_max_float(48.0f, target->width - offset - 36.0f);
+                pt_widget_layout_child(state->rename_editor,
+                                       target->x + target->width - offset - 28.0f - width,
+                                       target->y + 2.0f, width,
+                                       pt_max_float(20.0f, target->height - 4.0f), ctx);
+            } else {
+                pt_widget_layout_child(state->rename_editor, target->x + offset + 28.0f,
+                                       target->y + 2.0f,
+                                       pt_max_float(48.0f, target->width - offset - 36.0f),
+                                       pt_max_float(20.0f, target->height - 4.0f), ctx);
+            }
             state->rename_editor->clip = tree->clip;
         }
     }
