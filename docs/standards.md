@@ -358,8 +358,8 @@ Unicode conformance runs in `make check` (770,241 + 91,707 cases, 0 failures),
 and the LTR compatibility gates are in place (17 unchanged pure-LTR snapshots;
 `tools/ltr-compat.sh` 11/11 `SAME` against 1.4.0).
 
-The final gate closed the 2.0 wave and left one gate-facility item, tracked in
-[ROADMAP.md](ROADMAP.md) under M22:
+The final gate closed the 2.0 wave; the pre-tag cleanup commits bring the gate
+facilities into the artifact, tracked in [ROADMAP.md](ROADMAP.md) under M22:
 
 - **W5b paint chrome is delivered.** Entry right-anchoring at `scroll_x = 0`,
   the RTL scrollbar and tree chevron paint side, the menu first-open anchor and
@@ -369,11 +369,12 @@ The final gate closed the 2.0 wave and left one gate-facility item, tracked in
   the frozen tree `91176c2`, the bidi performance profiles, the four live suites
   and `tools/ltr-compat.sh` passed, the symbol-level ABI diff against 1.4.0 is
   556 → 564 with 0 removed / 0 changed / 8 added, and
-  `tools/release-check.sh --full` reports every automated gate green. One
-  frozen-script defect remains outside the artifact: `tools/install-check.sh`
-  does not expand `$(ABI_MAJOR)`, so bare `tools/ci.sh` stops at the
-  staged-install step; the release record documents the verified one-line
-  expansion. The annotated tag is the owner's remaining step.
+  `tools/release-check.sh --full` reports every automated gate green. The two
+  frozen-script corrections now ship in the tag tree: `tools/install-check.sh`
+  expands `$(ABI_MAJOR)` the way `tools/release-check.sh` does, and
+  `tools/ci.sh` provides its `build/tests` path and `PT_WIRE_DRIVER`; bare
+  `tools/ci.sh` on `6775485` exits 0. The annotated tag is the owner's
+  remaining step.
 - **The RTL limitations are documented, not defects.** The tested Wayland
   compositors expose no horizontal wheel axis, so a table scrolls horizontally
   by scrollbar or keyboard; Shift+arrow across a soft wrap stays an in-line

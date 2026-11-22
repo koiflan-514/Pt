@@ -2125,12 +2125,12 @@ Closed at the final gate:
 - `tools/release-check.sh --full` reports every automated gate green and the
   two human open items (freeze commit/tag and live-suite sign-off, both
   recorded).
-- One frozen gate-script correction remains outside the artifact:
-  `tools/install-check.sh` reads `SONAME := libpt.so.$(ABI_MAJOR)` without
-  expanding it, so bare `tools/ci.sh` exits at the staged-install step after
-  every suite has passed. The release record documents the one-line expansion
-  (verified in a temporary copy) and the full consumer result; the repository
-  file was not modified by the documentation/gate branch.
+- The two gate-script corrections are in the tag tree (`1992f86`):
+  `tools/install-check.sh` expands `$(ABI_MAJOR)` the way
+  `tools/release-check.sh` does, and `tools/ci.sh` creates `build/tests` and
+  points `PT_WIRE_DRIVER` at the driver it built. Bare `tools/ci.sh` on
+  `6775485` exits 0 (`CI verification passed for Pt 2.0.0`) through every
+  stage, including the sanitizer, staged-install, tarball and live suites.
 
 ### Completion criteria
 

@@ -1172,10 +1172,13 @@ This is the **final gate record**. Every figure below was measured on
 `91176c2`, including `make check`, `make check-bindings`, `make perf-check`,
 the four live suites, the sanitizer and staged-install passes, the reproducible
 tarball and extracted rebuild, the symbol-level ABI comparison against 1.4.0
-and `tools/release-check.sh --full`. The only steps left before the tag are the
-owner's freeze confirmation and the one frozen-gate-script correction documented
-under [Gate transcript](#gate-transcript) (`tools/install-check.sh` does not
-expand `$(ABI_MAJOR)`); the artifact itself is tag-ready.
+and `tools/release-check.sh --full`. Three pre-tag cleanup commits follow it:
+`1992f86` expands `$(ABI_MAJOR)` in `tools/install-check.sh` and gives
+`tools/ci.sh` its test paths, `6775485` corrects the LTR scene count in the
+guides, and the commit that carries this paragraph records the resulting
+committed-tree digest. The clean exit-0 `tools/ci.sh` transcript and the
+committed-tree digest were measured on `6775485`; the artifact itself is
+tag-ready, and the only step left is the owner's freeze confirmation.
 
 ### Scope
 
@@ -1300,7 +1303,7 @@ section an upgrading application must read:
 | `make check` / `make check-bindings` | pass: 41 C executables (40 suites at 131,498 checks plus the 454,380-check property sweep, 585,878 in total), 0 failures; C++ 862 checks, Python 68 tests, Java 701 checks, 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
 | `make perf-check` with bidi profiles | pass on `91176c2`: dense layout 2.809 ms/frame, dense paint 5.281 ms/frame, damage 0.171 ms (3.2%), startup first frame 10.86 ms, idle 500 ms CPU 0.959 ms; every guard ceiling holds; bidi profiles mixed paragraph wrap+paint 0.874 ms (ceiling 2.0 ms), 100-row RTL table paint 2.896 ms (ceiling 7.0 ms), 1000 RTL caret moves 43.385 ms (ceiling 100 ms) |
 | Live suites | pass under nested niri on `91176c2`: `check-wayland` 48 checks with focused-entry idle 26.1 ms over 5000 ms after one external-input retry; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `PREEDIT_COUNT=5`, `LAST_PREEDIT=ni hao` and `COMMIT=你好`; `check-rtl-live` PASS — the IME rectangle matches the visual caret map within one pixel at every stop, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink |
-| Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pass with one frozen-script correction: `tools/ci.sh` on `91176c2` builds and runs every suite, perf and the 11/11 LTR gate, then stops at the staged-install step because `tools/install-check.sh` reads `libpt.so.$(ABI_MAJOR)` without expanding it; the corrected copy (temporary, repository file untouched) reports SONAME `libpt.so.1`, pkg-config 2.0.0, the baseline ABI and the C/C++/Python/Java consumers, and `uninstall` leaves no file. ASan+UBSan rebuild of 41 C binaries plus `test_cpp` (862 checks), the Python suite (68 tests) and the Java suite (701 checks) reports nothing; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.0.0` and `tests/libwire_driver.so`. Two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduce one digest (sidecar matches), and the extracted tree rebuilds with `werror=1` and passes `make check` |
+| Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pass end to end: bare `tools/ci.sh` on `6775485` exits 0 (`CI verification passed for Pt 2.0.0`) after the clean `werror=1` build, `make check`, `make perf-check`, the 11/11 LTR gate, staged install (SONAME `libpt.so.1`, pkg-config 2.0.0, the baseline ABI, the C/C++/Python/Java consumers and a clean `uninstall`), the ASan+UBSan rebuild (41 C binaries plus `test_cpp` 862 checks, the Python suite 68 tests and the Java suite 701 checks, nothing reported), two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproducing `b19e2995…cce9549` (sidecar matches; the extracted tree rebuilds with `werror=1` and passes `make check`) and the four live suites; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.0.0` and `tests/libwire_driver.so` |
 | ABI diff against 1.4.0 | pass at the symbol level on `91176c2`: 556 → 564 exported `pt_*` symbols, 0 removed, 0 changed, 8 added (`pt_app_{set,get}_ui_direction`, `pt_window_{set,get}_ui_direction`, `pt_widget_{set,get}_ui_direction`, `pt_widget_{set,get}_text_direction`), no `SB_*` exports, SONAME `libpt.so.1` on both; `readelf --dyn-syms` types agree on all 556 common symbols; `abidiff` is still unavailable on the reference machine |
 | `tools/release-check.sh --full` | pass: every automated gate is green (version agreement, header surface, 564/924 baseline, 564/564 parity in three languages, reference coverage, deprecation inventory, examples, 9 bilingual guides); the two open items are the human freeze commit/tag and live-suite sign-off, both recorded above |
 
@@ -1357,29 +1360,34 @@ recommended where libabigail exists.
 
 ### Gate transcript
 
-`tools/ci.sh` on `91176c2` ran the clean `werror=1` build, `make check`
-(41 C executables, the binding suites and the API audit), `make perf-check`,
-the 11/11 cross-version LTR gate and the staged-install consumers. Two frozen
-harness assumptions had to be satisfied before the suites could run at all:
-the Python wire tests and `test_canvas` resolve a repository-root `build/tests`
-path, so the transcript used the `PT_WIRE_DRIVER` environment hook the test
-documents (`$PWD/build/ci/normal/tests/libwire_driver.so`) and an existing
-`build/tests` directory. `tools/ci.sh` builds into `build/ci/normal`, so a bare
-invocation on a tree without a repository-root `build/` fails those two
-lookups; this is a test-path assumption, not a library defect, and the
-extracted tarball's own `make check` runs in `build/` and needs no hook.
+The clean transcript is a **bare `tools/ci.sh`** run on `6775485` — the gate
+tree plus the two script fixes and the guide scene-count correction — with no
+caller-side environment hooks. It exits 0 and prints `CI verification passed
+for Pt 2.0.0`. In order it performs the clean `werror=1` build; `make check`
+(41 C executables including the 454,380-check property sweep, `test_cpp` 862
+checks, Python 68 tests, Java 701 checks, 0 failures, and the API audit at
+564 functions / 924 entries with 564/564 parity in three languages); `make perf-check` with every guard `ok`; the cross-version LTR
+gate (`ltr-compat: 11 same, 0 different`, `PASS`, including
+`11-csd-title.ppm`); `tools/install-check.sh`; the sanitizer rebuild; the
+reproducible tarball and its extracted rebuild; and the four live suites.
 
-The staged-install step then stopped on a second frozen-script gap:
-`tools/install-check.sh` reads the literal `SONAME := libpt.so.$(ABI_MAJOR)`
-from the Makefile without expanding it (unlike `tools/release-check.sh`, which
-does expand it), so it looked for `libpt.so.$(ABI_MAJOR)` and exited 1 although
-`make install` had produced `libpt.so.2.0.0` with the `libpt.so.1` SONAME
-symlink. Running the same script with the one-line expansion in a temporary
-copy — the repository file was **not** modified — reports `SONAME libpt.so.1`,
-pkg-config 2.0.0, the baseline ABI, the C/C++/Python/Java consumers and a clean
-`uninstall` (`install check passed`).
+Two script corrections make that bare invocation self-contained, and both are
+in the tag tree (`1992f86`):
 
-The stages after that point were run individually on the same frozen tree:
+- `tools/install-check.sh` previously read the literal
+  `SONAME := libpt.so.$(ABI_MAJOR)` from the Makefile without expanding it
+  (unlike `tools/release-check.sh`, which does), so it looked for
+  `libpt.so.$(ABI_MAJOR)` and exited 1 although `make install` had produced
+  `libpt.so.2.0.0` with the `libpt.so.1` SONAME symlink. It now expands
+  `ABI_MAJOR` exactly the way `tools/release-check.sh` does.
+- `test_canvas`/`test_font` write PNGs to a repository-relative `build/tests`,
+  and the Python wire test defaults to `build/tests/libwire_driver.so`, while
+  `tools/ci.sh` builds into `build/ci/normal`. `tools/ci.sh` now creates
+  `build/tests` and exports `PT_WIRE_DRIVER` to the driver the run built (the
+  sanitized driver for the sanitized Python suite). The extracted tarball's
+  own `make check` runs in `build/` and needs no hook.
+
+The same run then executed every remaining stage:
 
 - **Sanitizers.** A `sanitize=1` rebuild from an empty `build/ci/sanitize`
   compiled 41 C binaries and `test_cpp` with
@@ -1393,41 +1401,43 @@ The stages after that point were run individually on the same frozen tree:
   skipped.
 - **Reproducible tarball.** Two `make dist` runs at
   `SOURCE_DATE_EPOCH=1767225600` write
-  `e9e436b974a3473727465289d27e6141c2cc0d116f830e1efa888a28ce95c513`
-  (the sidecar matches); the extracted archive builds with `werror=1` and
-  passes `make check` (`all checks passed`).
-- **Live suites.** `check-wayland` 48 checks (focused-entry idle 26.1 ms over
+  `b19e2995f360cce542ce4e2440661479c6718d928c5506a332a7d17d4cce9549`
+  (the sidecar matches); the extracted archive is tree-identical to
+  `git archive 6775485`, builds with `werror=1` and passes `make check`
+  (`all checks passed`).
+- **Live suites.** `check-wayland` 48 checks (focused-entry idle 24.1 ms over
   5000 ms after one external-input retry); `check-typing` PASS (`ptdirect`);
   `check-ime-live` PASS with `PREEDIT_COUNT=5`, `LAST_PREEDIT=ni hao` and
   `COMMIT=你好`; `check-rtl-live` PASS with every IME-rectangle/caret-map stop
-  within one pixel.
-- **Readiness.** `tools/release-check.sh --full` (with the same temporary
-  script copy) reports every automated gate green and the two human open items
-  (freeze commit/tag and live-suite sign-off).
+  within one pixel, Shift+Right keeping its anchor and the entry painting ink.
+- **Readiness.** `tools/release-check.sh --full` reports every automated gate
+  green and only the two human open items (freeze commit/tag and
+  live-suite sign-off).
 
-`tools/install-check.sh` still needs the same `$(ABI_MAJOR)` expansion
-`tools/release-check.sh` already implements; that one-line change in the frozen
-gate facility is the only item left before a clean exit-0 `tools/ci.sh`
-transcript can be quoted. The artifact, the suite results, the live runs and
-the ABI comparison are final on this tree; the annotated tag is created by the
-owner from the frozen commit.
+All suite counts, the live runs and the ABI comparison are final on this tree;
+the annotated tag is created by the owner from the frozen commit.
 
 ### Committed-tree digest
 
 The gate-time digest above was measured on `91176c2` with this record still in
 its draft (pending) form, before the figures were backfilled; editing this file
 necessarily changes the archive. For a reproducible reference on the record
-itself, the committed tree that carries the backfilled figures (`a36b1c9`, the
-parent of the commit that adds this note) produced
-`66a3724a70e66bf2e1703be8cdefcb49d7302a29522bda8af420f596845bbc20` on two
-consecutive `dist` runs. Adding this digest note changes `docs/release.md` once
+itself, the committed tree that carries the backfilled figures and the cleanup
+fixes (`6775485`, the parent of the commit that adds this note) produced
+`b19e2995f360cce542ce4e2440661479c6718d928c5506a332a7d17d4cce9549` on two
+consecutive `dist` runs, and the archive is tree-identical to
+`git archive 6775485`. Adding this digest note changes `docs/release.md` once
 more, so the tagged tree necessarily has a different digest; that is the
 self-reference of shipping the record inside the archive, not nondeterminism.
-`make dist` on the tagged tree reproduces its own digest exactly.
+`make dist` on the tagged tree reproduces its own digest exactly. The final
+tag-time digest is built by the landing agent from the frozen tagged tree and
+published as the sidecar; that is the authoritative value, and by design it
+differs from this committed-tree digest because this record lies inside the
+archive.
 
 All sha256 digests in this record — the gate-time
 `e9e436b974a3473727465289d27e6141c2cc0d116f830e1efa888a28ce95c513` and the
-committed-tree `66a3724a…` — were measured with
+committed-tree `b19e2995…` — were measured with
 `SOURCE_DATE_EPOCH=1767225600`, the reproducible-build epoch that
 `tools/ci.sh` fixes. A bare `make dist` derives its epoch from the last commit
 time instead, and that epoch lands in the mtime field of every tar header, so
@@ -1439,9 +1449,9 @@ quoted here, run `SOURCE_DATE_EPOCH=1767225600 make dist`, not a bare
 The annotated tag is created from the final gate tree once the owner confirms
 the freeze. `tools/release-check.sh --full` reports every automated gate green;
 the two open items it always reports are the human ones (freeze commit/tag and
-live-suite sign-off), and the live suites above were run on this tree. The one
-gate-facility correction (`tools/install-check.sh` `$(ABI_MAJOR)` expansion)
-remains outside the artifact.
+live-suite sign-off), and the live suites above were run on `6775485`. The
+`$(ABI_MAJOR)` expansion and the `ci.sh` test paths are part of the artifact,
+so a bare `tools/ci.sh` on the tagged tree exits 0.
 
 ## 1.4.0 validation record (2026-11-22)
 
