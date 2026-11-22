@@ -4402,7 +4402,18 @@ void pt_widget_set_text_direction(pt_widget *widget, pt_text_direction direction
 
 **Header:** [`pt/widget.h`](../include/pt/widget.h)
 
-Since 2.0.
+Since 2.0. Paragraph text direction. It is stored independently from the UI
+direction, so an LTR editor can sit inside an RTL shell and vice versa.
+pt_text_direction_auto (the zero value) resolves each paragraph from UBA
+P2/P3: the first strong character selects RTL for R/AL and LTR for L, text
+inside an isolate is skipped, and an empty or neutral-only first paragraph
+falls back to the resolved UI direction. pt_text_direction_ltr and
+pt_text_direction_rtl force the paragraph base and are not overridden by the
+UI direction. The setter stores the explicit value, ignores NULL or an
+out-of-range enum, and invalidates layout and repaint on a change. The getter
+returns the stored explicit value (auto when unset), never the resolved one.
+Direction is presentation only: it never changes stored UTF-8 bytes,
+selections or accessibility character offsets.
 
 **Contract**
 
