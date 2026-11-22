@@ -129,6 +129,8 @@ typedef enum fc_kind {
     FC_K_PRIMARY_OFFER,
     FC_K_TABLET_MANAGER,
     FC_K_TABLET_SEAT,
+    FC_K_TABLET,
+    FC_K_TABLET_TOOL,
     FC_K_COUNT,
     FC_K_UNKNOWN = 0xff
 } fc_kind;
@@ -149,6 +151,9 @@ typedef enum fc_kind {
 #define fc_kind_xdg_toplevel_icon_v1 FC_K_ICON
 #define fc_kind_zxdg_toplevel_decoration_v1 FC_K_DECORATION
 #define fc_kind_wl_touch FC_K_TOUCH
+#define fc_kind_zwp_tablet_seat_v2 FC_K_TABLET_SEAT
+#define fc_kind_zwp_tablet_v2 FC_K_TABLET
+#define fc_kind_zwp_tablet_tool_v2 FC_K_TABLET_TOOL
 
 /* ---------- recorded requests ---------- */
 
@@ -523,10 +528,17 @@ static const fc_req_desc fc_reqs_primary_offer[] = {
     {"destroy", "", 0, true},
 };
 static const fc_req_desc fc_reqs_tablet_manager[] = {
-    {"destroy", "", 0, true},
     {"get_tablet_seat", "no", FC_K_TABLET_SEAT, false},
+    {"destroy", "", 0, true},
 };
 static const fc_req_desc fc_reqs_tablet_seat[] = {
+    {"destroy", "", 0, true},
+};
+static const fc_req_desc fc_reqs_tablet[] = {
+    {"destroy", "", 0, true},
+};
+static const fc_req_desc fc_reqs_tablet_tool[] = {
+    {"set_cursor", "uoii", 0, false},
     {"destroy", "", 0, true},
 };
 
@@ -585,6 +597,8 @@ static const fc_iface_desc fc_ifaces[FC_K_COUNT] = {
              fc_reqs_primary_offer),
     FC_IFACE(FC_K_TABLET_MANAGER, "zwp_tablet_manager_v2", 1, fc_reqs_tablet_manager),
     FC_IFACE(FC_K_TABLET_SEAT, "zwp_tablet_seat_v2", 1, fc_reqs_tablet_seat),
+    FC_IFACE(FC_K_TABLET, "zwp_tablet_v2", 1, fc_reqs_tablet),
+    FC_IFACE(FC_K_TABLET_TOOL, "zwp_tablet_tool_v2", 1, fc_reqs_tablet_tool),
 };
 
 #undef FC_IFACE
@@ -1348,6 +1362,318 @@ static inline bool fake_compositor_touch_cancel(fake_compositor *fc) {
         return false;
     }
     return fc_send_empty(fc, touch, 4);
+}
+
+/* ---------- tablet-v2 (stylus) ---------- */
+
+/* The tablet and tool proxies are server-created: zwp_tablet_seat_v2 sends
+ * tablet_added / tool_added with a new_id from the server id range. The objects
+ * are registered in the fake object table so requests on them (destroy,
+ * set_cursor) decode with the right kind. Event opcodes follow
+ * protocols/tablet-unstable-v2.xml:
+ *   seat:  tablet_added(0) tool_added(1) pad_added(2)
+ *   tablet: name(0) id(1) path(2) done(3) removed(4)
+ *   tool:  type(0) hardware_serial(1) hardware_id_wacom(2) capability(3)
+ *          done(4) removed(5) proximity_in(6) proximity_out(7) down(8) up(9)
+ *          motion(10) pressure(11) distance(12) tilt(13) rotation(14)
+ *          slider(15) wheel(16) button(17) frame(18) */
+static inline bool fake_compositor_tablet_add(fake_compositor *fc, uint32_t *tablet_out) {
+    uint32_t seat = 0;
+    uint32_t tablet = 0;
+    pthread_mutex_lock(&fc->state_lock);
+    seat = fc_find_live_locked(fc, FC_K_TABLET_SEAT);
+    if (seat) {
+        tablet = fc->next_server_id++;
+        if (!fc_object_new_locked(fc, tablet, FC_K_TABLET, seat)) {
+            tablet = 0;
+        }
+    }
+    pthread_mutex_unlock(&fc->state_lock);
+    if (!seat || !tablet) {
+        return false;
+    }
+    if (tablet_out) {
+        *tablet_out = tablet;
+    }
+    return fc_send_u32(fc, seat, 0, tablet);
+}
+
+static inline bool fake_compositor_tablet_add_tool(fake_compositor *fc, uint32_t *tool_out) {
+    uint32_t seat = 0;
+    uint32_t tablet = 0;
+    uint32_t tool = 0;
+    pthread_mutex_lock(&fc->state_lock);
+    seat = fc_find_live_locked(fc, FC_K_TABLET_SEAT);
+    tablet = fc_find_live_locked(fc, FC_K_TABLET);
+    if (seat && tablet) {
+        tool = fc->next_server_id++;
+        if (!fc_object_new_locked(fc, tool, FC_K_TABLET_TOOL, tablet)) {
+            tool = 0;
+        }
+    }
+    pthread_mutex_unlock(&fc->state_lock);
+    if (!seat || !tool) {
+        return false;
+    }
+    if (tool_out) {
+        *tool_out = tool;
+    }
+    return fc_send_u32(fc, seat, 1, tool);
+}
+
+static inline bool fake_compositor_tablet_name(fake_compositor *fc, const char *name) {
+    uint32_t tablet = fc_live_id(fc, FC_K_TABLET);
+    if (!tablet) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, name);
+    return fc_send(fc, tablet, 0, &builder);
+}
+
+static inline bool fake_compositor_tablet_id(fake_compositor *fc, uint32_t vid, uint32_t pid) {
+    uint32_t tablet = fc_live_id(fc, FC_K_TABLET);
+    if (!tablet) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, vid);
+    fc_b_u32(&builder, pid);
+    return fc_send(fc, tablet, 1, &builder);
+}
+
+static inline bool fake_compositor_tablet_path(fake_compositor *fc, const char *path) {
+    uint32_t tablet = fc_live_id(fc, FC_K_TABLET);
+    if (!tablet) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, path);
+    return fc_send(fc, tablet, 2, &builder);
+}
+
+static inline bool fake_compositor_tablet_done(fake_compositor *fc) {
+    uint32_t tablet = fc_live_id(fc, FC_K_TABLET);
+    if (!tablet) {
+        return false;
+    }
+    return fc_send_empty(fc, tablet, 3);
+}
+
+static inline bool fake_compositor_tablet_removed(fake_compositor *fc) {
+    uint32_t tablet = fc_live_id(fc, FC_K_TABLET);
+    if (!tablet) {
+        return false;
+    }
+    return fc_send_empty(fc, tablet, 4);
+}
+
+static inline bool fake_compositor_tablet_tool_type(fake_compositor *fc, uint32_t tool_type) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_u32(fc, tool, 0, tool_type);
+}
+
+static inline bool fake_compositor_tablet_tool_hardware_serial(fake_compositor *fc,
+                                                               uint32_t serial_hi,
+                                                               uint32_t serial_lo) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, serial_hi);
+    fc_b_u32(&builder, serial_lo);
+    return fc_send(fc, tool, 1, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_hardware_id(fake_compositor *fc, uint32_t id_hi,
+                                                           uint32_t id_lo) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, id_hi);
+    fc_b_u32(&builder, id_lo);
+    return fc_send(fc, tool, 2, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_capability(fake_compositor *fc,
+                                                          uint32_t capability) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_u32(fc, tool, 3, capability);
+}
+
+static inline bool fake_compositor_tablet_tool_done(fake_compositor *fc) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_empty(fc, tool, 4);
+}
+
+static inline bool fake_compositor_tablet_tool_removed(fake_compositor *fc) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_empty(fc, tool, 5);
+}
+
+/* proximity_in carries the tablet object the tool belongs to (newest live
+ * tablet) and the wl_surface it is over. */
+static inline bool fake_compositor_tablet_tool_proximity_in(fake_compositor *fc,
+                                                            uint32_t serial,
+                                                            uint32_t surface) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    uint32_t tablet = fc_live_id(fc, FC_K_TABLET);
+    if (!tool || !tablet) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, serial);
+    fc_b_u32(&builder, tablet);
+    fc_b_u32(&builder, surface);
+    return fc_send(fc, tool, 6, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_proximity_out(fake_compositor *fc) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_empty(fc, tool, 7);
+}
+
+static inline bool fake_compositor_tablet_tool_down(fake_compositor *fc, uint32_t serial) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_u32(fc, tool, 8, serial);
+}
+
+static inline bool fake_compositor_tablet_tool_up(fake_compositor *fc) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_empty(fc, tool, 9);
+}
+
+static inline bool fake_compositor_tablet_tool_motion(fake_compositor *fc, double x,
+                                                      double y) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_fixed(&builder, x);
+    fc_b_fixed(&builder, y);
+    return fc_send(fc, tool, 10, &builder);
+}
+
+/* pressure and distance are the protocol's 0..65535 range; platform.c
+ * normalizes to [0, 1]. */
+static inline bool fake_compositor_tablet_tool_pressure(fake_compositor *fc,
+                                                        uint32_t pressure) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_u32(fc, tool, 11, pressure);
+}
+
+static inline bool fake_compositor_tablet_tool_distance(fake_compositor *fc,
+                                                        uint32_t distance) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_u32(fc, tool, 12, distance);
+}
+
+static inline bool fake_compositor_tablet_tool_tilt(fake_compositor *fc, double tilt_x,
+                                                    double tilt_y) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_fixed(&builder, tilt_x);
+    fc_b_fixed(&builder, tilt_y);
+    return fc_send(fc, tool, 13, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_rotation(fake_compositor *fc, double degrees) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_fixed(&builder, degrees);
+    return fc_send(fc, tool, 14, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_slider(fake_compositor *fc, int32_t position) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_i32(&builder, position);
+    return fc_send(fc, tool, 15, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_wheel(fake_compositor *fc, double degrees,
+                                                     int32_t clicks) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_fixed(&builder, degrees);
+    fc_b_i32(&builder, clicks);
+    return fc_send(fc, tool, 16, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_button(fake_compositor *fc, uint32_t serial,
+                                                      uint32_t button, bool pressed) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, serial);
+    fc_b_u32(&builder, button);
+    fc_b_u32(&builder, pressed ? 1u : 0u);
+    return fc_send(fc, tool, 17, &builder);
+}
+
+static inline bool fake_compositor_tablet_tool_frame(fake_compositor *fc, uint32_t time) {
+    uint32_t tool = fc_live_id(fc, FC_K_TABLET_TOOL);
+    if (!tool) {
+        return false;
+    }
+    return fc_send_u32(fc, tool, 18, time);
 }
 
 /* ---------- text-input v3 events ---------- */

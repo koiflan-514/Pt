@@ -73,6 +73,19 @@ static void wire_log_gesture(pt_window *window, const pt_gesture_event *event,
     ++log->count;
 }
 
+typedef struct wire_stylus_log {
+    int count;
+    pt_stylus_event last;
+} wire_stylus_log;
+
+static void wire_log_stylus(pt_window *window, const pt_stylus_event *event,
+                            void *user_data) {
+    (void)window;
+    wire_stylus_log *log = user_data;
+    log->last = *event;
+    ++log->count;
+}
+
 static void wire_count_click(pt_widget *widget, void *user_data) {
     (void)widget;
     ++*(int *)user_data;
@@ -84,8 +97,15 @@ static void wire_count_click(pt_widget *widget, void *user_data) {
  * pre-1.4 kind value stays stable, and the inspected opcodes must match the
  * XML the client headers were generated from. */
 static void test_facility_tables(void) {
+    pt_check(FC_K_TABLET > FC_K_TABLET_SEAT);
+    pt_check(FC_K_TABLET_TOOL > FC_K_TABLET);
+    pt_check(FC_K_COUNT == FC_K_TABLET_TOOL + 1);
 
     pt_check(fc_kind_from_name("wl_touch") == FC_K_TOUCH);
+    pt_check(fc_kind_from_name("zwp_tablet_seat_v2") == FC_K_TABLET_SEAT);
+    pt_check(fc_kind_from_name("zwp_tablet_v2") == FC_K_TABLET);
+    pt_check(fc_kind_from_name("zwp_tablet_tool_v2") == FC_K_TABLET_TOOL);
+    pt_check(fc_kind_from_name("zwp_tablet_manager_v2") == FC_K_TABLET_MANAGER);
 
     /* wayland.xml: wl_touch.down/up/motion/frame/cancel are 0..4 and the only
      * request is release(0). */
@@ -94,6 +114,16 @@ static void test_facility_tables(void) {
 
     /* tablet-unstable-v2: seat tablet_added(0)/tool_added(1)/pad_added(2);
      * tablet destroy(0); tool set_cursor(0)/destroy(1). */
+    pt_check(fc_ifaces[FC_K_TABLET_SEAT].req_count == 1);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET].name, "zwp_tablet_v2") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET].reqs[0].name, "destroy") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET_MANAGER].reqs[0].name, "get_tablet_seat") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET_MANAGER].reqs[0].sig, "no") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET_MANAGER].reqs[1].name, "destroy") == 0);
+    pt_check(fc_ifaces[FC_K_TABLET_TOOL].req_count == 2);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET_TOOL].reqs[0].name, "set_cursor") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET_TOOL].reqs[0].sig, "uoii") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_TABLET_TOOL].reqs[1].name, "destroy") == 0);
 
     /* wayland.xml wl_data_offer: accept(0), receive(1), destroy(2), finish(3),
      * set_actions(4). wl_data_source: offer(0), destroy(1), set_actions(2). */
@@ -263,8 +293,204 @@ static void test_touch_wire(void) {
 
 /* ---------- tablet / stylus ---------- */
 
+static void test_tablet_wire(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.wire.tablet");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_check(fake_compositor_global_bound(&fc, FC_K_TABLET_MANAGER));
+    pt_check(fake_compositor_live_id(&fc, FC_K_TABLET_SEAT) != 0);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TABLET_MANAGER, 0) >= 1);
+    fc_request tablet_seat_request = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_TABLET_MANAGER, 0, &tablet_seat_request));
+    pt_check(tablet_seat_request.new_id ==
+             fake_compositor_live_id(&fc, FC_K_TABLET_SEAT));
+    pt_check(tablet_seat_request.args[1].u == fake_compositor_live_id(&fc, FC_K_SEAT));
+
+    pt_window *window = wire_open_window(&fc, app, "tablet-wire", 400, 300);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_widget *target = pt_button_create(pt_window_root(window), "Ink");
+    pt_widget_set_size(target, 200.0f, 90.0f);
+    pt_widget_set_align_self(target, pt_align_start);
+    int clicks = 0;
+    pt_button_set_on_click(target, wire_count_click, &clicks);
+    pt_canvas *canvas = wire_paint(window, 400, 300);
+    float cx = target->x + target->width * 0.5f;
+    float cy = target->y + target->height * 0.5f;
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+
+    wire_stylus_log stylus = {0};
+    pt_window_set_stylus_callback(window, wire_log_stylus, &stylus);
+
+    /* The compositor announces a tablet, then a tool on the tablet seat. Both
+     * proxies use server ids and are registered in the object table. */
+    uint32_t tablet = 0;
+    pt_check(fake_compositor_tablet_add(&fc, &tablet));
+    pt_check(tablet != 0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_live_id(&fc, FC_K_TABLET) == tablet);
+    pt_check(fake_compositor_tablet_name(&fc, "Fake Intuos"));
+    pt_check(fake_compositor_tablet_id(&fc, 0x056au, 0x0002u));
+    pt_check(fake_compositor_tablet_path(&fc, "/dev/fake-tablet"));
+    pt_check(fake_compositor_tablet_done(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+
+    uint32_t tool = 0;
+    pt_check(fake_compositor_tablet_add_tool(&fc, &tool));
+    pt_check(tool != 0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_live_id(&fc, FC_K_TABLET_TOOL) == tool);
+    pt_check(app->platform->tablet_tool_count == 1);
+    pt_check(fake_compositor_tablet_tool_type(&fc, wire_tablet_type_pen));
+    pt_check(fake_compositor_tablet_tool_hardware_serial(&fc, 0x11223344u, 0x55667788u));
+    pt_check(fake_compositor_tablet_tool_hardware_id(&fc, 0x056au, 0x0002u));
+    pt_check(fake_compositor_tablet_tool_capability(&fc, wire_tablet_capability_pressure));
+    pt_check(fake_compositor_tablet_tool_capability(&fc, wire_tablet_capability_tilt));
+    pt_check(fake_compositor_tablet_tool_done(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->tablet_tools[0]->type == pt_stylus_tool_pen);
+
+    /* Proximity with motion/pressure/tilt is grouped into one enter frame.
+     * 32768/65535 normalizes to 0.5 exactly. */
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_tablet_tool_proximity_in(&fc, 9101u, surface));
+    pt_check(fake_compositor_tablet_tool_motion(&fc, cx, cy));
+    pt_check(fake_compositor_tablet_tool_pressure(&fc, 32768u));
+    pt_check(fake_compositor_tablet_tool_tilt(&fc, 30.0, -15.0));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 1u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 1);
+    pt_check(stylus.last.phase == pt_stylus_phase_enter);
+    pt_check(stylus.last.tool == pt_stylus_tool_pen);
+    pt_check_near(stylus.last.x, cx, 0.5);
+    pt_check_near(stylus.last.y, cy, 0.5);
+    pt_check_near(stylus.last.pressure, 0.5, 0.0001);
+    pt_check_near(stylus.last.tilt_x, 30.0, 0.01);
+    pt_check_near(stylus.last.tilt_y, -15.0, 0.01);
+    pt_check(window->stylus_in_range);
+
+    /* Contact: down, then full pressure. */
+    pt_check(fake_compositor_tablet_tool_down(&fc, 9102u));
+    pt_check(fake_compositor_tablet_tool_pressure(&fc, 65535u));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 2u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 2);
+    pt_check(stylus.last.phase == pt_stylus_phase_down);
+    pt_check_near(stylus.last.pressure, 1.0, 0.0001);
+    pt_check(window->stylus_down);
+
+    /* Motion carries the barrel button bit; 16384/65535 = 0.25. */
+    pt_check(fake_compositor_tablet_tool_motion(&fc, cx + 8.0, cy + 4.0));
+    pt_check(fake_compositor_tablet_tool_pressure(&fc, 16384u));
+    pt_check(fake_compositor_tablet_tool_button(&fc, 9103u, wire_btn_stylus, true));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 3u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 3);
+    pt_check(stylus.last.phase == pt_stylus_phase_motion);
+    pt_check_near(stylus.last.x, cx + 8.0, 0.5);
+    pt_check_near(stylus.last.y, cy + 4.0, 0.5);
+    pt_check_near(stylus.last.pressure, 0.25, 0.0001);
+    pt_check(stylus.last.buttons == PT_STYLUS_BUTTON_BARREL);
+
+    /* A second button adds the secondary bit; the button release clears it. */
+    pt_check(fake_compositor_tablet_tool_button(&fc, 9104u, wire_btn_stylus2, true));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 4u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 4);
+    pt_check(stylus.last.buttons ==
+             (PT_STYLUS_BUTTON_BARREL | PT_STYLUS_BUTTON_SECONDARY));
+    pt_check(fake_compositor_tablet_tool_button(&fc, 9105u, wire_btn_stylus, false));
+    pt_check(fake_compositor_tablet_tool_button(&fc, 9106u, wire_btn_stylus2, false));
+    pt_check(fake_compositor_tablet_tool_pressure(&fc, 0u));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 5u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 5);
+    pt_check(stylus.last.buttons == 0u);
+    pt_check_near(stylus.last.pressure, 0.0, 0.0001);
+
+    /* Up ends contact; the button click fires on the press/release pair. */
+    pt_check(fake_compositor_tablet_tool_up(&fc));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 6u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 6);
+    pt_check(stylus.last.phase == pt_stylus_phase_up);
+    pt_check(!window->stylus_down);
+    pt_check(clicks == 1);
+
+    /* Leaving proximity emits leave and clears the range state. */
+    pt_check(fake_compositor_tablet_tool_proximity_out(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(stylus.count == 7);
+    pt_check(stylus.last.phase == pt_stylus_phase_leave);
+    pt_check(!window->stylus_in_range);
+    pt_check(!window->stylus_down);
+
+    /* Tool removal destroys the client proxy and frees the Pt tool state. */
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_tablet_tool_removed(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->tablet_tool_count == 0);
+    pt_check(fake_compositor_live_id(&fc, FC_K_TABLET_TOOL) == 0);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TABLET_TOOL, 1) >= 1);
+
+    /* A second tool maps a different type and follows the same lifecycle. */
+    uint32_t tool2 = 0;
+    pt_check(fake_compositor_tablet_add_tool(&fc, &tool2));
+    pt_check(tool2 != 0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_tablet_tool_type(&fc, wire_tablet_type_eraser));
+    pt_check(fake_compositor_tablet_tool_done(&fc));
+    pt_check(fake_compositor_tablet_tool_proximity_in(&fc, 9201u, surface));
+    pt_check(fake_compositor_tablet_tool_motion(&fc, cx, cy));
+    pt_check(fake_compositor_tablet_tool_frame(&fc, 7u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->tablet_tool_count == 1);
+    pt_check(app->platform->tablet_tools[0]->type == pt_stylus_tool_eraser);
+    pt_check(stylus.count == 8);
+    pt_check(stylus.last.phase == pt_stylus_phase_enter);
+    pt_check(stylus.last.tool == pt_stylus_tool_eraser);
+    pt_check(fake_compositor_tablet_tool_removed(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->tablet_tool_count == 0);
+
+    /* Tablet removal destroys the tablet proxy. */
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_tablet_removed(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_live_id(&fc, FC_K_TABLET) == 0);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_TABLET, 0) >= 1);
+
+    pt_check(!fake_compositor_request_overflowed(&fc));
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+    pt_check(fake_compositor_error(&fc) == NULL);
+
+    if (canvas) {
+        pt_canvas_destroy(canvas);
+    }
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
     test_facility_tables();
     test_touch_wire();
+    test_tablet_wire();
     return pt_test_finish("wire_input");
 }
