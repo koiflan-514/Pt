@@ -71,6 +71,10 @@
 #define FC_OPT_DATA_DEVICE (1u << 6)
 #define FC_OPT_PRIMARY (1u << 7)
 #define FC_OPT_TABLET (1u << 8)
+/* Clamps the text-input manager global to version 1 so the v2-only requests and
+ * events (action, preedit_hint, show/hide_input_panel) are unavailable. Combine
+ * with FC_OPT_TEXT_INPUT; it does not advertise that global by itself. */
+#define FC_OPT_TEXT_INPUT_V1 (1u << 9)
 #define FC_OPT_ALL                                                                   \
     (FC_OPT_ICON | FC_OPT_DECORATION | FC_OPT_FRACTIONAL | FC_OPT_VIEWPORTER |       \
      FC_OPT_TEXT_INPUT | FC_OPT_GESTURES | FC_OPT_DATA_DEVICE | FC_OPT_PRIMARY |      \
@@ -1260,6 +1264,136 @@ static inline void fake_compositor_keyboard_repeat_info(fake_compositor *fc, int
     (void)fc_send(fc, keyboard, 5, &builder);
 }
 
+/* ---------- text-input v3 events ---------- */
+
+/* Event opcodes from protocols/text-input-unstable-v3.xml. action, language and
+ * preedit_hint are since version 2. `done` is the commit point: the client
+ * accumulates preedit_string/commit_string/delete_surrounding_text/action/
+ * preedit_hint and only applies them when done arrives. All helpers target the
+ * newest live zwp_text_input_v3 object and return false when none exists. */
+#define fc_text_input_enter 0u
+#define fc_text_input_leave 1u
+#define fc_text_input_preedit_string 2u
+#define fc_text_input_commit_string 3u
+#define fc_text_input_delete_surrounding_text 4u
+#define fc_text_input_done 5u
+#define fc_text_input_action 6u
+#define fc_text_input_language 7u
+#define fc_text_input_preedit_hint 8u
+
+static inline bool fake_compositor_text_input_enter(fake_compositor *fc,
+                                                     uint32_t surface) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, surface);
+    return fc_send(fc, text_input, fc_text_input_enter, &builder);
+}
+
+static inline bool fake_compositor_text_input_leave(fake_compositor *fc,
+                                                     uint32_t surface) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, surface);
+    return fc_send(fc, text_input, fc_text_input_leave, &builder);
+}
+
+static inline bool fake_compositor_text_input_preedit_string(fake_compositor *fc,
+                                                              const char *text,
+                                                              int32_t cursor_begin,
+                                                              int32_t cursor_end) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, text);
+    fc_b_i32(&builder, cursor_begin);
+    fc_b_i32(&builder, cursor_end);
+    return fc_send(fc, text_input, fc_text_input_preedit_string, &builder);
+}
+
+static inline bool fake_compositor_text_input_commit_string(fake_compositor *fc,
+                                                             const char *text) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, text);
+    return fc_send(fc, text_input, fc_text_input_commit_string, &builder);
+}
+
+static inline bool fake_compositor_text_input_delete_surrounding_text(
+    fake_compositor *fc, uint32_t before_length, uint32_t after_length) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, before_length);
+    fc_b_u32(&builder, after_length);
+    return fc_send(fc, text_input, fc_text_input_delete_surrounding_text, &builder);
+}
+
+static inline bool fake_compositor_text_input_done(fake_compositor *fc, uint32_t serial) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    return fc_send_u32(fc, text_input, fc_text_input_done, serial);
+}
+
+static inline bool fake_compositor_text_input_action(fake_compositor *fc, uint32_t action,
+                                                      uint32_t serial) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, action);
+    fc_b_u32(&builder, serial);
+    return fc_send(fc, text_input, fc_text_input_action, &builder);
+}
+
+static inline bool fake_compositor_text_input_language(fake_compositor *fc,
+                                                        const char *locale) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, locale);
+    return fc_send(fc, text_input, fc_text_input_language, &builder);
+}
+
+static inline bool fake_compositor_text_input_preedit_hint(fake_compositor *fc,
+                                                            uint32_t start, uint32_t end,
+                                                            uint32_t hint) {
+    uint32_t text_input = fc_live_id(fc, FC_K_TEXT_INPUT);
+    if (!text_input) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, start);
+    fc_b_u32(&builder, end);
+    fc_b_u32(&builder, hint);
+    return fc_send(fc, text_input, fc_text_input_preedit_hint, &builder);
+}
+
 static inline void fake_compositor_wm_ping(fake_compositor *fc, uint32_t serial) {
     (void)fc_send_u32(fc, fc_live_id(fc, FC_K_WM_BASE), 0, serial);
 }
@@ -1291,6 +1425,23 @@ static inline void fake_compositor_toplevel_configure(fake_compositor *fc, int32
     }
     (void)fc_send(fc, toplevel, 0, &builder);
     (void)fc_send_u32(fc, xdg_surface, 0, serial);
+}
+
+/* xdg-decoration-unstable-v1 mode values. configure is the server's
+ * authoritative answer and may disagree with the client's set_mode request
+ * (Q-DEC-001: a tiling compositor can force server-side). */
+#define fc_decoration_mode_client 1u
+#define fc_decoration_mode_server 2u
+
+/* Injects zxdg_toplevel_decoration_v1.configure on the newest live decoration
+ * object. The client applies it immediately (no xdg_surface configure wait). */
+static inline bool fake_compositor_decoration_configure(fake_compositor *fc,
+                                                         uint32_t mode) {
+    uint32_t decoration = fc_live_id(fc, FC_K_DECORATION);
+    if (!decoration) {
+        return false;
+    }
+    return fc_send_u32(fc, decoration, 0, mode);
 }
 
 /* xdg_popup.configure then xdg_surface.configure for the most recent live
@@ -2169,7 +2320,8 @@ static inline void fc_send_globals(fake_compositor *fc) {
         (void)fc_send_global(fc, name++, "wp_viewporter", 1);
     }
     if (fc->options & FC_OPT_TEXT_INPUT) {
-        (void)fc_send_global(fc, name++, "zwp_text_input_manager_v3", 2);
+        uint32_t version = (fc->options & FC_OPT_TEXT_INPUT_V1) ? 1u : 2u;
+        (void)fc_send_global(fc, name++, "zwp_text_input_manager_v3", version);
     }
     if (fc->options & FC_OPT_GESTURES) {
         (void)fc_send_global(fc, name++, "zwp_pointer_gestures_v1", 3);
