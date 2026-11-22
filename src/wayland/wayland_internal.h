@@ -262,6 +262,11 @@ struct pt_platform {
     char *pending_commit;
     int32_t pending_preedit_begin;
     int32_t pending_preedit_end;
+    /* Double-buffered preedit_hint events; presentation only. Applied and
+     * released on the next done, exactly like the text events. */
+    pt_ime_hint *pending_hints;
+    uint32_t pending_hint_count;
+    uint32_t pending_hint_capacity;
     uint32_t pending_delete_before;
     uint32_t pending_delete_after;
     /* text-input-v3 v2 action event. It is consumed on the next done and must

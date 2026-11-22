@@ -434,6 +434,54 @@ static float measure_prefix_width(const pt_font *font, const char *text, size_t 
     return pt_font_measure(font, text, pos) / scale;
 }
 
+/* text-input-v3 v2 preedit hints: a second underline below the plain preedit
+ * underline. Unknown kinds and degenerate ranges draw nothing, so a preedit
+ * without hints (or from a v1 compositor) stays pixel-identical to 1.2. */
+static void paint_preedit_hints(pt_canvas *canvas, const pt_widget *widget, const pt_font *font,
+                                const char *preedit, size_t length, float x, float baseline,
+                                float scale) {
+    if (!widget->preedit_hints || widget->preedit_hint_count == 0 || !preedit || length == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < widget->preedit_hint_count; ++i) {
+        const pt_ime_hint *hint = &widget->preedit_hints[i];
+        if (hint->start >= hint->end || hint->end > length) {
+            continue;
+        }
+        pt_color color;
+        float thickness;
+        switch (hint->hint) {
+        case pt_ime_hint_whole:
+            color = color_from_theme(widget, pt_theme_accent);
+            thickness = 1.5f;
+            break;
+        case pt_ime_hint_selection:
+            color = color_from_theme(widget, pt_theme_accent);
+            thickness = 2.5f;
+            break;
+        case pt_ime_hint_prediction:
+        case pt_ime_hint_prefix:
+        case pt_ime_hint_suffix:
+            color = pt_color_alpha(color_from_theme(widget, pt_theme_text_muted), 0xC0u);
+            thickness = 1.0f;
+            break;
+        case pt_ime_hint_spelling_error:
+        case pt_ime_hint_compose_error:
+            color = color_from_theme(widget, pt_theme_danger);
+            thickness = 2.0f;
+            break;
+        default:
+            continue;
+        }
+        float x0 = x + measure_prefix_width(font, preedit, hint->start, scale);
+        float x1 = x + measure_prefix_width(font, preedit, hint->end, scale);
+        if (x1 <= x0) {
+            continue;
+        }
+        pt_canvas_fill_rect(canvas, x0, baseline + 4.0f, x1 - x0, thickness, color);
+    }
+}
+
 static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
     pt_color background = shape_background(entry, pt_theme_control);
     if (!entry->has_background && entry->hovered && !entry->focused) {
@@ -546,6 +594,8 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         float preedit_w = measure_prefix_width(font, entry->preedit, preedit_len, scale);
         pt_color underline = pt_color_alpha(color_from_theme(entry, pt_theme_accent), 0xB0u);
         pt_canvas_fill_rect(canvas, preedit_x, baseline + 2.0f, preedit_w, 1.5f, underline);
+        paint_preedit_hints(canvas, entry, font, entry->preedit, preedit_len, preedit_x,
+                            baseline, scale);
     }
     bool preedit_cursor_visible =
         preedit_len == 0 || (entry->preedit_cursor_begin >= 0 && entry->preedit_cursor_end >= 0);
@@ -796,6 +846,8 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
         float preedit_w = pt_font_measure(font, area->preedit, preedit_len) / scale;
         pt_canvas_fill_rect(canvas, caret_x, caret_top + ascent + 2.0f, preedit_w, 1.5f,
                             underline);
+        paint_preedit_hints(canvas, area, font, area->preedit, preedit_len, caret_x,
+                            caret_top + ascent, scale);
         preedit_caret_visible =
             area->preedit_cursor_begin >= 0 && area->preedit_cursor_end >= 0;
         size_t preedit_caret = pt_widget_preedit_caret(area);
