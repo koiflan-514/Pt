@@ -638,6 +638,51 @@ static void test_bidi_runs(pt_window *window) {
     pt_check(saw_hebrew);
     pt_text_runs_free(&runs);
 
+    /* Styled pieces inside one odd-level UBA run are emitted visual too: a bold
+     * span on the first Hebrew letter makes the logical pieces [6,11), [4,6)
+     * and [3,4), in that order, after the rightmost even-level Latin word. */
+    pt_widget_clear_text_spans(label);
+    pt_widget_set_text_direction(label, pt_text_direction_rtl);
+    pt_text_span hebrew_span = span_of(4, 2, pt_text_span_has_weight);
+    hebrew_span.weight = pt_font_weight_bold;
+    pt_check(pt_widget_set_text_spans(label, &hebrew_span, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.count == 5);
+    pt_check(runs.items[0].start == 11 && runs.items[0].end == 14 &&
+             runs.items[0].level == 2);
+    pt_check(runs.items[1].start == 6 && runs.items[1].end == 11 &&
+             runs.items[1].level == 1);
+    pt_check(runs.items[2].start == 4 && runs.items[2].end == 6 &&
+             runs.items[2].level == 1 &&
+             runs.items[2].font->weight == (int)pt_font_weight_bold);
+    pt_check(runs.items[3].start == 3 && runs.items[3].end == 4 &&
+             runs.items[3].level == 1);
+    pt_check(runs.items[4].start == 0 && runs.items[4].end == 3 &&
+             runs.items[4].level == 2);
+    /* The per-line map still answers endpoints from the logical array even
+     * though the master runs are visual. */
+    pt_text_visual_map *map = NULL;
+    pt_check(pt_text_visual_map_build_runs(&runs, 0, runs.length, pt_bidi_base_rtl, &map));
+    if (map) {
+        for (size_t i = 1; i < map->count; ++i) {
+            pt_check(map->clusters[i - 1].start <= map->clusters[i].start);
+        }
+        pt_check_near(pt_text_visual_map_x_for_position(map, 0, pt_text_bias_leading),
+                      pt_text_visual_map_width(map) -
+                          pt_font_measure(runs.items[4].font, "abc", 3) /
+                              runs.scale,
+                      0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, runs.length,
+                                                        pt_text_bias_trailing),
+                      pt_font_measure(runs.items[0].font, "xyz", 3) / runs.scale,
+                      0.01f);
+        pt_text_visual_map_free(map);
+    }
+    pt_text_runs_free(&runs);
+    pt_widget_clear_text_spans(label);
+    pt_widget_set_text_direction(label, pt_text_direction_rtl);
+
     /* Drawing visits the visual run order without crashing. */
     pt_window_show(window);
     pt_canvas *canvas = pt_canvas_create(480, 120, 1.0f);

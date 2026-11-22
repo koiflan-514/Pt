@@ -977,6 +977,23 @@ static hb_direction_t direction_for_level(uint8_t level) {
     return (level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
 }
 
+/* Reverses the sub-runs just appended for one RTL (odd level) embedding run.
+ * Script/face sub-runs inside a single UBA run are kept in logical order by the
+ * splitter, but painting advances the pen left to right and each sub-run is
+ * shaped RTL already (HarfBuzz returns its glyphs in visual order). Odd-level
+ * sub-runs therefore have to be emitted in reverse logical order; even-level
+ * runs stay logical, which is also their visual order. */
+static void reverse_run_range(run_builder *builder, size_t first) {
+    if (!builder || builder->count <= first + 1) {
+        return;
+    }
+    for (size_t left = first, right = builder->count - 1; left < right; ++left, --right) {
+        pt_shaped_run temporary = builder->runs[left];
+        builder->runs[left] = builder->runs[right];
+        builder->runs[right] = temporary;
+    }
+}
+
 static pt_shape_entry *shape_entry_alloc(pt_font *font, const char *text, size_t len,
                                          uint8_t direction_key) {
     pt_shape_entry *entry = pt_alloc_zeroed(1, sizeof(*entry));
@@ -1060,10 +1077,14 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
                 }
                 for (size_t i = 0; i < line.run_count; ++i) {
                     const pt_bidi_run *run = &line.runs[i];
+                    size_t first = builder.count;
                     builder.level = run->level;
                     builder.direction = direction_for_level(run->level);
                     build_runs_between(font, text, at + run->offset,
                                        at + run->offset + run->length, true, &builder);
+                    if (run->level & 1u) {
+                        reverse_run_range(&builder, first);
+                    }
                 }
                 pt_bidi_line_free(&line);
             } else {
@@ -1075,7 +1096,11 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
                 }
                 builder.level = pt_bidi_paragraph_base_level(paragraph);
                 builder.direction = direction_for_level(builder.level);
+                size_t first = builder.count;
                 build_runs_between(font, text, at, at + paragraph_length, true, &builder);
+                if (builder.level & 1u) {
+                    reverse_run_range(&builder, first);
+                }
             }
             pt_bidi_paragraph_free(paragraph);
             paragraph = NULL;
@@ -1085,7 +1110,11 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
             if (at < len) {
                 builder.level = first_base;
                 builder.direction = direction_for_level(first_base);
+                size_t first = builder.count;
                 build_runs_between(font, text, at, len, true, &builder);
+                if (builder.level & 1u) {
+                    reverse_run_range(&builder, first);
+                }
             }
             if (builder.count == 0) {
                 /* Degenerate all-removed text still shapes under the paragraph
@@ -1109,7 +1138,11 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
             builder.level = 1;
             builder.direction = HB_DIRECTION_RTL;
         }
+        size_t first = builder.count;
         build_runs_between(font, text, 0, len, bidi, &builder);
+        if (bidi && (builder.level & 1u)) {
+            reverse_run_range(&builder, first);
+        }
     }
     if (builder.count == 0) {
         run_push(&builder, 0, len, font, HB_SCRIPT_INVALID, true);
@@ -1248,8 +1281,9 @@ static int compare_groups(const void *a, const void *b) {
 }
 
 /* Collects glyph clusters for one visual segment. HarfBuzz reports glyphs in
- * visual order; for an RTL segment the face runs are walked backwards so the
- * pen advances left to right. Cluster values are run-relative and shifted
+ * visual order and shaped entries keep their sub-runs in visual order too (odd
+ * levels are reversed when the entry is built), so walking the runs forward
+ * advances the pen left to right. Cluster values are run-relative and shifted
  * back to segment offsets. */
 static bool segment_glyph_groups(pt_font *font, const char *text, size_t len,
                                  hb_direction_t direction, float origin,
@@ -1259,10 +1293,8 @@ static bool segment_glyph_groups(pt_font *font, const char *text, size_t len,
     bool cached = false;
     pt_shape_entry *entry = shape_entry_get(font, text, len, key, true, &cached);
     float pen = origin;
-    bool rtl = direction == HB_DIRECTION_RTL;
     for (unsigned int step = 0; step < entry->run_count; ++step) {
-        unsigned int run_index = rtl ? entry->run_count - 1 - step : step;
-        const pt_shaped_run *run = &entry->runs[run_index];
+        const pt_shaped_run *run = &entry->runs[step];
         hb_buffer_t *buffer = run->buffer;
         if (!buffer) {
             continue;
@@ -1294,6 +1326,24 @@ static bool segment_glyph_groups(pt_font *font, const char *text, size_t len,
         shape_entry_clear(entry);
     }
     return true;
+}
+
+/* Clusters are appended segment by segment in visual order, so their logical
+ * starts are not monotonic on mixed lines. The map contract, the binary lookup
+ * and the two end shortcuts all assume logical order; a stable insertion sort
+ * (same logical start => zero-width removed clusters keep relative order) makes
+ * the array monotonic again. Insertion sort is linear on the already sorted
+ * pure LTR and single-run RTL arrays. */
+static void clusters_sort_by_start(pt_text_visual_map *map) {
+    for (size_t i = 1; i < map->count; ++i) {
+        pt_text_visual_cluster cluster = map->clusters[i];
+        size_t at = i;
+        while (at > 0 && map->clusters[at - 1].start > cluster.start) {
+            map->clusters[at] = map->clusters[at - 1];
+            --at;
+        }
+        map->clusters[at] = cluster;
+    }
 }
 
 bool pt_text_visual_map_build(const char *text, size_t len,
@@ -1377,6 +1427,7 @@ bool pt_text_visual_map_build(const char *text, size_t len,
         free(groups.items);
         visual_x += width;
     }
+    clusters_sort_by_start(map);
     map->width = visual_x;
     *out = map;
     return true;
@@ -1398,7 +1449,18 @@ bool pt_text_visual_map_build_bidi(const pt_font *font, const char *text, size_t
     }
     pt_text_visual_segment *segments =
         run_count > 0 ? pt_alloc_zeroed((size_t)run_count, sizeof(*segments)) : NULL;
+    /* The map's base is the paragraph's resolved base, never the smallest run
+     * level: an all-LTR paragraph under a forced RTL base has only level 2 runs,
+     * and Hebrew under a forced LTR base only level 1 runs. Auto resolves
+     * P2/P3 once for the whole range. */
     uint8_t base_level = base == pt_bidi_base_rtl ? 1 : 0;
+    if (base == pt_bidi_base_auto) {
+        pt_bidi_paragraph *paragraph = NULL;
+        if (pt_bidi_paragraph_analyze(text, len, pt_bidi_base_auto, &paragraph)) {
+            base_level = pt_bidi_paragraph_base_level(paragraph);
+            pt_bidi_paragraph_free(paragraph);
+        }
+    }
     for (int i = 0; i < run_count; ++i) {
         segments[i].start = runs[i].start;
         segments[i].end = runs[i].end;
@@ -1408,11 +1470,6 @@ bool pt_text_visual_map_build_bidi(const pt_font *font, const char *text, size_t
             runs[i].direction != HB_DIRECTION_INVALID
                 ? runs[i].direction
                 : ((runs[i].level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
-        if (i == 0) {
-            base_level = runs[i].level;
-        } else if (runs[i].level < base_level) {
-            base_level = runs[i].level;
-        }
     }
     bool ok = pt_text_visual_map_build(text, len, segments, (size_t)run_count, base_level, out);
     free(segments);

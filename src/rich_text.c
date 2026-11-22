@@ -326,7 +326,11 @@ static void rich_append_line_runs(const pt_widget *widget, const pt_layout_ctx *
         hb_direction_t direction = (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
         size_t run_start = paragraph_offset + run->offset;
         size_t run_end = run_start + run->length;
-        for (size_t i = 0; i + 1 < unique; ++i) {
+        /* UBA runs are already in visual order. An odd-level run's styled
+         * sub-runs must be emitted in reverse logical order so the master list
+         * (and everything that walks it) stays visual; even runs stay logical. */
+        for (size_t step = 0; step + 1 < unique; ++step) {
+            size_t i = (run->level & 1u) ? unique - 2 - step : step;
             size_t start = boundaries[i];
             size_t end = boundaries[i + 1];
             size_t a = start > run_start ? start : run_start;
@@ -832,7 +836,12 @@ static void rich_line_segments(const pt_text_runs *runs, size_t start, size_t en
         size_t run_start = start + run->offset;
         size_t run_end = run_start + run->length;
         hb_direction_t direction = (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
-        for (size_t i = 0; i + 1 < unique; ++i) {
+        /* The line's UBA runs are visual already; within an odd-level run the
+         * styled pieces have to be visited from the logical end so the segment
+         * list (and the pen that walks it) stays visual. Even runs are logical
+         * and therefore visual. */
+        for (size_t step = 0; step + 1 < unique; ++step) {
+            size_t i = (run->level & 1u) ? unique - 2 - step : step;
             size_t a = boundaries[i] > run_start ? boundaries[i] : run_start;
             size_t b = boundaries[i + 1] < run_end ? boundaries[i + 1] : run_end;
             if (a >= b) {

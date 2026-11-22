@@ -340,6 +340,47 @@ static void test_rtl_layout(pt_app *app) {
     }
     pt_text_layout_free(&layout);
 
+    /* A wrapped mixed-script paragraph under a forced RTL base: every line's
+     * map is logical-ordered (binary lookup valid) and its logical endpoints
+     * sit at the visual edges (start right, end left) once the line contains
+     * odd-level text. */
+    pt_widget_set_text_direction(area, pt_text_direction_rtl);
+    pt_widget_set_text(area,
+                       "abc \xD7\x90\xD7\x91\xD7\x92 abc \xD7\x90\xD7\x91\xD7\x92 "
+                       "abc \xD7\x90\xD7\x91\xD7\x92");
+    memset(&layout, 0, sizeof(layout));
+    pt_check(pt_text_layout_build(area, &ctx, 90.0f, &layout));
+    pt_check(layout.line_count >= 2);
+    int mixed_lines = 0;
+    for (int i = 0; i < layout.line_count; ++i) {
+        pt_check(layout.lines[i].base_level == 1);
+        if (!layout.maps || !layout.maps[i]) {
+            pt_check(layout.lines[i].start >= layout.lines[i].end);
+            continue;
+        }
+        const pt_text_visual_map *map = layout.maps[i];
+        bool has_odd = false;
+        for (size_t c = 0; c < map->count; ++c) {
+            if (map->clusters[c].level & 1u) {
+                has_odd = true;
+            }
+            if (c > 0) {
+                pt_check(map->clusters[c - 1].start <= map->clusters[c].start);
+            }
+        }
+        float start_x = pt_text_layout_x_for_position(&layout, i, layout.lines[i].start);
+        float end_x = pt_text_layout_x_for_position(&layout, i, layout.lines[i].end);
+        pt_check(start_x >= -0.01f && start_x <= 91.0f);
+        pt_check(end_x >= -0.01f && end_x <= 91.0f);
+        if (has_odd) {
+            pt_check(start_x >= end_x - 0.01f);
+            ++mixed_lines;
+        }
+    }
+    pt_check(mixed_lines >= 1);
+    pt_text_layout_free(&layout);
+    pt_widget_set_text_direction(area, pt_text_direction_auto);
+
     /* Per-paragraph alignment: align_start puts LTR left and RTL right;
      * align_end swaps both. pt_widget_set_text_align now reaches the text
      * area instead of the hard-coded start edge. */
