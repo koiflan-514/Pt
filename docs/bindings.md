@@ -1597,8 +1597,8 @@ Group notes:
 ## The 1.3 extension surface
 
 1.3 adds two functions and one accessibility enum value. They follow the same
-hand-written convention as the earlier waves; the helper names below are the
-expected set and are reconciled with the bind-final wrappers before the tag.
+hand-written convention as the earlier waves; the helper names below match the
+landed wrappers.
 
 | Surface | C++ | Python | Java |
 | --- | --- | --- | --- |
