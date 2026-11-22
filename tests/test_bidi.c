@@ -290,6 +290,31 @@ static void test_font_pipeline(pt_font *font) {
     pt_font_runs_free(runs);
     runs = NULL;
 
+    /* A single-line request still accepts embedded newlines: each paragraph is
+ * reordered under its own base and the visual runs stay concatenated in
+ * logical paragraph order (the old adapter fell back to logical order). */
+    const char *multiline = "abc\n\xD7\x90\xD7\x91";
+    len = strlen(multiline);
+    count = pt_font_runs_bidi(font, multiline, len, pt_bidi_base_auto, &runs);
+    pt_check(count == 3);
+    pt_check(runs && runs[0].level == 0 && runs[0].start == 0 && runs[0].end == 3);
+    pt_check(runs && runs[1].level == 0 && runs[1].start == 3 && runs[1].end == 4);
+    pt_check(runs && runs[2].level == 1 && runs[2].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[2].start == 4 && runs[2].end == len);
+    pt_check(pt_font_measure_bidi(font, multiline, len, pt_bidi_base_auto) > 0.0f);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
+    const char *rtl_first = "\xD7\x90\xD7\x91\nabc";
+    len = strlen(rtl_first);
+    count = pt_font_runs_bidi(font, rtl_first, len, pt_bidi_base_auto, &runs);
+    pt_check(count == 3);
+    pt_check(runs && runs[0].level == 1 && runs[0].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[1].level == 1 && runs[1].start == 4 && runs[1].end == 5);
+    pt_check(runs && runs[2].level == 0 && runs[2].start == 5 && runs[2].end == len);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
     /* Pure RTL and pure LTR. */
     len = strlen(hebrew);
     count = pt_font_runs_bidi(font, hebrew, len, pt_bidi_base_auto, &runs);
