@@ -476,22 +476,24 @@ pt_font *pt_font_acquire(const char *family, int weight, pt_font_slant slant,
     return pt_font_acquire_internal(family, weight, slant, pixel_size, true);
 }
 
-static uint64_t shape_hash(const char *text, size_t len) {
+static uint64_t shape_hash(const char *text, size_t len, uint8_t direction_key) {
     uint64_t hash = 1469598103934665603ull;
     for (size_t i = 0; i < len; ++i) {
         hash ^= (uint8_t)text[i];
         hash *= 1099511628211ull;
     }
     hash ^= ((uint64_t)len << 32);
+    hash ^= (uint64_t)direction_key << 56;
     hash ^= fallback_generation * 1099511628211ull;
     return hash;
 }
 
 static pt_shape_entry *shape_cache_lookup(pt_font *font, const char *text, size_t len,
-                                          uint64_t hash) {
+                                          uint64_t hash, uint8_t direction_key) {
     pt_shape_entry *entry = font->shapes.newest;
     while (entry) {
         if (entry->hash == hash && entry->len == len &&
+            entry->direction_key == direction_key &&
             entry->generation == fallback_generation && memcmp(entry->text, text, len) == 0) {
             if (entry != font->shapes.newest) {
                 shape_cache_unlink(font, entry);
@@ -630,7 +632,8 @@ static char *fontconfig_system_family(int weight, int slant, int size_26_6,
 }
 
 static char *fontconfig_system_family_span(int weight, int slant, int size_26_6,
-                                           const char *text, size_t start, size_t end) {
+                                           const char *text, size_t start, size_t end,
+                                           bool ignore_removed) {
     FcCharSet *charset = FcCharSetCreate();
     if (!charset) {
         return NULL;
@@ -642,7 +645,9 @@ static char *fontconfig_system_family_span(int weight, int slant, int size_26_6,
         if (next <= pos) {
             next = pos + 1;
         }
-        FcCharSetAddChar(charset, codepoint);
+        if (!(ignore_removed && pt_bidi_is_removed(codepoint))) {
+            FcCharSetAddChar(charset, codepoint);
+        }
         pos = next;
     }
     char *family = fontconfig_family_for_charset(charset, weight, slant, size_26_6);
@@ -727,6 +732,10 @@ typedef struct run_builder {
     pt_shaped_run *runs;
     unsigned int count;
     unsigned int capacity;
+    /* Direction context applied to every run pushed while building one UBA
+     * segment. The legacy LTR path leaves level 0 / HB_DIRECTION_INVALID. */
+    uint8_t level;
+    hb_direction_t direction;
 } run_builder;
 
 static pt_shaped_run *run_push(run_builder *builder, size_t start, size_t end, pt_font *font,
@@ -743,6 +752,8 @@ static pt_shaped_run *run_push(run_builder *builder, size_t start, size_t end, p
     run->font = font;
     run->script = script;
     run->covered = covered;
+    run->level = builder->level;
+    run->direction = builder->direction;
     return run;
 }
 
@@ -770,12 +781,13 @@ static void span_push(span_builder *builder, size_t start, size_t end, hb_script
     builder->items[builder->count++] = (script_span){start, end, script};
 }
 
-static void build_script_spans(const char *text, size_t len, span_builder *builder) {
+static void build_script_spans(const char *text, size_t start, size_t end,
+                               span_builder *builder) {
     hb_script_t inherited = HB_SCRIPT_INVALID;
-    size_t pos = 0;
-    while (pos < len) {
+    size_t pos = start;
+    while (pos < end) {
         size_t next = 0;
-        uint32_t codepoint = pt_utf8_decode(text, len, pos, &next);
+        uint32_t codepoint = pt_utf8_decode(text, end, pos, &next);
         if (next <= pos) {
             next = pos + 1;
         }
@@ -794,7 +806,8 @@ static void build_script_spans(const char *text, size_t len, span_builder *build
     }
 }
 
-static bool span_covered_by(const pt_font *font, const char *text, size_t start, size_t end) {
+static bool span_covered_by(const pt_font *font, const char *text, size_t start, size_t end,
+                            bool ignore_removed) {
     if (!font) {
         return false;
     }
@@ -804,6 +817,10 @@ static bool span_covered_by(const pt_font *font, const char *text, size_t start,
         uint32_t codepoint = pt_utf8_decode(text, end, pos, &next);
         if (next <= pos) {
             next = pos + 1;
+        }
+        if (ignore_removed && pt_bidi_is_removed(codepoint)) {
+            pos = next;
+            continue;
         }
         if (!pt_font_has_glyph(font, codepoint)) {
             return false;
@@ -818,9 +835,9 @@ static bool span_covered_by(const pt_font *font, const char *text, size_t start,
  * family Fontconfig's sort order offers. Returns NULL when no single face
  * covers the span, in which case the caller splits it per codepoint. */
 static pt_font *face_for_span(pt_font *base, const char *text, size_t start, size_t end,
-                              bool *covered) {
+                              bool ignore_removed, bool *covered) {
     *covered = false;
-    if (span_covered_by(base, text, start, end)) {
+    if (span_covered_by(base, text, start, end, ignore_removed)) {
         *covered = true;
         return base;
     }
@@ -833,7 +850,7 @@ static pt_font *face_for_span(pt_font *base, const char *text, size_t start, siz
             pt_font *candidate =
                 pt_font_acquire_internal(chain->families[i], base->weight,
                                          (pt_font_slant)base->slant, base->pixel_size, false);
-            if (candidate && span_covered_by(candidate, text, start, end)) {
+            if (candidate && span_covered_by(candidate, text, start, end, ignore_removed)) {
                 *covered = true;
                 return candidate;
             }
@@ -842,31 +859,34 @@ static pt_font *face_for_span(pt_font *base, const char *text, size_t start, siz
     }
     int size_26_6 = (int)lroundf(base->pixel_size * 64.0f);
     char *family = fontconfig_system_family_span(base->weight, base->slant, size_26_6, text,
-                                                 start, end);
+                                                 start, end, ignore_removed);
     if (!family) {
         return NULL;
     }
     pt_font *candidate = pt_font_acquire_internal(family, base->weight, (pt_font_slant)base->slant,
                                                   base->pixel_size, false);
     free(family);
-    if (candidate && span_covered_by(candidate, text, start, end)) {
+    if (candidate && span_covered_by(candidate, text, start, end, ignore_removed)) {
         *covered = true;
         return candidate;
     }
     return NULL;
 }
 
-/* Splits text into contiguous script/face runs. A script span becomes one run
- * when a single face covers it; otherwise it is split per codepoint so a stray
- * symbol can still resolve. Joiners, variation selectors and combining marks
- * stay with the face of the preceding run when it can render them. */
-static void build_runs(pt_font *base, const char *text, size_t len, run_builder *builder) {
+/* Splits [start, end) into contiguous script/face runs. A script span becomes
+ * one run when a single face covers it; otherwise it is split per codepoint so
+ * a stray symbol can still resolve. Joiners, variation selectors, combining
+ * marks and (in bidi mode) X9 controls stay with the face of the preceding run
+ * when it can render them, so shaping keeps Arabic joining and the controls in
+ * one buffer. */
+static void build_runs_between(pt_font *base, const char *text, size_t start, size_t end,
+                               bool bidi, run_builder *builder) {
     span_builder spans = {0};
-    build_script_spans(text, len, &spans);
+    build_script_spans(text, start, end, &spans);
     for (size_t index = 0; index < spans.count; ++index) {
         script_span span = spans.items[index];
         bool covered = false;
-        pt_font *face = face_for_span(base, text, span.start, span.end, &covered);
+        pt_font *face = face_for_span(base, text, span.start, span.end, bidi, &covered);
         if (face) {
             run_push(builder, span.start, span.end, face, span.script, covered);
             continue;
@@ -882,11 +902,14 @@ static void build_runs(pt_font *base, const char *text, size_t len, run_builder 
             pt_font *fallback_face = NULL;
             bool fallback_covered = false;
             bool attached = false;
-            if (codepoint_attaches_to_previous(codepoint) && builder->count > 0) {
+            bool removed = bidi && pt_bidi_is_removed(codepoint);
+            if ((codepoint_attaches_to_previous(codepoint) || removed) && builder->count > 0) {
                 pt_shaped_run *previous = &builder->runs[builder->count - 1];
-                if (codepoint == 0x200Du || (codepoint >= 0xFE00u && codepoint <= 0xFE0Fu) ||
-                    (codepoint >= 0xE0100u && codepoint <= 0xE01EFu) ||
-                    pt_font_has_glyph(previous->font, codepoint)) {
+                if (previous->end == pos &&
+                    (removed || codepoint == 0x200Du ||
+                     (codepoint >= 0xFE00u && codepoint <= 0xFE0Fu) ||
+                     (codepoint >= 0xE0100u && codepoint <= 0xE01EFu) ||
+                     pt_font_has_glyph(previous->font, codepoint))) {
                     fallback_face = previous->font;
                     fallback_covered = previous->covered;
                     script = previous->script;
@@ -898,7 +921,7 @@ static void build_runs(pt_font *base, const char *text, size_t len, run_builder 
             }
             if (builder->count > 0) {
                 pt_shaped_run *run = &builder->runs[builder->count - 1];
-                if (run->font == fallback_face && run->script == script &&
+                if (run->end == pos && run->font == fallback_face && run->script == script &&
                     run->covered == fallback_covered) {
                     run->end = next;
                     pos = next;
@@ -913,7 +936,7 @@ static void build_runs(pt_font *base, const char *text, size_t len, run_builder 
 }
 
 static hb_buffer_t *shape_run(pt_font *font, const char *text, size_t start, size_t end,
-                              hb_script_t script) {
+                              hb_script_t script, hb_direction_t direction) {
     hb_buffer_t *buffer = hb_buffer_create();
     if (!buffer) {
         return NULL;
@@ -922,34 +945,62 @@ static hb_buffer_t *shape_run(pt_font *font, const char *text, size_t start, siz
     hb_buffer_guess_segment_properties(buffer);
     if (!script_is_neutral(script)) {
         hb_buffer_set_script(buffer, script);
-        hb_direction_t direction = hb_script_get_horizontal_direction(script);
-        if (direction != HB_DIRECTION_INVALID) {
-            hb_buffer_set_direction(buffer, direction);
+        if (direction == HB_DIRECTION_INVALID) {
+            hb_direction_t guessed = hb_script_get_horizontal_direction(script);
+            if (guessed != HB_DIRECTION_INVALID) {
+                hb_buffer_set_direction(buffer, guessed);
+            }
         }
+    }
+    /* Bidi runs carry the direction resolved from their embedding level; never
+     * let the guess override an RTL run (UAX #9 reordering needs it, and HB
+     * mirrors paired brackets from the direction). */
+    if (direction != HB_DIRECTION_INVALID) {
+        hb_buffer_set_direction(buffer, direction);
     }
     hb_shape(font->hb_font, buffer, NULL, 0);
     return buffer;
 }
 
-static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t len) {
+/* Shape-cache direction keys. Zero is the legacy LTR/auto guess path, which
+ * must keep matching the pre-2.0 cache layout for LTR text. */
+enum {
+    pt_shape_key_base_auto = 1,
+    pt_shape_key_base_ltr = 2,
+    pt_shape_key_base_rtl = 3,
+    pt_shape_key_run_ltr = 4,
+    pt_shape_key_run_rtl = 5
+};
+
+static hb_direction_t direction_for_level(uint8_t level) {
+    return (level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+}
+
+static pt_shape_entry *shape_entry_alloc(pt_font *font, const char *text, size_t len,
+                                         uint8_t direction_key) {
     pt_shape_entry *entry = pt_alloc_zeroed(1, sizeof(*entry));
     entry->generation = fallback_generation;
+    entry->direction_key = direction_key;
     entry->text = pt_alloc(len + 1);
     memcpy(entry->text, text, len);
     entry->text[len] = '\0';
     entry->len = len;
-    run_builder builder = {0};
-    build_runs(font, text, len, &builder);
-    if (builder.count == 0) {
-        run_push(&builder, 0, len, font, HB_SCRIPT_INVALID, true);
-    }
-    entry->runs = builder.runs;
-    entry->run_count = builder.count;
     entry->ascent = font->ascent;
     entry->descent = font->descent;
+    return entry;
+}
+
+static void shape_entry_finish(pt_shape_entry *entry, run_builder *builder) {
+    if (builder->count == 0) {
+        /* Callers build the fallback run before asking for shaping. */
+        return;
+    }
+    entry->runs = builder->runs;
+    entry->run_count = builder->count;
     for (unsigned int i = 0; i < entry->run_count; ++i) {
         pt_shaped_run *run = &entry->runs[i];
-        run->buffer = shape_run(run->font, text, run->start, run->end, run->script);
+        run->buffer =
+            shape_run(run->font, entry->text, run->start, run->end, run->script, run->direction);
         if (run->font->ascent > entry->ascent) {
             entry->ascent = run->font->ascent;
         }
@@ -957,21 +1008,85 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
             entry->descent = run->font->descent;
         }
     }
-    entry->hash = shape_hash(text, len);
+    entry->hash = shape_hash(entry->text, entry->len, entry->direction_key);
+}
+
+static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t len,
+                                         uint8_t direction_key, bool bidi) {
+    pt_shape_entry *entry = shape_entry_alloc(font, text, len, direction_key);
+    run_builder builder = {0};
+    pt_bidi_paragraph *paragraph = NULL;
+    pt_bidi_line line = {0};
+    bool reordered = false;
+    bool base_mode = direction_key == pt_shape_key_base_auto ||
+                     direction_key == pt_shape_key_base_ltr ||
+                     direction_key == pt_shape_key_base_rtl;
+    if (bidi && base_mode) {
+        pt_bidi_base base = pt_bidi_base_auto;
+        switch (direction_key) {
+        case pt_shape_key_base_ltr:
+            base = pt_bidi_base_ltr;
+            break;
+        case pt_shape_key_base_rtl:
+            base = pt_bidi_base_rtl;
+            break;
+        default:
+            base = pt_bidi_base_auto;
+            break;
+        }
+        if (pt_bidi_paragraph_analyze(text, len, base, &paragraph) &&
+            pt_bidi_line_create(paragraph, 0, len, &line)) {
+            for (size_t i = 0; i < line.run_count; ++i) {
+                const pt_bidi_run *run = &line.runs[i];
+                builder.level = run->level;
+                builder.direction = direction_for_level(run->level);
+                build_runs_between(font, text, run->offset, run->offset + run->length, true,
+                                   &builder);
+            }
+            if (builder.count == 0) {
+                /* Degenerate all-removed lines still shape under the paragraph
+                 * base so empty/control-only input is not guessed LTR. */
+                builder.level = line.base_level;
+                builder.direction = direction_for_level(line.base_level);
+            }
+            reordered = true;
+        }
+    }
+    if (!reordered) {
+        builder.level = 0;
+        builder.direction = HB_DIRECTION_INVALID;
+        if (direction_key == pt_shape_key_run_rtl) {
+            builder.level = 1;
+            builder.direction = HB_DIRECTION_RTL;
+        } else if (direction_key == pt_shape_key_run_ltr) {
+            builder.level = 0;
+            builder.direction = HB_DIRECTION_LTR;
+        } else if (direction_key == pt_shape_key_base_rtl) {
+            builder.level = 1;
+            builder.direction = HB_DIRECTION_RTL;
+        }
+        build_runs_between(font, text, 0, len, bidi, &builder);
+    }
+    if (builder.count == 0) {
+        run_push(&builder, 0, len, font, HB_SCRIPT_INVALID, true);
+    }
+    shape_entry_finish(entry, &builder);
+    if (reordered) pt_bidi_line_free(&line);
+    if (paragraph) pt_bidi_paragraph_free(paragraph);
     return entry;
 }
 
 /* Returns a cached entry, or a caller-owned one for text beyond the cache
  * limit. `*cached` tells the caller which. */
 static pt_shape_entry *shape_entry_get(pt_font *font, const char *text, size_t len,
-                                       bool *cached) {
-    uint64_t hash = shape_hash(text, len);
-    pt_shape_entry *entry = shape_cache_lookup(font, text, len, hash);
+                                       uint8_t direction_key, bool bidi, bool *cached) {
+    uint64_t hash = shape_hash(text, len, direction_key);
+    pt_shape_entry *entry = shape_cache_lookup(font, text, len, hash, direction_key);
     if (entry) {
         *cached = true;
         return entry;
     }
-    entry = shape_entry_build(font, text, len);
+    entry = shape_entry_build(font, text, len, direction_key, bidi);
     if (len > shape_cache_max_text) {
         *cached = false;
         return entry;
@@ -981,12 +1096,24 @@ static pt_shape_entry *shape_entry_get(pt_font *font, const char *text, size_t l
     return entry;
 }
 
-float pt_font_measure(const pt_font *font, const char *text, size_t len) {
-    if (!font || !text || len == 0) {
-        return 0.0f;
+static bool bidi_fast_path(pt_bidi_base base, const char *text, size_t len) {
+    if (base == pt_bidi_base_rtl) return false;
+    return !pt_bidi_text_may_reorder(text, len);
+}
+
+static uint8_t bidi_direction_key(pt_bidi_base base) {
+    switch (base) {
+    case pt_bidi_base_ltr:
+        return pt_shape_key_base_ltr;
+    case pt_bidi_base_rtl:
+        return pt_shape_key_base_rtl;
+    case pt_bidi_base_auto:
+    default:
+        return pt_shape_key_base_auto;
     }
-    bool cached = false;
-    pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, &cached);
+}
+
+static float shape_entry_measure(const pt_shape_entry *entry) {
     int64_t total = 0;
     for (unsigned int run_index = 0; run_index < entry->run_count; ++run_index) {
         hb_buffer_t *buffer = entry->runs[run_index].buffer;
@@ -999,10 +1126,50 @@ float pt_font_measure(const pt_font *font, const char *text, size_t len) {
             total += positions[i].x_advance;
         }
     }
+    return (float)total / 64.0f;
+}
+
+static float shape_entry_measure_and_release(pt_font *font, const char *text, size_t len,
+                                             uint8_t direction_key, bool bidi) {
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get(font, text, len, direction_key, bidi, &cached);
+    float width = shape_entry_measure(entry);
     if (!cached) {
         shape_entry_clear(entry);
     }
-    return (float)total / 64.0f;
+    return width;
+}
+
+float pt_font_measure(const pt_font *font, const char *text, size_t len) {
+    if (!font || !text || len == 0) {
+        return 0.0f;
+    }
+    return shape_entry_measure_and_release((pt_font *)font, text, len, 0, false);
+}
+
+float pt_font_measure_bidi(const pt_font *font, const char *text, size_t len,
+                           pt_bidi_base base) {
+    if (!font || !text || len == 0) {
+        return 0.0f;
+    }
+    if (bidi_fast_path(base, text, len)) {
+        return shape_entry_measure_and_release((pt_font *)font, text, len, 0, false);
+    }
+    return shape_entry_measure_and_release((pt_font *)font, text, len, bidi_direction_key(base),
+                                           true);
+}
+
+float pt_font_measure_direction(const pt_font *font, const char *text, size_t len,
+                                hb_direction_t direction) {
+    if (!font || !text || len == 0) {
+        return 0.0f;
+    }
+    if (direction == HB_DIRECTION_INVALID) {
+        return shape_entry_measure_and_release((pt_font *)font, text, len, 0, false);
+    }
+    uint8_t key =
+        direction == HB_DIRECTION_RTL ? pt_shape_key_run_rtl : pt_shape_key_run_ltr;
+    return shape_entry_measure_and_release((pt_font *)font, text, len, key, true);
 }
 
 void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
@@ -1011,7 +1178,7 @@ void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
     float out_descent = font ? font->descent : 0.0f;
     if (font && text && len > 0) {
         bool cached = false;
-        pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, &cached);
+        pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, 0, false, &cached);
         out_ascent = entry->ascent;
         out_descent = entry->descent;
         if (!cached) {
@@ -1026,6 +1193,22 @@ void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
     }
 }
 
+void pt_font_metrics_for_text_bidi(const pt_font *font, const char *text, size_t len,
+                                   pt_bidi_base base, float *ascent, float *descent) {
+    if (!font || !text || len == 0 || bidi_fast_path(base, text, len)) {
+        pt_font_metrics_for_text(font, text, len, ascent, descent);
+        return;
+    }
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, bidi_direction_key(base),
+                                            true, &cached);
+    if (ascent) *ascent = entry->ascent;
+    if (descent) *descent = entry->descent;
+    if (!cached) {
+        shape_entry_clear(entry);
+    }
+}
+
 float pt_font_line_height_for(const pt_font *font, const char *text, size_t len) {
     if (!font) {
         return 0.0f;
@@ -1036,6 +1219,29 @@ float pt_font_line_height_for(const pt_font *font, const char *text, size_t len)
     return pt_max_float(ascent + descent, font->line_height);
 }
 
+static int font_runs_with(pt_font *font, const char *text, size_t len, uint8_t direction_key,
+                          bool bidi, pt_font_run **out_runs) {
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get(font, text, len, direction_key, bidi, &cached);
+    pt_font_run *runs = pt_alloc_zeroed(entry->run_count, sizeof(*runs));
+    for (unsigned int i = 0; i < entry->run_count; ++i) {
+        runs[i].start = entry->runs[i].start;
+        runs[i].end = entry->runs[i].end;
+        runs[i].font = entry->runs[i].font;
+        runs[i].script = entry->runs[i].script;
+        runs[i].covered = entry->runs[i].covered;
+        runs[i].level = entry->runs[i].level;
+        runs[i].direction = entry->runs[i].direction;
+        runs[i].visual_index = i;
+    }
+    int count = (int)entry->run_count;
+    if (!cached) {
+        shape_entry_clear(entry);
+    }
+    *out_runs = runs;
+    return count;
+}
+
 int pt_font_runs(const pt_font *font, const char *text, size_t len, pt_font_run **out_runs) {
     if (!out_runs) {
         return 0;
@@ -1044,22 +1250,22 @@ int pt_font_runs(const pt_font *font, const char *text, size_t len, pt_font_run 
     if (!font || !text || len == 0) {
         return 0;
     }
-    bool cached = false;
-    pt_shape_entry *entry = shape_entry_get((pt_font *)font, text, len, &cached);
-    pt_font_run *runs = pt_alloc_zeroed(entry->run_count, sizeof(*runs));
-    for (unsigned int i = 0; i < entry->run_count; ++i) {
-        runs[i].start = entry->runs[i].start;
-        runs[i].end = entry->runs[i].end;
-        runs[i].font = entry->runs[i].font;
-        runs[i].script = entry->runs[i].script;
-        runs[i].covered = entry->runs[i].covered;
+    return font_runs_with((pt_font *)font, text, len, 0, false, out_runs);
+}
+
+int pt_font_runs_bidi(const pt_font *font, const char *text, size_t len, pt_bidi_base base,
+                      pt_font_run **out_runs) {
+    if (!out_runs) {
+        return 0;
     }
-    int count = (int)entry->run_count;
-    if (!cached) {
-        shape_entry_clear(entry);
+    *out_runs = NULL;
+    if (!font || !text || len == 0) {
+        return 0;
     }
-    *out_runs = runs;
-    return count;
+    if (bidi_fast_path(base, text, len)) {
+        return font_runs_with((pt_font *)font, text, len, 0, false, out_runs);
+    }
+    return font_runs_with((pt_font *)font, text, len, bidi_direction_key(base), true, out_runs);
 }
 
 void pt_font_runs_free(pt_font_run *runs) {
@@ -1594,7 +1800,8 @@ void pt_canvas_draw_text_line(pt_canvas *canvas, const pt_font *font, const char
     }
 
     bool cached = false;
-    pt_shape_entry *entry = shape_entry_get((pt_font *)font, draw_text, draw_len, &cached);
+    pt_shape_entry *entry = shape_entry_get((pt_font *)font, draw_text, draw_len, 0, false,
+                                            &cached);
     float pen_x = x * canvas->scale;
     float pen_y = baseline * canvas->scale;
     for (unsigned int run_index = 0; run_index < entry->run_count; ++run_index) {
@@ -1620,6 +1827,214 @@ void pt_canvas_draw_text_line(pt_canvas *canvas, const pt_font *font, const char
             pen_y -= (float)positions[i].y_advance / 64.0f;
         }
     }
+    if (!cached) {
+        shape_entry_clear(entry);
+    }
+    free(ellipsized);
+}
+
+/* Direction-aware single-line painting (2.0 wave 2). The legacy entry point
+ * above stays untouched so LTR output is byte-identical; these wrappers shape
+ * with an explicit direction, skip X9-removed controls at paint time, and walk
+ * the resulting runs left to right (UBA runs already arrive in visual order). */
+static bool shaped_glyph_removed(const pt_shape_entry *entry, const pt_shaped_run *run,
+                                 unsigned int cluster) {
+    size_t at = run->start + (size_t)cluster;
+    if (at >= entry->len) {
+        return false;
+    }
+    size_t next = 0;
+    uint32_t codepoint = pt_utf8_decode(entry->text, entry->len, at, &next);
+    return pt_bidi_is_removed(codepoint);
+}
+
+static void draw_shaped_entry(pt_canvas *canvas, const pt_shape_entry *entry, float x,
+                              float baseline, pt_color color, bool skip_removed) {
+    float pen_x = x * canvas->scale;
+    float pen_y = baseline * canvas->scale;
+    for (unsigned int run_index = 0; run_index < entry->run_count; ++run_index) {
+        const pt_shaped_run *run = &entry->runs[run_index];
+        hb_buffer_t *buffer = run->buffer;
+        if (!buffer) {
+            continue;
+        }
+        unsigned int glyph_count = 0;
+        hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+        hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+        for (unsigned int i = 0; i < glyph_count; ++i) {
+            pt_glyph *glyph = glyph_get(run->font, infos[i].codepoint);
+            float glyph_x = pen_x + (float)positions[i].x_offset / 64.0f;
+            float glyph_y = pen_y - (float)positions[i].y_offset / 64.0f;
+            if (glyph && glyph->coverage &&
+                !(skip_removed && shaped_glyph_removed(entry, run, infos[i].cluster))) {
+                int draw_x = (int)lroundf(glyph_x) + glyph->bearing_x;
+                int draw_y = (int)lroundf(glyph_y) - glyph->bearing_y;
+                pt_canvas_blend_mask(canvas, draw_x, draw_y, glyph->coverage, glyph->width,
+                                     glyph->height, glyph->width, color, 1.0f);
+            }
+            pen_x += (float)positions[i].x_advance / 64.0f;
+            pen_y -= (float)positions[i].y_advance / 64.0f;
+        }
+    }
+}
+
+/* Measurement mode for the directional painters. `directional` selects an
+ * explicit per-run direction (HB_DIRECTION_INVALID means legacy); otherwise the
+ * paragraph base drives a bidi measurement. */
+typedef struct line_mode {
+    const pt_font *font;
+    pt_bidi_base base;
+    hb_direction_t direction;
+    bool directional;
+} line_mode;
+
+static float line_mode_measure(const line_mode *mode, const char *text, size_t len) {
+    if (mode->directional) {
+        return pt_font_measure_direction(mode->font, text, len, mode->direction);
+    }
+    return pt_font_measure_bidi(mode->font, text, len, mode->base);
+}
+
+static char *line_mode_ellipsize(const line_mode *mode, const char *text, size_t len,
+                                 float max_width, size_t *out_len, float *out_width) {
+    static const char ellipsis[] = "\xE2\x80\xA6";
+    float ellipsis_width = line_mode_measure(mode, ellipsis, sizeof(ellipsis) - 1);
+    if (ellipsis_width > max_width) {
+        *out_len = 0;
+        *out_width = 0.0f;
+        return NULL;
+    }
+    size_t candidate = len;
+    char *buffer = pt_alloc(len + sizeof(ellipsis));
+    while (candidate > 0) {
+        candidate = pt_utf8_prev_boundary(text, len, candidate);
+        memcpy(buffer, text, candidate);
+        memcpy(buffer + candidate, ellipsis, sizeof(ellipsis) - 1);
+        float width =
+            line_mode_measure(mode, buffer, candidate + sizeof(ellipsis) - 1);
+        if (width <= max_width) {
+            *out_len = candidate + sizeof(ellipsis) - 1;
+            *out_width = width;
+            buffer[*out_len] = '\0';
+            return buffer;
+        }
+    }
+    free(buffer);
+    *out_len = 0;
+    *out_width = 0.0f;
+    return NULL;
+}
+
+static bool paragraph_resolves_rtl(pt_bidi_base base, const char *text, size_t len) {
+    if (base == pt_bidi_base_rtl) return true;
+    if (base == pt_bidi_base_ltr) return false;
+    pt_bidi_paragraph *paragraph = NULL;
+    if (!pt_bidi_paragraph_analyze(text, len, pt_bidi_base_auto, &paragraph)) return false;
+    bool rtl = pt_bidi_paragraph_base_level(paragraph) != 0;
+    pt_bidi_paragraph_free(paragraph);
+    return rtl;
+}
+
+void pt_canvas_draw_text_line_bidi(pt_canvas *canvas, const pt_font *font, const char *text,
+                                   size_t len, float x, float baseline, float max_width,
+                                   pt_text_align align, pt_color color, bool ellipsis,
+                                   pt_bidi_base base) {
+    if (!canvas || !font || !text || len == 0 || (color & 0xFFu) == 0) {
+        return;
+    }
+    if (bidi_fast_path(base, text, len)) {
+        pt_canvas_draw_text_line(canvas, font, text, len, x, baseline, max_width, align, color,
+                                 ellipsis);
+        return;
+    }
+    line_mode mode = {.font = font, .base = base, .directional = false};
+    const char *draw_text = text;
+    size_t draw_len = len;
+    char *ellipsized = NULL;
+    float total_width = line_mode_measure(&mode, text, len);
+    float max_width_px = max_width > 0.0f ? max_width * canvas->scale : 0.0f;
+    if (max_width_px > 0.0f && total_width > max_width_px) {
+        if (!ellipsis) {
+            return;
+        }
+        size_t new_len = 0;
+        float new_width = 0.0f;
+        ellipsized = line_mode_ellipsize(&mode, text, len, max_width_px, &new_len, &new_width);
+        draw_text = ellipsized;
+        draw_len = new_len;
+        total_width = new_width;
+    }
+    if (draw_len == 0) {
+        free(ellipsized);
+        return;
+    }
+    bool rtl = paragraph_resolves_rtl(base, text, len);
+    if (max_width > 0.0f) {
+        float total_logical = total_width / canvas->scale;
+        if (align == pt_text_align_center) {
+            x += (max_width - total_logical) * 0.5f;
+        } else if ((align == pt_text_align_start && rtl) ||
+                   (align == pt_text_align_end && !rtl)) {
+            x += max_width - total_logical;
+        }
+    }
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get((pt_font *)font, draw_text, draw_len,
+                                            bidi_direction_key(base), true, &cached);
+    draw_shaped_entry(canvas, entry, x, baseline, color, true);
+    if (!cached) {
+        shape_entry_clear(entry);
+    }
+    free(ellipsized);
+}
+
+void pt_canvas_draw_text_line_direction(pt_canvas *canvas, const pt_font *font,
+                                        const char *text, size_t len, float x, float baseline,
+                                        float max_width, pt_text_align align, pt_color color,
+                                        bool ellipsis, hb_direction_t direction) {
+    if (direction == HB_DIRECTION_INVALID) {
+        pt_canvas_draw_text_line(canvas, font, text, len, x, baseline, max_width, align, color,
+                                 ellipsis);
+        return;
+    }
+    if (!canvas || !font || !text || len == 0 || (color & 0xFFu) == 0) {
+        return;
+    }
+    line_mode mode = {.font = font, .direction = direction, .directional = true};
+    const char *draw_text = text;
+    size_t draw_len = len;
+    char *ellipsized = NULL;
+    float total_width = line_mode_measure(&mode, text, len);
+    float max_width_px = max_width > 0.0f ? max_width * canvas->scale : 0.0f;
+    if (max_width_px > 0.0f && total_width > max_width_px) {
+        if (!ellipsis) {
+            return;
+        }
+        size_t new_len = 0;
+        float new_width = 0.0f;
+        ellipsized = line_mode_ellipsize(&mode, text, len, max_width_px, &new_len, &new_width);
+        draw_text = ellipsized;
+        draw_len = new_len;
+        total_width = new_width;
+    }
+    if (draw_len == 0) {
+        free(ellipsized);
+        return;
+    }
+    if (max_width > 0.0f) {
+        float total_logical = total_width / canvas->scale;
+        if (align == pt_text_align_center) {
+            x += (max_width - total_logical) * 0.5f;
+        } else if (align == pt_text_align_end) {
+            x += max_width - total_logical;
+        }
+    }
+    bool cached = false;
+    uint8_t key =
+        direction == HB_DIRECTION_RTL ? pt_shape_key_run_rtl : pt_shape_key_run_ltr;
+    pt_shape_entry *entry =
+        shape_entry_get((pt_font *)font, draw_text, draw_len, key, true, &cached);
+    draw_shaped_entry(canvas, entry, x, baseline, color, true);
     if (!cached) {
         shape_entry_clear(entry);
     }

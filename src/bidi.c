@@ -290,6 +290,53 @@ bool pt_bidi_is_removed(uint32_t codepoint) {
     }
 }
 
+bool pt_bidi_text_may_reorder(const char *text, size_t len) {
+    if (!text || len == 0) return false;
+    SBUInteger at = 0;
+    while (at < (SBUInteger)len) {
+        SBUInteger next = at;
+        SBCodepoint codepoint =
+            SBCodepointDecodeNextFromUTF8((const SBUInt8 *)text, (SBUInteger)len, &next);
+        if (codepoint == SBCodepointInvalid || next <= at) {
+            ++at;
+            continue;
+        }
+        SBBidiType type = SBCodepointGetBidiType(codepoint);
+        if (type == SBBidiTypeR || type == SBBidiTypeAL || SBBidiTypeIsFormat(type)) return true;
+        at = next;
+    }
+    return false;
+}
+
+pt_bidi_base pt_bidi_first_strong_direction(const char *text, size_t len) {
+    if (!text || len == 0) return pt_bidi_base_auto;
+    SBUInteger at = 0;
+    unsigned int isolate_depth = 0;
+    while (at < (SBUInteger)len) {
+        SBUInteger next = at;
+        SBCodepoint codepoint =
+            SBCodepointDecodeNextFromUTF8((const SBUInt8 *)text, (SBUInteger)len, &next);
+        if (codepoint == SBCodepointInvalid || next <= at) {
+            ++at;
+            continue;
+        }
+        SBBidiType type = SBCodepointGetBidiType(codepoint);
+        /* Rule P2: only characters outside isolating runs count, and the first
+         * paragraph alone decides the base for a single-line presentation. */
+        if (type == SBBidiTypeLRI || type == SBBidiTypeRLI || type == SBBidiTypeFSI) {
+            ++isolate_depth;
+        } else if (type == SBBidiTypePDI) {
+            if (isolate_depth > 0) --isolate_depth;
+        } else if (isolate_depth == 0) {
+            if (type == SBBidiTypeL) return pt_bidi_base_ltr;
+            if (type == SBBidiTypeR || type == SBBidiTypeAL) return pt_bidi_base_rtl;
+            if (type == SBBidiTypeB) break;
+        }
+        at = next;
+    }
+    return pt_bidi_base_auto;
+}
+
 const char *pt_bidi_engine_version(void) {
     return SBVersionGetString();
 }

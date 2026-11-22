@@ -219,6 +219,16 @@ bool pt_utf8_is_cjk(uint32_t codepoint);
 
 /* ---------- font ---------- */
 
+/* Paragraph base direction (declared early so the font direction helpers can
+ * name it; the bidi adapter sits at the end of this header). `auto` runs UBA
+ * rules P2-P3 (falling back to left-to-right when the paragraph has no strong
+ * character); `ltr`/`rtl` pin the base level to 0/1. */
+typedef enum pt_bidi_base {
+    pt_bidi_base_auto = 0,
+    pt_bidi_base_ltr,
+    pt_bidi_base_rtl
+} pt_bidi_base;
+
 typedef struct pt_font pt_font;
 
 typedef struct pt_glyph {
@@ -244,6 +254,10 @@ typedef struct pt_shape_entry {
      * bumps the generation, so stale entries stop matching instead of being
      * freed while a caller still holds a pointer. */
     uint64_t generation;
+    /* Direction signature of the shaped result (2.0). Zero is the legacy
+     * auto/LTR fast path; nonzero keys pin a paragraph base or an explicit
+     * per-run direction so RTL and LTR shaping of the same bytes never alias. */
+    uint8_t direction_key;
     char *text;
     size_t len;
     struct pt_shaped_run *runs;
@@ -264,6 +278,11 @@ typedef struct pt_shaped_run {
     pt_font *font;
     hb_script_t script;
     bool covered;
+    /* Resolved embedding level and shaping direction (2.0). Legacy LTR entries
+     * keep level 0 and HB_DIRECTION_INVALID, which preserves their previous
+     * guess-the-direction shaping path. */
+    uint8_t level;
+    hb_direction_t direction;
     hb_buffer_t *buffer;
 } pt_shaped_run;
 
@@ -318,6 +337,12 @@ typedef struct pt_text_run {
     pt_font *font;
     pt_color color;
     uint32_t flags;
+    /* Embedding level and shaping direction of this run (2.0). LTR fast-path
+     * builds leave level 0 and HB_DIRECTION_INVALID. Bidi builds emit runs in
+     * visual order, so `items` is no longer guaranteed to be in logical order;
+     * measure still sums overlapping ranges, and drawing walks the array. */
+    uint8_t level;
+    hb_direction_t direction;
 } pt_text_run;
 
 typedef struct pt_text_runs {
@@ -325,10 +350,16 @@ typedef struct pt_text_runs {
     size_t length;
     pt_text_run *items;
     size_t count;
+    /* Allocated item slots; richer builds with per-level splits grow past the
+     * span-boundary estimate. */
+    size_t capacity;
     float scale;
     float ascent;
     float descent;
     float line_height;
+    /* Resolved paragraph base level and whether the runs were reordered. */
+    uint8_t base_level;
+    bool bidi;
 } pt_text_runs;
 
 bool pt_widget_supports_spans(const pt_widget *widget);
@@ -336,6 +367,10 @@ void pt_widget_spans_on_insert(pt_widget *widget, size_t position, size_t length
 void pt_widget_spans_on_delete(pt_widget *widget, size_t start, size_t end);
 void pt_widget_spans_clamp(pt_widget *widget);
 bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_text_runs *out);
+/* Resolved paragraph base for single-line text without running the full UBA:
+ * explicit/auto widget text direction, then P2 first strong, then the resolved
+ * UI direction. Shared by rich-text building and the paint fast path. */
+pt_bidi_base pt_widget_text_base(const pt_widget *widget, const char *text, size_t len);
 void pt_text_runs_free(pt_text_runs *runs);
 float pt_text_runs_measure(const pt_text_runs *runs, size_t start, size_t end);
 float pt_text_runs_natural_width(const pt_text_runs *runs);
@@ -359,18 +394,51 @@ void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
                               float *ascent, float *descent);
 float pt_font_line_height_for(const pt_font *font, const char *text, size_t len);
 /* Script/face segmentation used by measurement and drawing. The returned array
- * is caller-owned and released with pt_font_runs_free; runs are contiguous,
- * cover the whole text in logical order and carry the script HarfBuzz shaped
- * them under. Exposed for tests and diagnostics. */
+ * is caller-owned and released with pt_font_runs_free; runs are contiguous and
+ * cover the whole text. The legacy request emits them in logical order; the
+ * bidi request emits them in visual order. Exposed for tests and diagnostics. */
 typedef struct pt_font_run {
     size_t start;
     size_t end;
     pt_font *font;
     hb_script_t script;
     bool covered;
+    /* Resolved embedding level and shaping direction (2.0). Legacy LTR runs
+     * keep level 0 and HB_DIRECTION_INVALID. */
+    uint8_t level;
+    hb_direction_t direction;
+    size_t visual_index;
 } pt_font_run;
 int pt_font_runs(const pt_font *font, const char *text, size_t len, pt_font_run **out_runs);
+/* Bidi-aware segmentation: the paragraph is analysed from `base` and runs are
+ * returned in visual order with their resolved level and explicit direction. */
+int pt_font_runs_bidi(const pt_font *font, const char *text, size_t len, pt_bidi_base base,
+                      pt_font_run **out_runs);
 void pt_font_runs_free(pt_font_run *runs);
+/* Directional measurement and painting (2.0).
+ *
+ * `_bidi` analyses the paragraph under `base` (auto runs P2/P3) and reorders.
+ * The LTR fast path inside these functions calls the legacy implementations
+ * unchanged whenever the resolved base is LTR and the text contains neither a
+ * strong RTL character nor a bidi formatting control, so LTR pixels and widths
+ * stay byte-identical.
+ *
+ * `_direction` shapes one already-segmented run with an explicit HarfBuzz
+ * direction. HB_DIRECTION_INVALID selects the legacy path. */
+float pt_font_measure_bidi(const pt_font *font, const char *text, size_t len,
+                           pt_bidi_base base);
+float pt_font_measure_direction(const pt_font *font, const char *text, size_t len,
+                                hb_direction_t direction);
+void pt_font_metrics_for_text_bidi(const pt_font *font, const char *text, size_t len,
+                                   pt_bidi_base base, float *ascent, float *descent);
+void pt_canvas_draw_text_line_bidi(pt_canvas *canvas, const pt_font *font, const char *text,
+                                   size_t len, float x, float baseline, float max_width,
+                                   pt_text_align align, pt_color color, bool ellipsis,
+                                   pt_bidi_base base);
+void pt_canvas_draw_text_line_direction(pt_canvas *canvas, const pt_font *font,
+                                        const char *text, size_t len, float x, float baseline,
+                                        float max_width, pt_text_align align, pt_color color,
+                                        bool ellipsis, hb_direction_t direction);
 /* Cache bounds used by the tests: entries currently held and faces in the
  * process font table. */
 size_t pt_font_shape_cache_count(const pt_font *font);
@@ -1813,15 +1881,6 @@ uint64_t pt_app_add_timeout_internal(pt_app *app, uint32_t ms, pt_timer_callback
 
 /* ---------- bidi (2.0) ---------- */
 
-/* Paragraph base direction. `auto` runs UBA rules P2-P3 (falling back to
- * left-to-right when the paragraph has no strong character); `ltr`/`rtl` pin
- * the base level to 0/1. */
-typedef enum pt_bidi_base {
-    pt_bidi_base_auto = 0,
-    pt_bidi_base_ltr,
-    pt_bidi_base_rtl
-} pt_bidi_base;
-
 /* One run of a line after rules L1-L2. Offsets and lengths are logical UTF-8
  * byte positions in the analysed text, so removed X9 controls still occupy
  * bytes (shaping keeps them; drawing skips them with pt_bidi_is_removed).
@@ -1879,6 +1938,16 @@ int pt_bidi_line_level_at(const pt_bidi_line *line, size_t byte_offset);
 /* True for the X9 controls removed by the bidi algorithm (BN, LRE, RLE, LRO,
  * RLO, PDF). Their bytes stay in runs for shaping but must not be painted. */
 bool pt_bidi_is_removed(uint32_t codepoint);
+/* Cheap pre-scan used by the LTR fast path: true when the UTF-8 text contains
+ * a strong right-to-left character (bidi class R or AL) or any bidi formatting
+ * control (LRE/RLE/LRO/RLO/PDF/LRI/RLI/FSI/PDI). Text with none of those cannot
+ * reorder under an LTR base, so it may skip the UBA entirely. */
+bool pt_bidi_text_may_reorder(const char *text, size_t len);
+/* P2 first-strong direction over the first paragraph: strong L returns
+ * pt_bidi_base_ltr, strong R/AL returns pt_bidi_base_rtl, and text inside
+ * isolates or with no strong character returns pt_bidi_base_auto. Cheap and
+ * allocation-free, for resolve-before-paint paths. */
+pt_bidi_base pt_bidi_first_strong_direction(const char *text, size_t len);
 const char *pt_bidi_engine_version(void);
 const char *pt_bidi_unicode_version(void);
 
