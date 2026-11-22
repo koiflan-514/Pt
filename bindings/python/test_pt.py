@@ -1596,6 +1596,8 @@ class ExtensionApiTests(unittest.TestCase):
         # A NULL window has no recorded state and cannot change it.
         self.assertFalse(pt._pt_window_show_input_panel(None))
         self.assertFalse(pt._pt_window_hide_input_panel(None))
+        self.assertEqual(pt.a11y_role_spin_button, 36)
+        self.assertIn("a11y_role_spin_button", pt.__all__)
 
     def test_raw_input_callbacks_dispatch_and_payloads(self) -> None:
         focus_events: list[tuple[pt.Window, bool]] = []

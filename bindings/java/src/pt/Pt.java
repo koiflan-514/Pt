@@ -554,6 +554,7 @@ public final class Pt {
     public static final int a11y_role_icon = 33;
     public static final int a11y_role_combo_box = 34;
     public static final int a11y_role_list_box = 35;
+    public static final int a11y_role_spin_button = 36;
 
     public static final int easing_linear = 0;
     public static final int easing_in_quad = 1;

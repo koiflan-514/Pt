@@ -1408,6 +1408,7 @@ int main() {
     window.clear_drag_image();
     window.on_stylus(on_stylus);
     check((pt_a11y_state_expandable & pt_a11y_state_expandable) != 0);
+    check(pt_a11y_role_spin_button == 36);
     check(pt_icon_warning > pt_icon_none);
 
     pt::transition fade(0.0f);

@@ -271,6 +271,7 @@ __all__ = [
     "a11y_role_icon",
     "a11y_role_combo_box",
     "a11y_role_list_box",
+    "a11y_role_spin_button",
     "a11y_state_visible",
     "a11y_state_enabled",
     "a11y_state_focusable",
@@ -599,6 +600,7 @@ a11y_role_tab_panel = 32
 a11y_role_icon = 33
 a11y_role_combo_box = 34
 a11y_role_list_box = 35
+a11y_role_spin_button = 36
 
 a11y_state_visible = 1 << 0
 a11y_state_enabled = 1 << 1

@@ -1424,6 +1424,7 @@ public final class PtTest {
                     "show input panel descriptor");
             check(descriptorPinned("window_hide_input_panel"),
                     "hide input panel descriptor");
+            check(Pt.a11y_role_spin_button == 36, "a11y spin button role");
 
             /* A real pipe proves the fd watch dispatches through the poll loop. */
             check(Pt.fd_event_read == 1 && Pt.fd_event_write == 2
