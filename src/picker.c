@@ -690,10 +690,16 @@ static void date_rebuild_popup(pt_widget *host, pt_picker *picker) {
     header->gap = 4.0f;
     pt_widget_set_height(header, 30.0f);
 
+    /* The month header is a row, so an RTL shell reverses it: the chevron that
+     * moves to the previous month lands on the right and "Next" takes the
+     * leading edge. The chevrons are written for an LTR row, so RTL also swaps
+     * the two glyphs to keep them pointing at the side they move towards. */
+    bool rtl = pt_widget_resolved_ui_direction(picker->content) == pt_ui_direction_rtl;
+
     pt_widget *previous = pt_button_create(header, "");
     previous->button_variant = pt_button_ghost;
     previous->focusable = false;
-    pt_widget_set_icon(previous, pt_icon_chevron_left);
+    pt_widget_set_icon(previous, rtl ? pt_icon_chevron_right : pt_icon_chevron_left);
     pt_widget_set_size(previous, 26.0f, 26.0f);
     pt_widget_set_padding(previous, 0.0f, 0.0f, 0.0f, 0.0f);
     pt_widget_set_a11y_name(previous, "Previous month");
@@ -711,7 +717,7 @@ static void date_rebuild_popup(pt_widget *host, pt_picker *picker) {
     pt_widget *next = pt_button_create(header, "");
     next->button_variant = pt_button_ghost;
     next->focusable = false;
-    pt_widget_set_icon(next, pt_icon_chevron_right);
+    pt_widget_set_icon(next, rtl ? pt_icon_chevron_left : pt_icon_chevron_right);
     pt_widget_set_size(next, 26.0f, 26.0f);
     pt_widget_set_padding(next, 0.0f, 0.0f, 0.0f, 0.0f);
     pt_widget_set_a11y_name(next, "Next month");
@@ -1927,23 +1933,31 @@ void pt_picker_layout(pt_widget *host, const pt_layout_ctx *ctx, pt_rect inner) 
     if (!picker || !picker->field) {
         return;
     }
+    /* RTL mirrors the horizontal chrome: the lead slot (spin buttons, colour
+     * swatch) and the trailing chevron reserve swap sides. */
+    bool rtl = pt_widget_resolved_ui_direction(host) == pt_ui_direction_rtl;
     if (picker->kind == pt_picker_kind_number) {
         float buttons = pt_min_float(44.0f, pt_max_float(0.0f, inner.w));
         float width = pt_max_float(0.0f, inner.w - buttons);
-        pt_widget_layout_child(picker->field, inner.x, inner.y, width, inner.h, ctx);
+        if (rtl) {
+            pt_widget_layout_child(picker->field, inner.x + buttons, inner.y, width, inner.h,
+                                   ctx);
+        } else {
+            pt_widget_layout_child(picker->field, inner.x, inner.y, width, inner.h, ctx);
+        }
         if (picker->up && picker->down && buttons >= 40.0f) {
             float half = pt_max_float(1.0f, (inner.h - 2.0f) * 0.5f);
-            pt_widget_layout_child(picker->up, inner.x + inner.w - 22.0f, inner.y, 22.0f,
-                                   half, ctx);
-            pt_widget_layout_child(picker->down, inner.x + inner.w - 22.0f,
-                                   inner.y + half + 2.0f, 22.0f,
+            float button_x = rtl ? inner.x : inner.x + inner.w - 22.0f;
+            pt_widget_layout_child(picker->up, button_x, inner.y, 22.0f, half, ctx);
+            pt_widget_layout_child(picker->down, button_x, inner.y + half + 2.0f, 22.0f,
                                    pt_max_float(1.0f, inner.h - half - 2.0f), ctx);
         }
         return;
     }
     float lead = picker->kind == pt_picker_kind_color ? 24.0f : 0.0f;
     float width = pt_max_float(0.0f, inner.w - lead - pt_combobox_chevron_reserve);
-    pt_widget_layout_child(picker->field, inner.x + lead, inner.y, width, inner.h, ctx);
+    float field_x = rtl ? inner.x + pt_combobox_chevron_reserve : inner.x;
+    pt_widget_layout_child(picker->field, field_x, inner.y, width, inner.h, ctx);
 }
 
 void pt_picker_preferred(pt_widget *host, const pt_layout_ctx *ctx, float *width,

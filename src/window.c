@@ -849,25 +849,32 @@ static const char *window_font_family(const pt_window *window) {
                : "sans-serif";
 }
 
+static bool window_rtl(const pt_window *window) {
+    return window && pt_window_get_ui_direction(window) == pt_ui_direction_rtl;
+}
+
+/* Title-bar buttons run close, maximize, minimize from the trailing edge. In
+ * RTL the trailing edge is the left one, so the same logical order starts from
+ * the left: close sits nearest the top-left corner. */
 static pt_rect csd_close_rect(const pt_window *window) {
-    float right = (float)window->width - 8.0f;
     float y = (window->header_height - csd_button_height) * 0.5f;
     if (y < 0.0f) {
         y = 0.0f;
     }
-    return (pt_rect){right - csd_button_width, y, csd_button_width, csd_button_height};
+    float x = window_rtl(window) ? 8.0f : (float)window->width - 8.0f - csd_button_width;
+    return (pt_rect){x, y, csd_button_width, csd_button_height};
 }
 
 static pt_rect csd_maximize_rect(const pt_window *window) {
     pt_rect close = csd_close_rect(window);
-    return (pt_rect){close.x - csd_button_width, close.y, csd_button_width,
-                     csd_button_height};
+    float step = window_rtl(window) ? csd_button_width : -csd_button_width;
+    return (pt_rect){close.x + step, close.y, csd_button_width, csd_button_height};
 }
 
 static pt_rect csd_minimize_rect(const pt_window *window) {
     pt_rect maximize = csd_maximize_rect(window);
-    return (pt_rect){maximize.x - csd_button_width, maximize.y, csd_button_width,
-                     csd_button_height};
+    float step = window_rtl(window) ? csd_button_width : -csd_button_width;
+    return (pt_rect){maximize.x + step, maximize.y, csd_button_width, csd_button_height};
 }
 
 static pt_csd_part csd_button_at(const pt_window *window, float x, float y) {
@@ -1062,18 +1069,30 @@ static void paint_csd(pt_canvas *canvas, pt_window *window) {
             float line_height = font->line_height / scale;
             float baseline = (window->header_height - line_height) * 0.5f +
                              font->ascent / scale;
+            /* The title fills the band between the window edge and the button
+             * cluster, which sits on the trailing side (right in LTR). */
+            bool rtl = window_rtl(window);
             float left = minimize.x - 16.0f;
             float title_width = pt_max_float(0.0f, left - 8.0f);
             if (title_width < 20.0f) {
                 title_width = (float)window->width - 16.0f;
                 left = 8.0f;
             }
+            if (rtl) {
+                float cluster_right = minimize.x + minimize.w;
+                left = cluster_right + 16.0f;
+                title_width = pt_max_float(0.0f, (float)window->width - 8.0f - left);
+                if (title_width < 20.0f) {
+                    title_width = (float)window->width - 16.0f;
+                    left = 8.0f;
+                }
+            }
             pt_color color = window_theme_color(window, pt_theme_text, 0xE6EDF3FFu);
             if (!window->keyboard_focused) {
                 color = pt_color_alpha(color, 190);
             }
             pt_canvas_push_clip(canvas, 8.0f, 0.0f, title_width, window->header_height - 1.0f);
-            pt_canvas_draw_text_line(canvas, font, title, strlen(title), 8.0f, baseline,
+            pt_canvas_draw_text_line(canvas, font, title, strlen(title), left, baseline,
                                      title_width, pt_text_align_center, color, true);
             pt_canvas_pop_clip(canvas);
         }

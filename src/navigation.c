@@ -347,18 +347,28 @@ void pt_tabs_sync_pages(pt_widget *tabs) {
     tabs_apply_visibility(tabs);
 }
 
+static bool tabs_rtl(const pt_widget *tabs) {
+    return tabs && pt_widget_resolved_ui_direction(tabs) == pt_ui_direction_rtl;
+}
+
 bool pt_tabs_key(pt_widget *tabs, uint32_t keysym) {
     pt_tabs_state *state = tabs_state(tabs);
     if (!state || state->count == 0) {
         return false;
     }
     uint32_t next = state->active;
+    /* Tabs read right to left in RTL, so Left moves to the next tab index and
+     * Right to the previous one. */
+    bool rtl = tabs_rtl(tabs);
     switch (keysym) {
     case XKB_KEY_Left:
-        next = state->active > 0 ? state->active - 1 : 0;
+        next = rtl ? (state->active + 1 < state->count ? state->active + 1 : state->active)
+                   : (state->active > 0 ? state->active - 1 : 0);
         break;
     case XKB_KEY_Right:
-        next = state->active + 1 < state->count ? state->active + 1 : state->active;
+        next = rtl ? (state->active > 0 ? state->active - 1 : 0)
+                   : (state->active + 1 < state->count ? state->active + 1
+                                                       : state->active);
         break;
     case XKB_KEY_Home:
         next = 0;
@@ -408,7 +418,10 @@ void pt_tabs_pointer_down(pt_widget *tabs, float x, float y) {
         float available = pt_max_float(1.0f, inner_w - pt_tabs_arrow_width * 2.0f -
                                                pt_tabs_margin * 2.0f);
         float max_scroll = pt_max_float(0.0f, state->content_width - available);
-        state->scroll_x = pt_clamp_float(state->scroll_x + (left ? -120.0f : 120.0f),
+        /* scroll_x is still measured from the start (logical index 0). In RTL
+         * the right arrow reaches lower indices and the left arrow higher. */
+        bool forward = tabs_rtl(tabs) ? left : !left;
+        state->scroll_x = pt_clamp_float(state->scroll_x + (forward ? 120.0f : -120.0f),
                                          0.0f, max_scroll);
         pt_widget_mark_dirty(tabs, true);
         return;
@@ -496,9 +509,24 @@ void pt_tabs_layout(pt_widget *tabs, const pt_layout_ctx *ctx, pt_rect inner) {
 
     float cursor = inner.x + pt_tabs_margin + (state->overflow ? pt_tabs_arrow_width : 0.0f) -
                    state->scroll_x;
+    /* RTL fills the strip from the right edge, logical page 0 first. The strip
+     * is symmetric (arrow, margin, tabs, margin, arrow), so the origin is the
+     * mirrored start. */
+    bool rtl = tabs_rtl(tabs);
+    if (rtl) {
+        cursor = inner.x + inner.w - pt_tabs_margin -
+                 (state->overflow ? pt_tabs_arrow_width : 0.0f) + state->scroll_x;
+    }
     for (uint32_t i = 0; i < state->count; ++i) {
+        if (rtl) {
+            cursor -= state->tab_width[i];
+        }
         state->tab_x[i] = cursor;
-        cursor += state->tab_width[i] + pt_tabs_gap;
+        if (rtl) {
+            cursor -= pt_tabs_gap;
+        } else {
+            cursor += state->tab_width[i] + pt_tabs_gap;
+        }
     }
     if (state->count > 0) {
         state->target_x = state->tab_x[state->active];
@@ -790,12 +818,19 @@ void pt_sidebar_layout(pt_widget *sidebar, const pt_layout_ctx *ctx, pt_rect inn
     float x = inner.x + 10.0f;
     float width = pt_max_float(0.0f, inner.w - 20.0f);
     float y = top - sidebar->scroll_y;
+    pt_align align_x = pt_align_start;
+    if (pt_widget_resolved_ui_direction(sidebar) == pt_ui_direction_rtl) {
+        /* The selected pill hugs the right edge. The item box keeps its width;
+         * paint.c mirrors the icon and the accent bar inside it. */
+        align_x = pt_align_end;
+    }
     uint32_t index = 0;
     for (pt_widget *item = sidebar->first_child; item; item = item->next_sibling) {
         if (item->kind != pt_widget_sidebar_item) {
             continue;
         }
         item->row_selected = index == state->active;
+        item->align_self = align_x;
         pt_widget_layout_child(item, x, y, width, item_height, ctx);
         y += item_height + 4.0f;
         ++index;

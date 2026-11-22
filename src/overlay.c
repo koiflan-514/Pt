@@ -525,6 +525,10 @@ static void menu_build_panel(pt_menu *menu, bool focus_first) {
     pt_widget *panel = pt_card_create(NULL);
     panel->window = window;
     panel->direction = pt_direction_column;
+    /* A menu inherits the shell's writing direction: its rows stack right to
+     * left, and shortcuts move to the trailing (left) edge. */
+    panel->ui_direction =
+        (uint8_t)pt_widget_resolved_ui_direction(window->root ? window->root : NULL);
     panel->gap = 1.0f;
     panel->padding_top = overlay_menu_padding;
     panel->padding_bottom = overlay_menu_padding;
@@ -691,7 +695,14 @@ void pt_menu_show_below(pt_menu *menu, pt_widget *anchor) {
     if (!menu || !anchor) {
         return;
     }
-    pt_menu_show_at(menu, anchor->x, anchor->y + anchor->height + 6.0f);
+    /* The menu hangs from the anchor's leading edge: its left edge in LTR, its
+     * right edge in RTL. The width comes from the last measure, which is exact
+     * once the menu has been shown at least once. */
+    float x = anchor->x;
+    if (pt_widget_resolved_ui_direction(anchor) == pt_ui_direction_rtl) {
+        x = anchor->x + anchor->width - menu->overlay.rect.w;
+    }
+    pt_menu_show_at(menu, x, anchor->y + anchor->height + 6.0f);
 }
 
 void pt_menu_dismiss(pt_menu *menu) {
@@ -732,6 +743,8 @@ static void dialog_build_panel(pt_dialog *dialog) {
     pt_widget *panel = pt_card_create(NULL);
     panel->window = window;
     panel->direction = pt_direction_column;
+    panel->ui_direction =
+        (uint8_t)pt_widget_resolved_ui_direction(window->root ? window->root : NULL);
     panel->gap = 14.0f;
     panel->padding_top = 22.0f;
     panel->padding_bottom = 20.0f;
@@ -1063,7 +1076,11 @@ static void tooltip_timeout(pt_app *app, void *user_data) {
         width = overlay_tooltip_max_width;
     }
     bool native = overlay_use_native(window, &tooltip->overlay);
-    float x = window->pointer_x + 14.0f;
+    /* Tooltips sit under the pointer, nudged to the trailing side: right and
+     * down in LTR, left and down in RTL, so the panel never covers the label
+     * that just got explained. */
+    bool rtl = pt_widget_resolved_ui_direction(target) == pt_ui_direction_rtl;
+    float x = rtl ? window->pointer_x - width - 14.0f : window->pointer_x + 14.0f;
     float y = window->pointer_y + 20.0f;
     if (!native) {
         if (x + width > (float)window->width - overlay_edge) {
