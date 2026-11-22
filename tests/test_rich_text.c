@@ -291,6 +291,276 @@ static void test_font_cache(void) {
                              14.0f) == regular);
 }
 
+static uint64_t rich_pixels_hash(const pt_canvas *canvas) {
+    uint64_t hash = 1469598103934665603ull;
+    size_t count = (size_t)canvas->width * (size_t)canvas->height;
+    for (size_t i = 0; i < count; ++i) {
+        hash ^= canvas->pixels[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static int rich_leftmost_ink(const pt_canvas *canvas) {
+    for (int x = 0; x < canvas->width; ++x) {
+        for (int y = 0; y < canvas->height; ++y) {
+            if (pt_canvas_get_pixel(canvas, x, y) != 0u) {
+                return x;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Ellipsis placement in the rich-text painter. An RTL truncation reserves the
+ * slot just before the visual left edge of the retained text: drawing the
+ * ellipsis at that origin must produce exactly the same pixels as painting the
+ * truncated text and ellipsis separately there, and must differ from the old
+ * overlapping placement at the text origin. LTR keeps the pre-2.0 placement
+ * after the text. */
+static void test_ellipsis_placement(pt_window *window) {
+    static const char ellipsis[] = "\xE2\x80\xA6";
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "DejaVu Sans"};
+    pt_font *probe = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                     pt_font_slant_upright, 14.0f);
+    if (!probe || !pt_font_has_glyph(probe, 0x05D0u)) {
+        printf("skip rich_text: no Hebrew-capable frame font; ellipsis checks skipped\n");
+        return;
+    }
+
+    /* LTR: unchanged start/end alignment, ellipsis after the retained text. */
+    pt_widget *ltr = pt_label_create(pt_window_root(window),
+                                     "Hello styled rich text truncation");
+    pt_text_span span = span_of(0, 5, pt_text_span_has_color);
+    span.color = 0xFFCC44FFu;
+    pt_check(pt_widget_set_text_spans(ltr, &span, 1));
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(ltr, &ctx, &runs));
+    pt_check(!runs.bidi);
+    float ew = pt_font_measure_direction(runs.items[0].font, ellipsis, sizeof(ellipsis) - 1,
+                                         runs.items[0].direction) /
+               runs.scale;
+    float max_width = 80.0f;
+    size_t fit = 0;
+    size_t scan = 0;
+    while (scan < runs.length) {
+        size_t next = pt_utf8_next_boundary(runs.text, runs.length, scan);
+        if (next <= scan) {
+            next = scan + 1;
+        }
+        if (pt_text_runs_measure(&runs, 0, next) + ew > max_width) {
+            break;
+        }
+        fit = next;
+        scan = next;
+    }
+    pt_check(fit > 0 && fit < runs.length);
+    float text_width = pt_text_runs_measure(&runs, 0, fit);
+    pt_canvas *actual = pt_canvas_create(160, 40, 1.0f);
+    pt_canvas *reference = pt_canvas_create(160, 40, 1.0f);
+    pt_check(actual != NULL && reference != NULL);
+    if (actual && reference) {
+        pt_text_runs_draw_line(actual, &runs, 0, runs.length, 0.0f, 30.0f, max_width,
+                               pt_text_align_start, 0xFFFFFFFFu, true);
+        pt_text_runs_draw_line(reference, &runs, 0, fit, 0.0f, 30.0f, 0.0f,
+                               pt_text_align_start, 0xFFFFFFFFu, false);
+        pt_canvas_draw_text_line_direction(reference, runs.items[0].font, ellipsis,
+                                           sizeof(ellipsis) - 1, text_width, 30.0f, 0.0f,
+                                           pt_text_align_start, 0xFFFFFFFFu, false,
+                                           HB_DIRECTION_LTR);
+        pt_check(rich_pixels_hash(actual) == rich_pixels_hash(reference));
+    }
+    pt_canvas_destroy(actual);
+    pt_canvas_destroy(reference);
+
+    actual = pt_canvas_create(160, 40, 1.0f);
+    reference = pt_canvas_create(160, 40, 1.0f);
+    pt_check(actual != NULL && reference != NULL);
+    if (actual && reference) {
+        float x = max_width - text_width;
+        pt_text_runs_draw_line(actual, &runs, 0, runs.length, 0.0f, 30.0f, max_width,
+                               pt_text_align_end, 0xFFFFFFFFu, true);
+        pt_text_runs_draw_line(reference, &runs, 0, fit, x, 30.0f, 0.0f,
+                               pt_text_align_start, 0xFFFFFFFFu, false);
+        pt_canvas_draw_text_line_direction(reference, runs.items[0].font, ellipsis,
+                                           sizeof(ellipsis) - 1, max_width, 30.0f, 0.0f,
+                                           pt_text_align_start, 0xFFFFFFFFu, false,
+                                           HB_DIRECTION_LTR);
+        pt_check(rich_pixels_hash(actual) == rich_pixels_hash(reference));
+    }
+    pt_canvas_destroy(actual);
+    pt_canvas_destroy(reference);
+    pt_text_runs_free(&runs);
+
+    /* RTL with a span: the ellipsis takes the free slot at the visual left
+     * end, immediately before the retained text block. */
+    pt_widget *rtl = pt_label_create(
+        pt_window_root(window),
+        "\xD7\x90\xD7\x91\xD7\x92\xD7\x93\xD7\x94\xD7\x95\xD7\x96\xD7\x97\xD7\x98\xD7\x99\xD7\x9A\xD7\x9B");
+    pt_widget_set_text_direction(rtl, pt_text_direction_rtl);
+    span = span_of(0, 4, pt_text_span_underline);
+    pt_check(pt_widget_set_text_spans(rtl, &span, 1));
+    pt_check(pt_text_runs_build(rtl, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.base_level == 1);
+    ew = pt_font_measure_direction(runs.items[0].font, ellipsis, sizeof(ellipsis) - 1,
+                                   runs.items[0].direction) /
+         runs.scale;
+    max_width = 60.0f;
+    fit = 0;
+    scan = 0;
+    while (scan < runs.length) {
+        size_t next = pt_utf8_next_boundary(runs.text, runs.length, scan);
+        if (next <= scan) {
+            next = scan + 1;
+        }
+        if (pt_text_runs_measure(&runs, 0, next) + ew > max_width) {
+            break;
+        }
+        fit = next;
+        scan = next;
+    }
+    pt_check(fit > 0 && fit < runs.length);
+    text_width = pt_text_runs_measure(&runs, 0, fit);
+    float text_x = max_width - text_width;
+    float ellipsis_x = text_x - ew;
+    pt_check(ellipsis_x > 0.0f);
+    pt_check(text_width + ew <= max_width + 0.01f);
+
+    actual = pt_canvas_create(140, 40, 1.0f);
+    reference = pt_canvas_create(140, 40, 1.0f);
+    pt_canvas *overlap = pt_canvas_create(140, 40, 1.0f);
+    pt_check(actual != NULL && reference != NULL && overlap != NULL);
+    if (actual && reference && overlap) {
+        pt_text_runs_draw_line(actual, &runs, 0, runs.length, 0.0f, 30.0f, max_width,
+                               pt_text_align_start, 0xFFFFFFFFu, true);
+        pt_text_runs_draw_line(overlap, &runs, 0, runs.length, 0.0f, 30.0f, max_width,
+                               pt_text_align_start, 0xFFFFFFFFu, true);
+        pt_text_runs_draw_line(reference, &runs, 0, fit, text_x, 30.0f, 0.0f,
+                               pt_text_align_start, 0xFFFFFFFFu, false);
+        pt_canvas_draw_text_line_direction(reference, runs.items[0].font, ellipsis,
+                                           sizeof(ellipsis) - 1, ellipsis_x, 30.0f, 0.0f,
+                                           pt_text_align_start, 0xFFFFFFFFu, false,
+                                           HB_DIRECTION_LTR);
+        pt_check(rich_pixels_hash(actual) == rich_pixels_hash(reference));
+        /* The old placement drew the ellipsis at the text origin. */
+        pt_canvas_draw_text_line_direction(overlap, runs.items[0].font, ellipsis,
+                                           sizeof(ellipsis) - 1, text_x, 30.0f, 0.0f,
+                                           pt_text_align_start, 0xFFFFFFFFu, false,
+                                           HB_DIRECTION_LTR);
+        pt_check(rich_pixels_hash(actual) != rich_pixels_hash(overlap));
+        int leftmost = rich_leftmost_ink(actual);
+        pt_check(leftmost >= (int)floorf(ellipsis_x) - 1);
+        pt_check(leftmost <= (int)ceilf(ellipsis_x) + 8);
+        pt_check((float)leftmost < text_x);
+    }
+    pt_canvas_destroy(actual);
+    pt_canvas_destroy(reference);
+    pt_canvas_destroy(overlap);
+
+    /* RTL align-end: the composite block starts at the left edge, so the
+     * ellipsis sits at x and the text follows it. */
+    actual = pt_canvas_create(140, 40, 1.0f);
+    reference = pt_canvas_create(140, 40, 1.0f);
+    pt_check(actual != NULL && reference != NULL);
+    if (actual && reference) {
+        pt_text_runs_draw_line(actual, &runs, 0, runs.length, 0.0f, 30.0f, max_width,
+                               pt_text_align_end, 0xFFFFFFFFu, true);
+        pt_text_runs_draw_line(reference, &runs, 0, fit, ew, 30.0f, 0.0f,
+                               pt_text_align_start, 0xFFFFFFFFu, false);
+        pt_canvas_draw_text_line_direction(reference, runs.items[0].font, ellipsis,
+                                           sizeof(ellipsis) - 1, 0.0f, 30.0f, 0.0f,
+                                           pt_text_align_start, 0xFFFFFFFFu, false,
+                                           HB_DIRECTION_LTR);
+        pt_check(rich_pixels_hash(actual) == rich_pixels_hash(reference));
+    }
+    pt_canvas_destroy(actual);
+    pt_canvas_destroy(reference);
+    pt_text_runs_free(&runs);
+}
+
+/* Explicit line breaks split UBA paragraphs: each one resolves its own base
+ * (auto per paragraph, explicit widget direction reused) and contributes its
+ * runs in visual order. A CR before LF is dropped like pt_text_runs_wrap. */
+static void test_bidi_paragraphs(pt_window *window) {
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "DejaVu Sans"};
+    pt_font *probe = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                     pt_font_slant_upright, 14.0f);
+    if (!probe || !pt_font_has_glyph(probe, 0x05D0u)) {
+        printf("skip rich_text: no Hebrew-capable frame font; paragraph checks skipped\n");
+        return;
+    }
+    pt_widget *label = pt_label_create(pt_window_root(window), "abc\n\xD7\x90\xD7\x91");
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.base_level == 0);
+    pt_check(runs.count == 2);
+    pt_check(runs.items[0].start == 0 && runs.items[0].end == 3);
+    pt_check(runs.items[0].level == 0 && runs.items[0].direction == HB_DIRECTION_LTR);
+    pt_check(runs.items[1].start == 4 && runs.items[1].end == 8);
+    pt_check(runs.items[1].level == 1 && runs.items[1].direction == HB_DIRECTION_RTL);
+    pt_text_line *lines = NULL;
+    int line_count = pt_text_runs_wrap(&runs, 400.0f, &lines);
+    pt_check(line_count == 2);
+    if (line_count == 2) {
+        pt_check(lines[0].start == 0 && lines[0].end == 3);
+        pt_check(lines[1].start == 4 && lines[1].end == 8);
+    }
+    free(lines);
+    pt_canvas *canvas = pt_canvas_create(200, 60, 1.0f);
+    pt_check(canvas != NULL);
+    if (canvas) {
+        pt_text_runs_draw_line(canvas, &runs, 0, 3, 0.0f, 20.0f, 200.0f,
+                               pt_text_align_start, 0xFFFFFFFFu, false);
+        pt_text_runs_draw_line(canvas, &runs, 4, 8, 0.0f, 45.0f, 200.0f,
+                               pt_text_align_start, 0xFFFFFFFFu, false);
+        pt_check(rich_leftmost_ink(canvas) >= 0);
+        pt_canvas_destroy(canvas);
+    }
+    pt_text_runs_free(&runs);
+
+    /* First paragraph RTL under auto: the second Latin paragraph resolves LTR
+     * independently (the runs stay per-paragraph visual order). */
+    pt_widget_set_text(label, "\xD7\x90\xD7\x91\nabc");
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.base_level == 1);
+    pt_check(runs.count == 2);
+    pt_check(runs.items[0].start == 0 && runs.items[0].end == 4);
+    pt_check(runs.items[0].level == 1 && runs.items[0].direction == HB_DIRECTION_RTL);
+    pt_check(runs.items[1].start == 5 && runs.items[1].end == 8);
+    pt_check(runs.items[1].level == 0 && runs.items[1].direction == HB_DIRECTION_LTR);
+    pt_text_runs_free(&runs);
+
+    /* Pure LTR explicit breaks keep the fast path (one logical run over the
+     * whole text) even though the wrapper splits the lines. */
+    pt_widget_set_text(label, "abc\ndef");
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(!runs.bidi);
+    pt_check(runs.count == 1);
+    pt_check(runs.items[0].start == 0 && runs.items[0].end == 7);
+    pt_check(runs.items[0].level == 0 && runs.items[0].direction == HB_DIRECTION_INVALID);
+    line_count = pt_text_runs_wrap(&runs, 400.0f, &lines);
+    pt_check(line_count == 2);
+    if (line_count == 2) {
+        pt_check(lines[0].start == 0 && lines[0].end == 3);
+        pt_check(lines[1].start == 4 && lines[1].end == 7);
+    }
+    free(lines);
+    pt_text_runs_free(&runs);
+
+    /* CRLF is an explicit break with the CR dropped, and the second Hebrew
+     * paragraph is still shaped RTL. */
+    pt_widget_set_text(label, "abc\r\n\xD7\x90\xD7\x91");
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.count == 2);
+    pt_check(runs.items[1].start == 5 && runs.items[1].end == 9);
+    pt_check(runs.items[1].level == 1 && runs.items[1].direction == HB_DIRECTION_RTL);
+    pt_text_runs_free(&runs);
+}
+
 static void test_bidi_runs(pt_window *window) {
     pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "sans-serif"};
     /* "abc " + alef bet gimel + " xyz" */
@@ -398,6 +668,8 @@ int main(void) {
     test_span_api(window);
     test_runs(window);
     test_bidi_runs(window);
+    test_ellipsis_placement(window);
+    test_bidi_paragraphs(window);
     test_layout(window);
     test_edit_maintenance(window);
     test_font_cache();

@@ -315,6 +315,43 @@ static void rich_append_piece(const pt_widget *widget, const pt_layout_ctx *ctx,
     rich_run_append(out, start, end, font, color, flags, level, direction);
 }
 
+static void rich_append_line_runs(const pt_widget *widget, const pt_layout_ctx *ctx,
+                                  pt_text_runs *out, pt_font *base, pt_font_weight base_weight,
+                                  const size_t *boundaries, size_t unique,
+                                  const pt_bidi_line *line, size_t paragraph_offset) {
+    for (size_t r = 0; r < line->run_count; ++r) {
+        const pt_bidi_run *run = &line->runs[r];
+        hb_direction_t direction = (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+        size_t run_start = paragraph_offset + run->offset;
+        size_t run_end = run_start + run->length;
+        for (size_t i = 0; i + 1 < unique; ++i) {
+            size_t start = boundaries[i];
+            size_t end = boundaries[i + 1];
+            size_t a = start > run_start ? start : run_start;
+            size_t b = end < run_end ? end : run_end;
+            if (a >= b) {
+                continue;
+            }
+            rich_append_piece(widget, ctx, out, base, base_weight, a, b, run->level, direction);
+        }
+    }
+}
+
+/* Nearest explicitly selected text direction, if any. `auto` must not be
+ * collapsed to one base before paragraph splitting: auto resolves P2/P3 per
+ * paragraph. */
+static bool rich_explicit_text_base(const pt_widget *widget, pt_bidi_base *out) {
+    for (const pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
+        if (cursor->text_direction != pt_text_direction_auto) {
+            *out = (pt_text_direction)cursor->text_direction == pt_text_direction_rtl
+                       ? pt_bidi_base_rtl
+                       : pt_bidi_base_ltr;
+            return true;
+        }
+    }
+    return false;
+}
+
 pt_bidi_base pt_widget_text_base(const pt_widget *widget, const char *text, size_t len) {
     for (const pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
         if (cursor->text_direction != pt_text_direction_auto) {
@@ -398,35 +435,97 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
                               HB_DIRECTION_INVALID);
         }
     } else {
-        /* Split by UBA level first, then by span/font inside each visual run. */
-        pt_bidi_paragraph *paragraph = NULL;
-        pt_bidi_line line = {0};
+        /* Explicit line breaks are paragraph boundaries for the UBA. Each
+         * paragraph resolves its own base: an explicit widget direction is
+         * reused, while auto runs P2/P3 independently (neutral-only paragraphs
+         * keep the resolved UI-direction default). Runs are concatenated in
+         * per-paragraph visual order.
+         *
+         * Only '\n' splits paragraphs here, matching pt_text_runs_wrap (a CR
+         * before LF is dropped, as there). The engine may still find another
+         * Unicode B-class separator inside a line, so the inner loop advances by
+         * the paragraph length it reports; that length includes the separator,
+         * so the next paragraph starts immediately after it.
+         *
+         * Width-driven wrapping (no '\n') is not reordered in this wave; the
+         * line breaker and per-line base stay W3 work. */
+        pt_bidi_base explicit_base = pt_bidi_base_auto;
+        bool has_explicit_base = rich_explicit_text_base(widget, &explicit_base);
+        bool rtl_default = pt_widget_resolved_ui_direction(widget) == pt_ui_direction_rtl;
         bool reordered = false;
-        pt_bidi_base analysis_base = base_direction;
-        if (pt_bidi_paragraph_analyze(text, len, analysis_base, &paragraph) &&
-            pt_bidi_line_create(paragraph, 0, len, &line)) {
-            out->base_level = line.base_level;
-            for (size_t r = 0; r < line.run_count; ++r) {
-                const pt_bidi_run *run = &line.runs[r];
-                hb_direction_t direction =
-                    (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
-                size_t run_start = run->offset;
-                size_t run_end = run->offset + run->length;
+        size_t paragraph_start = 0;
+        for (;;) {
+            size_t paragraph_end = paragraph_start;
+            while (paragraph_end < len && text[paragraph_end] != '\n') {
+                ++paragraph_end;
+            }
+            size_t content_end = paragraph_end;
+            if (content_end > paragraph_start && text[content_end - 1] == '\r') {
+                --content_end;
+            }
+            size_t segment_start = paragraph_start;
+            while (segment_start < content_end) {
+                pt_bidi_paragraph *paragraph = NULL;
+                pt_bidi_line line = {0};
+                size_t segment_len = content_end - segment_start;
+                bool analyzed =
+                    has_explicit_base
+                        ? pt_bidi_paragraph_analyze(text + segment_start, segment_len,
+                                                    explicit_base, &paragraph)
+                        : pt_bidi_paragraph_analyze_default(text + segment_start, segment_len,
+                                                           rtl_default, &paragraph);
+                bool lined = analyzed &&
+                             pt_bidi_line_create(paragraph, 0, segment_len, &line);
+                if (lined) {
+                    if (!reordered) {
+                        out->base_level = line.base_level;
+                    }
+                    rich_append_line_runs(widget, ctx, out, base, base_weight, boundaries,
+                                          unique, &line, segment_start);
+                    size_t consumed = pt_bidi_paragraph_length(paragraph);
+                    reordered = true;
+                    pt_bidi_line_free(&line);
+                    pt_bidi_paragraph_free(paragraph);
+                    if (consumed == 0 || consumed > segment_len) {
+                        segment_start = content_end;
+                        break;
+                    }
+                    segment_start += consumed;
+                    if (segment_start >= content_end) {
+                        break;
+                    }
+                    continue;
+                }
+                if (paragraph) {
+                    pt_bidi_paragraph_free(paragraph);
+                }
+                break;
+            }
+            if (segment_start < content_end) {
+                /* A segment the engine could not analyse keeps logical order
+                 * under the resolved base instead of dropping bytes. */
                 for (size_t i = 0; i + 1 < unique; ++i) {
-                    size_t start = boundaries[i];
-                    size_t end = boundaries[i + 1];
-                    size_t a = start > run_start ? start : run_start;
-                    size_t b = end < run_end ? end : run_end;
-                    if (a >= b) {
+                    size_t start = boundaries[i] > segment_start ? boundaries[i]
+                                                                 : segment_start;
+                    size_t end = boundaries[i + 1] < content_end ? boundaries[i + 1]
+                                                                 : content_end;
+                    if (start >= end) {
                         continue;
                     }
-                    rich_append_piece(widget, ctx, out, base, base_weight, a, b, run->level,
-                                      direction);
+                    rich_append_piece(widget, ctx, out, base, base_weight, start, end,
+                                      out->base_level,
+                                      out->base_level ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
                 }
             }
-            reordered = true;
+            if (paragraph_end >= len) {
+                break;
+            }
+            paragraph_start = paragraph_end + 1;
+            if (paragraph_start == len) {
+                break;
+            }
         }
-        if (!reordered) {
+        if (out->count == 0) {
             for (size_t i = 0; i + 1 < unique; ++i) {
                 size_t start = boundaries[i];
                 size_t end = boundaries[i + 1];
@@ -438,8 +537,6 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
                                   out->base_level ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
             }
         }
-        if (reordered) pt_bidi_line_free(&line);
-        if (paragraph) pt_bidi_paragraph_free(paragraph);
     }
     free(boundaries);
     if (out->count == 0) {
@@ -673,6 +770,7 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
      * direction-neutral. */
     bool rtl = runs->bidi && (runs->base_level & 1u) != 0;
     bool truncated = false;
+    float ellipsis_width = 0.0f;
     float line_width = pt_text_runs_measure(runs, start, end);
     if (max_width > 0.0f && line_width > max_width) {
         if (ellipsis) {
@@ -681,7 +779,7 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
             const pt_font *font = ellipsis_run ? ellipsis_run->font : runs->items[0].font;
             hb_direction_t ellipsis_direction =
                 ellipsis_run ? ellipsis_run->direction : HB_DIRECTION_LTR;
-            float ellipsis_width =
+            ellipsis_width =
                 pt_font_measure_direction(font, ellipsis_bytes, sizeof(ellipsis_bytes) - 1,
                                           ellipsis_direction) /
                 runs->scale;
@@ -725,9 +823,18 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
     if (max_width > 0.0f) {
         if (align == pt_text_align_center) {
             x += (max_width - line_width) * 0.5f;
+            /* RTL places the ellipsis left of the retained text, so the
+             * composite block is ellipsis_width wider on the left. */
+            if (truncated && rtl) {
+                x += ellipsis_width * 0.5f;
+            }
         } else if ((align == pt_text_align_start && rtl) ||
                    (align == pt_text_align_end && !rtl)) {
             x += max_width - line_width;
+        } else if (truncated && rtl) {
+            /* RTL align-end: the composite block starts at x, so the ellipsis
+             * takes the leftmost slot and the text follows it. */
+            x += ellipsis_width;
         }
     }
     /* Bidi builds store runs in visual order; the LTR fast path keeps logical
@@ -759,7 +866,10 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
         pen += segment_width;
     }
     if (truncated) {
-        /* Ellipsis sits on the visual end: left for an RTL base. */
-        rich_draw_ellipsis(canvas, runs, rtl ? x : x + line_width, baseline, color);
+        /* Ellipsis sits on the visual end: left for an RTL base, where the
+         * retained text starts at x and the ellipsis takes the slot just
+         * before it so it never overlaps the first visible glyph. */
+        rich_draw_ellipsis(canvas, runs, rtl ? x - ellipsis_width : x + line_width,
+                           baseline, color);
     }
 }
