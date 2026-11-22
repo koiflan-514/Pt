@@ -56,7 +56,12 @@ Before tagging a release:
 - `make check-typing` when `WAYLAND_DISPLAY` is set and `niri` is installed:
   it starts a nested compositor, focuses its window in the parent session and
   asserts that keys injected through a virtual keyboard reach a focused entry
-  while text-input-v3 is enabled.
+  while text-input-v3 is enabled;
+- `make check-ime-live` when `WAYLAND_DISPLAY` is set and a parent niri,
+  fcitx5 with pinyin and a private session bus are available: it starts a
+  nested niri and an isolated fcitx5, injects into the parent display, and
+  asserts the live preedit sequence and the committed CJK text through
+  text-input-v3; without a parent niri it skips with exit code 0.
 
 ```sh
 tools/ci.sh              # full local CI
@@ -1150,6 +1155,131 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 `859233f`, and `make dist` on the tagged tree reproduces its own digest exactly
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
+
+## 1.4.0 validation record (2026-11-22)
+
+Environment: the integration tree `b947a6e` (wave 1 plus the wave-2
+multi-touch fix) with the version bump, generated reference and bilingual
+guides on the `m21/docs-final` documentation branch. The measured figures below
+that are marked **pending final gate run** have not been re-run on the final
+documentation tree; the two suite counts quoted as measured are from this
+worktree.
+
+This is a **draft record**, not the final gate record. The release is complete
+in scope and code, but `make check`, `make check-bindings`, `make perf-check`,
+the live suites, `tools/ci.sh`, `tools/release-check.sh --full` and the ABI
+comparison against 1.3.0 still have to be run on the frozen tree and their
+figures filled in before the tag.
+
+### Scope
+
+1.4.0 is a capability-extension and quality release: it adds **no public
+function, enum or struct**, and the baseline stays at **556 functions / 910
+entries** (556 `func`, 282 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`,
+6 `define`, 1 `type`), exactly as 1.3.0. Every declaration keeps its since
+marker (412 × 1.0, 36 × 1.1, 106 × 1.2, 2 × 1.3). SONAME stays
+`libpt.so.1`; the 1.4.0 ABI delta is empty by construction.
+
+- **SVGZ icon sources.** `pt_icon_image_load_file` and
+  `pt_icon_image_load_memory` accept gzip-compressed SVG by content sniffing:
+  the gzip magic `0x1f 0x8b` is checked before the text sniff, and a
+  non-SVG gzip archive is rejected after inflation. Compressed input and
+  inflated output are both bounded at 16 MiB (decompression-bomb guard); the
+  handle keeps the inflated source and re-parses it per size. Hicolor
+  `scalable/` lookup tries `.svg`, `.svgz`, `.png`; fixed-size directories stay
+  `.png` only. The contract is in `pt/icon.h` ("Since 1.2; SVGZ since 1.4"), not
+  a new symbol.
+- **Input wire matrix completion.** The fake compositor injects and replays
+  `wl_touch` (down/up/motion/frame/cancel, multiple contacts, pinch, capability
+  removal), tablet-v2 (seat/tool lifecycle, proximity, pressure, tilt,
+  rotation, slider, wheel, buttons), drag and drop (`data_device`
+  enter/motion/drop/leave, offer accept/receive over `SCM_RIGHTS` and finish,
+  source target/action/cancelled/`dnd_finished`) and primary selection. The new
+  `test_wire_input` slot passes 595 checks; a `wait_object` helper removes the
+  server-state race (200 consecutive runs, zero failures); and the facility's
+  tablet-manager request table had `get_tablet_seat`/`destroy` transposed, now
+  fixed. Test infrastructure only: no public header, symbol or ABI.
+- **Live IME loop for niri + fcitx5.** niri 26.04 advertises
+  `zwp_input_method_manager_v2` v1 and fcitx5 5.1.23 runs its pinyin engine;
+  typing `nihao ` advances the preedit `n` → `ni` → `ni h` → `ni ha` →
+  `ni hao` and commits `你好` through text-input-v3 into Pt
+  (`PREEDIT_COUNT=5`). The harness injects into the parent display because a
+  virtual keyboard on the nested display bypasses the input-method grab. It is
+  `tools/live-ime.sh` plus `tests/ime_live_probe.c` (public API only), runs as
+  `make check-ime-live`, skips with rc 0 without a parent niri, isolates fcitx5
+  on a private session bus, and hardens the run with bounded waits,
+  signal-triggered teardown and a focus recheck before injection.
+
+### Behaviour changes
+
+The C ABI change is empty. These observable behaviours changed and are the
+section an upgrading application must read:
+
+- **Multi-touch focus is held until the last contact lifts.** In 1.3 the
+  platform cleared `touch_focus` when the first contact lifted, so motion and
+  up for the remaining fingers were dropped, pinch active state could survive,
+  cancel could not clean up, and a repeated pinch failed. 1.4 clears focus only
+  at zero remaining contacts, and a surviving single contact updates the
+  emulated pointer. Repeated pinch and mid-gesture cancel now behave correctly.
+  Pinch and rotate still never produce a click. The helper return type changed
+  from `void` to `uint32_t` on an internal interface only; no public signature
+  or enum moved, and `tests/test_damage` remains green at 98 checks.
+- **SVGZ bytes that previously failed as PNG now load.** A payload starting
+  with the gzip magic takes the SVGZ path, is inflated with the 16 MiB bounds,
+  and must pass the SVG sniff. hicolor lookup also resolves `.svgz` in
+  `scalable/`; a fixed-size directory still resolves `.png` only. Malformed,
+  truncated, bad-CRC or non-SVG gzip data returns NULL with
+  `pt_get_last_error`, like a corrupt PNG.
+- **No other public behaviour changed.** The wire matrix and `wait_object` are
+  test-only, and the live IME harness is an external tool.
+
+### Results (pending final gate run)
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass on this branch: `include/pt/base.h`, `Makefile` `VERSION`, the README status line and the generated reference all say 1.4.0; SONAME `libpt.so.1` |
+| API baseline | pass: `api/pt.api` unchanged at 556 functions / 910 entries; the reference names all 556 baseline functions |
+| Since audit | pass: 556/556 declarations carry Since 1.0/1.1/1.2/1.3 (412/36/106/2), zero missing |
+| C suites (headless) | **pending final gate run**; `test_icon` 800 (up from 330), `test_wire_input` 595, `test_damage` 98 measured on this tree |
+| Bilingual documentation | pass: 9 public guides, no structural drift; code blocks byte-identical |
+| Binding parity | **pending final gate run**; expected 556/556 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted, unchanged because no function was added |
+| `make check` / `make check-bindings` | **pending final gate run** |
+| `make perf-check` | **pending final gate run** |
+| Live Wayland / live typing / live IME | **pending final gate run**; `make check-ime-live` is expected to pass under niri+fcitx5 and to skip with rc 0 elsewhere |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | **pending final gate run** |
+| ABI diff against 1.3.0 | **pending final gate run**; expected 556 → 556 exported `pt_*` symbols, 0 added, 0 removed, no type changes, SONAME `libpt.so.1` unchanged |
+| `tools/release-check.sh --full` | **pending final gate run** |
+
+### Known issues
+
+- KWin+fcitx5 v2 and Mutter+IBus v2 live composition remain unrecorded; the
+  niri+fcitx5 cell is recorded, and the other environments are absent rather
+  than declared passing.
+- The SVG subset is honest, not complete: text, raster images, filters, masks,
+  `clipPath`, `use`/`symbol`, markers, animation and the full CSS cascade are
+  ignored by the parser, whose descendants are still visited. A document with
+  no drawable shape is rejected.
+- Adding a contact mid-pinch keeps the gesture baseline captured at begin
+  rather than rebasing it; the first two tracked contacts supply the metrics.
+  This is a design boundary, not a defect in the 1.4 focus correction.
+- The toplevel-icon submission has no live compositor recording. The wire test
+  asserts the submitted parameters and niri/Sway/Weston take the tested no-op
+  path, but the matrix's KWin/Labwc/Muffin/Jay/Pila exposures were not run.
+- Binding raw-callback dispatch is closed at wire level for all three
+  languages; a physical-seat run remains optional live coverage.
+- Pickers are locale-independent by design (explicit date picture, `.` decimal
+  separator, hex colour). Localized month and group separators remain the
+  application's responsibility.
+
+### Final gate placeholders
+
+The following lines are intentionally left for the frozen-tree run so the
+record does not imply a gate that has not happened: `make check` and
+`make check-bindings` totals, `make perf-check` numbers, the live Wayland,
+typing and IME results, the sanitizer/staged-install/tarball transcript, the
+`tools/ci.sh` exit status and tarball digest, the symbol-level ABI comparison
+against 1.3.0, and the `tools/release-check.sh --full` report. The annotated tag
+is created from the final gate tree once the owner confirms the freeze.
 
 ## 1.3.0 validation record (2026-11-22)
 

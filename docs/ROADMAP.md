@@ -1759,31 +1759,44 @@ and generated reference (556 functions / 910 entries).
   and Java 676 checks; the final tree closes parity at 556/556 with C++ 844,
   Python 67 and Java 685.
 
-### Open items (carried past M20)
+### Open items (carried past M20, annotated after M21)
 
 - **Live IME composition matrix is still unrecorded.** The wire replay covers
   text-input v3 composition, preedit hints and input panels, but a live
   niri+fcitx5 and KWin/Mutter composition run is still missing; the environment
   was not available in this round and the record says so rather than implying
-  it.
+  it. **Closed for niri+fcitx5 in M21 (`b019b8c`):** the live preedit sequence
+  and the committed `你好` are recorded through text-input-v3. KWin+fcitx5 v2
+  and Mutter+IBus v2 remain open with no environment.
 - **The SVG subset is honest, not complete.** SVGZ (gzip-compressed SVG) and
   text, raster images, filters, masks, clipPath, use/symbol, markers, animation
   and the full CSS cascade are unsupported; the parser ignores them and visits
   their descendants. A document with no drawable shape is rejected.
+  **Closed for SVGZ in M21 (`2dddd11`):** both loaders inflate it with bounded
+  zlib and hicolor lookup resolves `.svgz`. The non-SVGZ subset above remains
+  ignored by design.
 - **Touch and tablet wire injection are not covered.** The fake compositor
   injects key, pointer, popup, decoration, selection and IME traffic; the
   `wl_touch` and tablet paths still rely on headless state tests plus the live
-  suite.
+  suite. **Closed in M21 (`389d527`):** `test_wire_input` injects both matrices
+  and passes 595 checks, including drag-and-drop and primary selection.
 - **The toplevel-icon submission has no live compositor recording.** Headless
   submission and the request parameters are asserted on the wire; the
   matrix's KWin/Labwc/Muffin/Jay/Pila exposure was not run, and niri/Sway/Weston
-  take the tested no-op path.
+  take the tested no-op path. **Still open after M21:** no live recording was
+  added.
 - **Binding raw dispatch is closed at wire level, not on a live seat.** The
   wrapped callbacks now receive injected wire events in all three languages; a
-  physical-seat run remains optional live coverage.
+  physical-seat run remains optional live coverage. **Still optional live
+  coverage after M21.**
 - **Pickers are locale-independent by design.** The date picture is explicit,
   the committed number separator is `.`, and the process locale is never read.
   This is a documented contract, not an unfinished translation path.
+- **A multi-touch focus bug survived the 1.3 wire work.** Clearing
+  `touch_focus` on the first contact lift orphaned the remaining contacts.
+  **Closed in M21 (`b947a6e`):** focus is held until the last contact, the
+  surviving contact drives the emulated pointer, and the correction is listed
+  as a behaviour change in the 1.4.0 record.
 
 ### Completion criteria
 
@@ -1824,47 +1837,121 @@ Measured on the final gate tree `fafbcae` (`tools/ci.sh` exit 0):
 - A 1.3.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
 
-## M21 - 1.4.0: input wire matrix completion and format polish (in progress)
+## M21 - 1.4.0: input wire matrix completion and format polish (delivered; final gate pending)
 
 Goal: close the remaining appendable items carried past M20 without touching
 the 2.0 structural horizon. 1.4.0 stays append-only within `libpt.so.1`; the
-expected public-symbol delta is zero (SVGZ extends the existing loaders by
-content sniffing, the wire work is test infrastructure). The M18/M19/M20
-process repeats: parallel workstreams in isolated worktrees with a
-pre-registered test slot, integration, bilingual docs and the full gate before
-the tag.
+public-symbol delta is zero (SVGZ extends the existing loaders by content
+sniffing, the wire work is test infrastructure). The M18/M19/M20 process
+repeated: parallel workstreams in isolated worktrees with a pre-registered test
+slot, integration, bilingual docs and the full gate before the tag.
 
-### Wave 1 (parallel workstreams)
+Status (2026-11-22): delivered and integrated on `b947a6e` (wave 1 plus wave 2
+on top of the 1.4 scaffold); the version, generated reference and bilingual
+guides land on the `m21/docs-final` branch and the final gate run is still
+pending. The tree exports **556 functions / 910 baseline entries** (556 `func`,
+282 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1 `type`),
+exactly as 1.3.0, and every declaration keeps its since marker (412 × 1.0,
+36 × 1.1, 106 × 1.2, 2 × 1.3). 1.4.0 adds no public function, enum or struct;
+the annotated tag awaits the owner's freeze confirmation.
 
-1. **Input wire completion** (`m21/wire-input`): extend the fake compositor
-   with `wl_touch` (down/up/motion/frame/cancel, multi-contact), tablet-v2
-   (seat/tool lifecycle, proximity, pressure, motion, buttons) and
-   `wl_data_device` drag traffic (enter/motion/drop/leave, offer
-   accept/receive/finish) plus primary-selection offers; replay into Pt's
-   touch-to-pointer/pinch, stylus and drag-and-drop paths with wire-parameter
-   assertions in the pre-registered `test_wire_input` slot. Test
-   infrastructure only; no public ABI change; existing facility consumers
-   stay green.
-2. **SVGZ icons** (`m21/svgz`): the existing icon loaders accept
-   gzip-compressed SVG (SVGZ) by content sniffing, inflating with the zlib
-   already linked; bounded decompression, `scalable/` `.svgz` lookup, honest
-   limits in the header contract. Zero new public functions intended.
-3. **Live IME resolution** (`m21/live-ime`): determine whether niri implements
-   the input-method protocol needed to bridge fcitx5 into text-input-v3. If
-   the existing harness can orchestrate it, record a live niri+fcitx5
-   composition run; otherwise document the definitive environment blocker.
-   No new runtime dependencies; KWin/Mutter/ibus remain absent.
+### Wave 1 (parallel workstreams, delivered)
 
-Workstream rules: as M20 — implementation + C tests land together;
-`test_wire_input` is pre-registered; `src/*.c` is wildcard-built; workstreams
-do not edit bindings, generated artifacts or public guides.
+1. **Input wire completion — delivered (`389d527`, with the touch, tablet, drag
+   and primary replays under it).** The fake compositor gained `wl_touch`
+   (down/up/motion/frame/cancel, multiple contacts and pinch, capability
+   removal), tablet-v2 (seat/tool lifecycle, proximity, pressure, tilt,
+   rotation, slider, wheel and buttons), `wl_data_device` drag traffic
+   (enter/motion/drop/leave, offer accept/receive over an `SCM_RIGHTS`
+   descriptor and finish, source target/action/cancelled/`dnd_finished`) and
+   primary-selection injection and replay. The pre-registered `test_wire_input`
+   slot passes 595 checks; a `wait_object` helper removes the server-state race
+   (200 consecutive runs, zero failures); and the facility's tablet-manager
+   request table was corrected (`get_tablet_seat`/`destroy` had been
+   transposed). Test infrastructure only: no public header, symbol or ABI.
+2. **SVGZ icons — delivered (`2dddd11`).** Both loaders sniff the gzip magic
+   `0x1f 0x8b` before the text sniff, inflate through the already-linked zlib
+   with a 16 MiB bound on the compressed input and the inflated document (a
+   decompression-bomb guard), and require the inflated bytes to pass the SVG
+   sniff. A non-SVG gzip archive is rejected; the handle retains the inflated
+   source and re-parses it per size. Hicolor `scalable/` lookup tries `.svg`,
+   then `.svgz`, then `.png`; fixed-size directories stay `.png` only.
+   `pt/icon.h` marks the contract "Since 1.2; SVGZ since 1.4". Zero new public
+   functions; `test_icon` passes 800 checks, up from 330.
+3. **Live IME resolution — delivered (`b019b8c`, harness `4b3b9eb`).** A
+   runtime registry check showed niri 26.04 advertising
+   `zwp_input_method_manager_v2` v1 and fcitx5 5.1.23 running its pinyin
+   engine. Typing `nihao ` advances the preedit `n` → `ni` → `ni h` →
+   `ni ha` → `ni hao` and the space commits `你好` through text-input-v3 into
+   Pt (`PREEDIT_COUNT=5`). The decisive finding is that a virtual keyboard
+   created on the nested display bypasses the input-method grab, so the harness
+   injects into the parent display and lets the nested niri receive the keys as
+   a real keyboard would. The harness is `tools/live-ime.sh` plus
+   `tests/ime_live_probe.c` (public API only), runs as `make check-ime-live`,
+   skips with rc 0 when no parent niri is available, isolates fcitx5 on a
+   private session bus, and hardens the run with bounded waits,
+   signal-triggered teardown and a focus recheck immediately before injection.
+   It is wired into the live section of `tools/ci.sh`. KWin+fcitx5 and
+   Mutter+IBus remain absent environments.
+
+Workstream rules: as M20 — implementation + C tests landed together;
+`test_wire_input` was pre-registered; `src/*.c` is wildcard-built; workstreams
+did not edit bindings, generated artifacts or public guides.
+
+### Wave 2 (delivered)
+
+- **Multi-touch focus correction — delivered (`b947a6e`).**
+  `src/wayland/platform.c` cleared `touch_focus` unconditionally when the
+  first contact lifted, so motion and up for the remaining fingers were
+  dropped, pinch active state could survive, cancel could not clean up, and a
+  repeated pinch failed. The internal `pt_window_input_touch_up` now returns
+  the remaining contact count (`void` to `uint32_t`, not a public ABI change),
+  the platform clears focus only at zero, and `src/window.c` routes a surviving
+  single contact's motion into the emulated pointer. Pinch still never clicks;
+  `test_damage` stays at 98 checks. This is an intentional behaviour
+  correction, and `test_wire_input` now asserts the correct behaviour (focus
+  survives the first lift, the survivor moves and releases cleanly, a new pinch
+  starts from a fresh baseline) instead of recording the old limitation.
+
+### Integration (delivered)
+
+`44c265f` merged the wave and refreshed the generated reference, adding the
+live IME target to the gate; `b947a6e` is the final integration tree on top of
+it. The version bump, reference refresh and bilingual guides land in the
+`m21/docs-final` documentation branch. No public API moved at any step.
+
+### M20 open items closed or still carried
+
+- **Live IME composition matrix:** the niri+fcitx5 cell is recorded
+  (`b019b8c`); KWin+fcitx5 v2 and Mutter+IBus v2 still lack their environments
+  and remain open.
+- **SVG format support:** SVGZ is supported (`2dddd11`); the rest of the SVG
+  subset (text, raster images, filters, masks, `clipPath`, `use`/`symbol`,
+  markers, animation and the full CSS cascade) is still ignored by the parser.
+- **Touch and tablet wire injection:** built (`389d527`, `test_wire_input`
+  595 checks); the paths no longer rely only on headless state tests.
+- **Toplevel-icon live recording:** still open. The wire test asserts the
+  submission and niri/Sway/Weston take the tested no-op path; the matrix's
+  KWin/Labwc/Muffin/Jay/Pila exposures were not run.
+- **Binding raw dispatch on a physical seat:** still optional live coverage;
+  wire dispatch is closed in all three languages.
+- **Multi-touch focus bug:** fixed (`b947a6e`), recorded as a behaviour
+  change in the release notes.
+- **Pickers are locale-independent by design:** retained as a documented
+  contract, not an open defect.
 
 ### Completion criteria
 
 Same gate set as M20: `make check`, `make check-bindings`, `make perf-check`,
 live suites, `tools/ci.sh`, `tools/release-check.sh --full`, bilingual sync,
 three-language parity with an empty allowlist, ABI pins and an append-only
-diff against `1.3.0`, and a 1.4.0 release record.
+diff against `1.3.0`, and a 1.4.0 release record. The measured final-gate
+figures are deliberately left pending in [release.md](release.md); already
+measured on the integration tree are `test_icon` 800, `test_wire_input` 595
+and `test_damage` 98, and the baseline stays at 556 functions with zero new
+symbols. The symbol-level ABI comparison against 1.3.0 is expected to be empty
+because no declaration was added or changed, but it still has to be run and
+recorded.
 
 ## Post-1.0 horizons
 

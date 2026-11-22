@@ -341,35 +341,37 @@ fixes regressions only and adds no feature.
 
 ## Current deviations
 
-The 1.3.0 tree closes the gaps this page was written around for the shared C
-surface: the generated reference derives its module list from `include/pt/*.h`,
-the baseline and reference agree on the 556-function / 910-entry surface, every
-declaration carries a since marker (412 × 1.0, 36 × 1.1, 106 × 1.2, 2 × 1.3),
-the bilingual pairs are in sync, the version is 1.3.0 everywhere, and the ABI
-pins cover the new enums, structs and limits. The three-language wrappers cover
-556/556 with the reviewed allowlist empty (C++ 844 checks, Python 67 tests, Java
-685 checks on the final gate tree `fafbcae`), so the parity gate is green. The
-remaining deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under
-M20:
+The 1.4.0 tree keeps the gaps this page was written around closed for the
+shared C surface: the generated reference derives its module list from
+`include/pt/*.h`, the baseline and reference agree on the 556-function /
+910-entry surface, every declaration carries a since marker (412 × 1.0,
+36 × 1.1, 106 × 1.2, 2 × 1.3), the bilingual pairs are in sync, the version is
+1.4.0 everywhere, and the ABI pins cover the existing enums, structs and limits.
+The three-language wrappers keep 556/556 with the reviewed allowlist empty; the
+final 1.4.0 wrapper counts are pending the gate run (the last recorded figures,
+C++ 844, Python 67 and Java 685 checks, are from the 1.3.0 tree `fafbcae`).
+1.4.0 adds no public symbol, so the parity and ABI surface is unchanged by
+construction. The remaining deviations are explicit and tracked in
+[ROADMAP.md](ROADMAP.md) under M21:
 
 - **The SVG subset is documented, not complete.** `pt_icon_image` accepts SVG
-  through vendored nanosvg and resolves hicolor `scalable/`, but SVGZ and text,
-  raster images, filters, masks, `clipPath`, `use`/`symbol`, markers, animation
-  and the full CSS cascade are ignored by the parser. A document with no
-  drawable shape is rejected. This is the same honest-subset rule the PNG path
-  follows, not a claim of full SVG support.
-- **Touch and tablet wire injection are not covered.** The fake-compositor
-  facility replays key, pointer, popup, decoration, selection and IME traffic;
-  `wl_touch` and tablet sequences still rely on headless state tests and the live
-  suite.
+  and, since 1.4, SVGZ through vendored nanosvg and resolves hicolor
+  `scalable/` in `.svg`, `.svgz`, `.png` order, but text, raster images,
+  filters, masks, `clipPath`, `use`/`symbol`, markers, animation and the full
+  CSS cascade are ignored by the parser. A document with no drawable shape is
+  rejected. This is the same honest-subset rule the PNG path follows, not a
+  claim of full SVG support.
+- **Touch and tablet wire injection are covered.** Since 1.4 the fake
+  compositor injects `wl_touch`, tablet-v2, drag-and-drop and primary-selection
+  traffic, and `test_wire_input` asserts the resulting state and wire
+  parameters; the earlier deviation is closed.
 - **The toplevel-icon path has no live compositor recording.** The wire test
   asserts the submission parameters and niri/Sway/Weston take the tested no-op
   path, but none of the matrix's KWin/Labwc/Muffin/Jay/Pila exposures was run in
   this round.
-- **The live IME composition matrix is missing.** Wire replay covers text-input
-  v3 composition, preedit hints and input panels; a live niri+fcitx5 or
-  KWin/Mutter composition run was not available and is recorded as open rather
-  than implied.
+- **The live IME composition matrix is partial.** The niri+fcitx5 cell is
+  recorded by `make check-ime-live`; a KWin+fcitx5 v2 or Mutter+IBus v2 run is
+  still unavailable and is recorded as open rather than implied.
 - **The pickers are locale-independent.** The date picture is explicit, the
   committed number separator is `.`, and the process locale is never read. This
   is a documented contract, not an unfinished translation path.
@@ -377,16 +379,17 @@ M20:
   `tests/wire_driver.c` delivers real wire key and pointer events to the C++,
   Python and Java callbacks in the headless gate; a physical-seat run remains
   optional live coverage.
-- **The 1.3.0 gate is complete on `fafbcae`.** `make check` parity,
-  `tools/ci.sh` (exit 0, including the forced-clean ASan+UBSan pass, the staged
-  install, the reproducible tarball and the live suites) and
-  `tools/release-check.sh --full` are recorded with measured figures in
-  [release.md](release.md); only the human freeze/tag and live-suite sign-off
-  items remain open.
+- **The 1.4.0 gate is pending.** The version, reference, bilingual pairs and
+  zero-delta baseline/ABI facts are in place on `b947a6e` plus the docs branch;
+  `make check`, `tools/ci.sh` and `tools/release-check.sh --full` are to be run
+  on the final tree and recorded in [release.md](release.md). The 1.3.0 gate
+  itself remains complete on `fafbcae`.
 
 The 1.1.0 work-in-progress also violated the section 2 landing rule (headers,
 bindings, reference and tests did not land atomically). That history is kept in
-M18 so the rule is not quietly forgotten; it is not a current exception. M19
-and M20 kept the rule: each wave workstream landed header, implementation, C
-tests and ABI pins together, and the integration phase owned the baseline,
-reference, version and guides.
+M18 so the rule is not quietly forgotten; it is not a current exception. M19,
+M20 and M21 kept the rule: each wave workstream landed header, implementation,
+C tests and ABI pins together, and the integration phase owned the baseline,
+reference, version and guides. 1.4.0 extended that discipline to a wave that
+added no public symbol: the header comment is the only contract change and the
+generated reference, guides, roadmap and release record moved with it.
