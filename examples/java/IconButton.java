@@ -1,13 +1,16 @@
 /*
- * Pt PNG icon buttons: a reference-counted raster image decoded from a
- * MemorySegment, shared by three buttons, tinted, and set as the window icon.
+ * Pt icon buttons: a reference-counted raster image decoded from a
+ * MemorySegment and a gzip-compressed SVG decoded by the same call, shared by
+ * buttons, tinted, and set as the window icon.
  * Copyright 2026 The Pt Authors.
  * Licensed under the Apache License, Version 2.0.
  *
  * Contract demonstrated here (src/pt/Pt.java, include/pt/icon.h):
  *
  *  - icon_image_load_memory copies PNG bytes from a MemorySegment and returns
- *    one owned reference; width/height read the decoded pixels.
+ *    one owned reference; width/height read the decoded pixels. The same call
+ *    takes gzip-compressed SVG bytes: the 0x1f 0x8b prefix selects the SVGZ
+ *    path and the inflated document goes through the ordinary SVG pipeline.
  *  - icon_image_ref adds a reference and returns the same handle. Button and
  *    window slots take their own reference, so the caller can drop its handle
  *    while the slots keep the pixels alive.
@@ -18,12 +21,17 @@
  *    PT_HEADLESS.
  *
  * The 32x32 PNG below is embedded so the example needs no asset file: a warm
- * ring with a cross bar and a centre dot on a transparent background.
+ * ring with a cross bar and a centre dot on a transparent background. The SVGZ
+ * button gzips an inline SVG at startup, so there is no .svgz asset either.
  */
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.charset.StandardCharsets;
+import java.util.zip.GZIPOutputStream;
 import pt.Pt;
 
 public final class IconButton {
@@ -117,6 +125,14 @@ public final class IconButton {
         (byte) 0x42, (byte) 0x60, (byte) 0x82,
     };
 
+    private static final String SVGZ_SOURCE =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" "
+            + "viewBox=\"0 0 32 32\">"
+            + "<rect x=\"3\" y=\"3\" width=\"26\" height=\"26\" rx=\"6\" fill=\"#123456\" "
+            + "fill-opacity=\"0.5\"/>"
+            + "<circle cx=\"16\" cy=\"16\" r=\"9\" fill=\"#E0AF68\" opacity=\"0.9\"/>"
+            + "</svg>\n";
+
     private static boolean headless() {
         String value = System.getenv("PT_HEADLESS");
         return value != null && !value.isEmpty() && !value.equals("0");
@@ -126,6 +142,21 @@ public final class IconButton {
         MemorySegment bytes = arena.allocate(ICON_PNG.length, 1);
         MemorySegment.copy(ICON_PNG, 0, bytes, ValueLayout.JAVA_BYTE, 0, ICON_PNG.length);
         return Pt.icon_image_load_memory(bytes, ICON_PNG.length);
+    }
+
+    /* A real gzip container (not zlib's deflate stream) so the loader's
+     * 0x1f 0x8b sniff takes the SVGZ path. GZIPOutputStream writes the header
+     * and trailer for us. */
+    private static MemorySegment loadSvgz(Arena arena) {
+        try {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            try (GZIPOutputStream gzip = new GZIPOutputStream(buffer)) {
+                gzip.write(SVGZ_SOURCE.getBytes(StandardCharsets.UTF_8));
+            }
+            return Pt.icon_image_load_memory(buffer.toByteArray());
+        } catch (IOException error) {
+            return MemorySegment.NULL;
+        }
     }
 
     public static void main(String[] args) {
@@ -143,7 +174,7 @@ public final class IconButton {
             Pt.widget_set_padding(root, 26.0f, 26.0f, 26.0f, 26.0f);
             Pt.widget_set_gap(root, 14.0f);
 
-            MemorySegment eyebrow = Pt.label(root, "ICONS  ·  PNG  ·  TINT");
+            MemorySegment eyebrow = Pt.label(root, "ICONS  ·  PNG  ·  SVGZ  ·  TINT");
             Pt.widget_set_font_size(eyebrow, 11.0f);
             Pt.widget_set_font_weight(eyebrow, Pt.font_weight_semibold);
             Pt.widget_set_foreground(eyebrow, Pt.rgb(0x4C8DFF));
@@ -153,9 +184,11 @@ public final class IconButton {
             Pt.widget_set_font_weight(heading, Pt.font_weight_semibold);
 
             MemorySegment intro = Pt.label(root,
-                    "A 32x32 PNG is decoded from memory and shared by three buttons. The button "
-                    + "takes its own reference, so the example drops the load handle as soon as "
-                    + "every slot is configured.");
+                    "A 32x32 PNG is decoded from memory and shared by three buttons. An inline SVG "
+                    + "is gzipped at startup and loaded through the same call: the 0x1f 0x8b "
+                    + "prefix selects SVGZ, not the file name. Button slots take their own "
+                    + "references, so the example drops the load handles as soon as every slot is "
+                    + "configured.");
             Pt.widget_set_font_size(intro, 13.0f);
             Pt.widget_set_wrap(intro, true);
             Pt.widget_set_foreground(intro, Pt.rgb(0x9AA7B8));
@@ -170,8 +203,17 @@ public final class IconButton {
                 Pt.app_destroy(app);
                 System.exit(1);
             }
+            MemorySegment svgz = loadSvgz(arena);
+            if (svgz.address() == 0) {
+                System.err.println(Pt.last_error());
+                Pt.icon_image_destroy(image);
+                Pt.app_destroy(app);
+                System.exit(1);
+            }
             int width = Pt.icon_image_width(image);
             int height = Pt.icon_image_height(image);
+            int svgzWidth = Pt.icon_image_width(svgz);
+            int svgzHeight = Pt.icon_image_height(svgz);
 
             MemorySegment row = Pt.row(card);
             Pt.widget_set_gap(row, 12.0f);
@@ -195,12 +237,18 @@ public final class IconButton {
             Pt.button_set_icon_image(iconOnly, image);
             Pt.button_set_icon_tint(iconOnly, Pt.rgba(0x9E, 0xCE, 0x6A, 0xFF));
 
+            MemorySegment compressed = Pt.button(row, "SVGZ (gzip)");
+            Pt.button_set_variant(compressed, Pt.button_secondary);
+            Pt.widget_set_tooltip(compressed, "Gzip container sniffed by content, then the SVG path");
+            Pt.button_set_icon_image(compressed, svgz);
+
             /* The buttons hold their own references; share one for the window. */
             MemorySegment shared = Pt.icon_image_ref(image);
             Pt.window_set_icon(window, shared);
 
             MemorySegment status = Pt.label(root, "Loaded " + width + "x" + height
-                    + " PNG; three buttons and the window icon hold references.");
+                    + " PNG and " + svgzWidth + "x" + svgzHeight
+                    + " SVGZ; four buttons and the window icon hold references.");
             Pt.widget_set_font_size(status, 12.0f);
             Pt.widget_set_wrap(status, true);
             Pt.widget_set_foreground(status, Pt.rgb(0x9ECE6A));
@@ -259,6 +307,9 @@ public final class IconButton {
             Pt.window_show(window);
             Pt.window_focus(window, untinted);
 
+            /* The SVGZ button holds its own reference. */
+            Pt.icon_image_destroy(svgz);
+
             int result;
             if (!headless()) {
                 result = Pt.app_run(app);
@@ -267,7 +318,7 @@ public final class IconButton {
             }
 
             System.out.println("icon_button: loaded " + width + "x" + height
-                    + " buttons=3 window_icon="
+                    + " PNG and " + svgzWidth + "x" + svgzHeight + " SVGZ, buttons=4 window_icon="
                     + (Pt.window_get_icon(window).address() != 0 ? "yes" : "no"));
             report.handle(MemorySegment.NULL, MemorySegment.NULL);
             clearTint.handle(MemorySegment.NULL, MemorySegment.NULL);

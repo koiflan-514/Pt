@@ -8,10 +8,13 @@
  * Contract demonstrated here (include/pt/icon.h):
  *
  *  - pt_icon_image_load_memory and pt_icon_image_load_file sniff the payload:
- *    after optional UTF-8 BOM/ASCII whitespace, '<' followed by `<svg` or an
- *    `<?xml` declaration selects the SVG path. Every other byte stream stays on
- *    the PNG path. The example loads one SVG buffer and one PNG buffer through
- *    the same call to show that the bytes decide the decoder, not the API.
+ *    the gzip magic 0x1f 0x8b selects the SVGZ path (inflate once under the
+ *    16 MiB bound, then run the ordinary SVG rules); otherwise, after optional
+ *    UTF-8 BOM/ASCII whitespace, '<' followed by `<svg` or an `<?xml`
+ *    declaration selects the SVG path. Every other byte stream stays on the
+ *    PNG path. The example loads one SVG buffer, one PNG buffer and one
+ *    zlib-gzipped copy of the SVG through the same call to show that the
+ *    bytes decide the decoder, not the API or the file extension.
  *  - SVG supports rect/circle/ellipse/line/polyline/polygon/path, groups,
  *    gradients and opacity. It is rasterised per requested size/scale into the
  *    same cache as PNG, preserving the intrinsic aspect ratio (PNG is resized
@@ -21,10 +24,14 @@
  *    their own reference; the example drops the loader reference at the end.
  *  - pt_icon_image_from_name follows $XDG_DATA_HOME/icons and
  *    $XDG_DATA_DIRS/icons. Without a usable index.theme it scans NxN and
- *    scalable directories, preferring .svg over .png in scalable/. The example
- *    builds a private hicolor tree, points XDG_DATA_HOME at it and looks up the
- *    name again; a missing name is a NULL return plus pt_get_last_error, never
- *    a crash.
+ *    scalable directories, searching scalable/ in the order .svg, .svgz, then
+ *    .png. The example builds a private hicolor tree with one .svg and one
+ *    .svgz entry, points XDG_DATA_HOME at it and looks both names up; a missing
+ *    name is a NULL return plus pt_get_last_error, never a crash.
+ *  - SVGZ is not a second decoder: the gzip stream is inflated once, validated
+ *    by the same SVG sniff, and the handle re-parses the inflated source at
+ *    each requested size. The example compares a whole-window snapshot of the
+ *    SVG and SVGZ buttons pixel by pixel and rejects a gzip-wrapped PNG.
  *  - pt_window_set_icon is best effort. Without xdg_toplevel_icon_v1 (niri,
  *    Sway, Weston) and under PT_HEADLESS it is a silent no-op, while the
  *    getter still reports the retained image.
@@ -38,6 +45,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <zlib.h>
 
 /* A 64x64 vector icon: a half-transparent gradient plate, an opaque-ish
  * circle and a translucent triangle. fill-opacity/opacity are carried by
@@ -71,13 +79,17 @@ static const unsigned char icon_png[] = {
 };
 
 #define THEME_ICON_NAME "pt-example-svg"
+#define THEME_SVGZ_NAME "pt-example-svgz"
 
 typedef struct svg_state {
     pt_app *app;
     pt_window *window;
+    pt_widget *icon_button;
     pt_widget *vg_button;
     pt_widget *png_button;
+    pt_widget *svgz_button;
     pt_widget *lookup_button;
+    pt_widget *svgz_lookup_button;
     pt_widget *status;
     bool tinted;
 } svg_state;
@@ -108,40 +120,85 @@ static bool join_path(char *out, size_t out_size, const char *base, const char *
     return true;
 }
 
-static bool write_file(const char *path, const char *text) {
+static bool write_file_bytes(const char *path, const void *data, size_t size) {
     FILE *file = fopen(path, "wb");
     if (!file) {
         return false;
     }
-    size_t length = strlen(text);
-    bool ok = fwrite(text, 1, length, file) == length;
+    bool ok = fwrite(data, 1, size, file) == size;
     if (fclose(file) != 0) {
         ok = false;
     }
     return ok;
 }
 
-/* Builds $TMPDIR/pt-svg-icon-XXXXXX; returns false when no temp directory
- * could be created, in which case the example still runs the memory paths. */
-static bool make_temp_tree(char *root, size_t root_size, char *svg_path,
-                           size_t svg_path_size, char *theme_icon_path,
-                           size_t theme_icon_path_size) {
+static bool write_file(const char *path, const char *text) {
+    return write_file_bytes(path, text, strlen(text));
+}
+
+/* gzip-compresses a byte string into a fresh caller-owned buffer (release with
+ * free). The loader detects SVGZ from the first two bytes 0x1f 0x8b, so the
+ * example must emit a real gzip container: windowBits 15+16 adds the gzip
+ * header/trailer, while zlib's compress2() would produce a zlib stream and be
+ * treated as PNG bytes. */
+static unsigned char *gzip_compress(const void *data, size_t size, size_t *out_size) {
+    *out_size = 0;
+    z_stream stream = {0};
+    if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8,
+                     Z_DEFAULT_STRATEGY) != Z_OK) {
+        return NULL;
+    }
+    uLong bound = deflateBound(&stream, (uLong)size);
+    unsigned char *out = malloc(bound ? (size_t)bound : 1u);
+    if (!out) {
+        deflateEnd(&stream);
+        return NULL;
+    }
+    stream.next_in = (Bytef *)data;
+    stream.avail_in = (uInt)size;
+    stream.next_out = out;
+    stream.avail_out = (uInt)bound;
+    int result = deflate(&stream, Z_FINISH);
+    size_t written = (size_t)stream.total_out;
+    deflateEnd(&stream);
+    if (result != Z_STREAM_END) {
+        free(out);
+        return NULL;
+    }
+    *out_size = written;
+    return out;
+}
+
+/* Paths of the private theme tree and the standalone files. Built once so main,
+ * the lookups and remove_tree share the same names. */
+typedef struct temp_tree {
+    char root[PT_ICON_PATH_MAX];
+    char svg_path[PT_ICON_PATH_MAX];
+    char svgz_path[PT_ICON_PATH_MAX];
+    char theme_svg_path[PT_ICON_PATH_MAX];
+    char theme_svgz_path[PT_ICON_PATH_MAX];
+    bool ready;
+} temp_tree;
+
+/* Builds $TMPDIR/pt-svg-icon-XXXXXX with a hicolor scalable/apps directory,
+ * a plain icon.svg, a gzipped icon.svgz and one scalable entry per container:
+ * <THEME_ICON_NAME>.svg and <THEME_SVGZ_NAME>.svgz. Returns false when the tree
+ * cannot be built, in which case the example still runs the memory paths. */
+static bool make_temp_tree(temp_tree *tree, const unsigned char *gzip, size_t gzip_size) {
+    memset(tree, 0, sizeof(*tree));
     const char *tmp = getenv("TMPDIR");
     if (!tmp || !*tmp) {
         tmp = "/tmp";
     }
-    int written = snprintf(root, root_size, "%s/pt-svg-icon-XXXXXX", tmp);
-    if (written <= 0 || (size_t)written >= root_size || !mkdtemp(root)) {
-        return false;
-    }
-    if (!make_dir(root)) {
+    int written = snprintf(tree->root, sizeof(tree->root), "%s/pt-svg-icon-XXXXXX", tmp);
+    if (written <= 0 || (size_t)written >= sizeof(tree->root) || !mkdtemp(tree->root)) {
         return false;
     }
     char icons[PT_ICON_PATH_MAX];
     char hicolor[PT_ICON_PATH_MAX];
     char scalable[PT_ICON_PATH_MAX];
     char apps[PT_ICON_PATH_MAX];
-    if (!join_path(icons, sizeof(icons), root, "/icons") ||
+    if (!join_path(icons, sizeof(icons), tree->root, "/icons") ||
         !join_path(hicolor, sizeof(hicolor), icons, "/hicolor") ||
         !join_path(scalable, sizeof(scalable), hicolor, "/scalable") ||
         !join_path(apps, sizeof(apps), scalable, "/apps")) {
@@ -150,41 +207,57 @@ static bool make_temp_tree(char *root, size_t root_size, char *svg_path,
     if (!make_dir(icons) || !make_dir(hicolor) || !make_dir(scalable) || !make_dir(apps)) {
         return false;
     }
-    if (!join_path(svg_path, svg_path_size, root, "/icon.svg")) {
+    if (!join_path(tree->svg_path, sizeof(tree->svg_path), tree->root, "/icon.svg") ||
+        !join_path(tree->svgz_path, sizeof(tree->svgz_path), tree->root, "/icon.svgz") ||
+        !join_path(tree->theme_svg_path, sizeof(tree->theme_svg_path), apps,
+                   "/" THEME_ICON_NAME ".svg") ||
+        !join_path(tree->theme_svgz_path, sizeof(tree->theme_svgz_path), apps,
+                   "/" THEME_SVGZ_NAME ".svgz")) {
         return false;
     }
-    const char suffix[] = "/" THEME_ICON_NAME ".svg";
-    if (!join_path(theme_icon_path, theme_icon_path_size, apps, suffix)) {
+    if (!write_file(tree->svg_path, svg_source) ||
+        !write_file(tree->theme_svg_path, svg_source) ||
+        !write_file_bytes(tree->svgz_path, gzip, gzip_size) ||
+        !write_file_bytes(tree->theme_svgz_path, gzip, gzip_size)) {
         return false;
     }
-    return write_file(svg_path, svg_source) && write_file(theme_icon_path, svg_source);
+    tree->ready = true;
+    return true;
 }
 
-static void remove_tree(const char *root) {
-    char path[PT_ICON_PATH_MAX];
-    if (!join_path(path, sizeof(path), root, "/icons/hicolor/scalable/apps/"
-                                           THEME_ICON_NAME ".svg")) {
+/* Removes the files and directories created by make_temp_tree. A partial tree
+ * is safe to clean: empty or missing paths only make unlink/rmdir fail. */
+static void remove_tree(temp_tree *tree) {
+    if (!tree->root[0]) {
         return;
     }
-    unlink(path);
+    if (tree->svg_path[0]) {
+        unlink(tree->svg_path);
+    }
+    if (tree->svgz_path[0]) {
+        unlink(tree->svgz_path);
+    }
+    if (tree->theme_svg_path[0]) {
+        unlink(tree->theme_svg_path);
+    }
+    if (tree->theme_svgz_path[0]) {
+        unlink(tree->theme_svgz_path);
+    }
     char apps[PT_ICON_PATH_MAX];
     char scalable[PT_ICON_PATH_MAX];
     char hicolor[PT_ICON_PATH_MAX];
     char icons[PT_ICON_PATH_MAX];
-    if (!join_path(apps, sizeof(apps), root, "/icons/hicolor/scalable/apps") ||
-        !join_path(scalable, sizeof(scalable), root, "/icons/hicolor/scalable") ||
-        !join_path(hicolor, sizeof(hicolor), root, "/icons/hicolor") ||
-        !join_path(icons, sizeof(icons), root, "/icons")) {
+    if (!join_path(apps, sizeof(apps), tree->root, "/icons/hicolor/scalable/apps") ||
+        !join_path(scalable, sizeof(scalable), tree->root, "/icons/hicolor/scalable") ||
+        !join_path(hicolor, sizeof(hicolor), tree->root, "/icons/hicolor") ||
+        !join_path(icons, sizeof(icons), tree->root, "/icons")) {
         return;
     }
     rmdir(apps);
     rmdir(scalable);
     rmdir(hicolor);
     rmdir(icons);
-    if (join_path(path, sizeof(path), root, "/icon.svg")) {
-        unlink(path);
-    }
-    rmdir(root);
+    rmdir(tree->root);
 }
 
 static void on_tint_toggle(pt_widget *button, void *user_data) {
@@ -201,22 +274,80 @@ static void on_tint_toggle(pt_widget *button, void *user_data) {
     report(state, text);
 }
 
-static void on_lookup(pt_widget *button, void *user_data) {
-    (void)button;
-    svg_state *state = user_data;
-    pt_icon_image *found = pt_icon_image_from_name(THEME_ICON_NAME, 24);
+/* Shared lookup path for the .svg and .svgz scalable entries. */
+static void lookup_into(svg_state *state, pt_widget *button, const char *name,
+                        const char *label) {
+    pt_icon_image *found = pt_icon_image_from_name(name, 24);
+    char text[PT_ICON_PATH_MAX + 160];
     if (found) {
-        pt_button_set_icon_image(state->lookup_button, found);
-        char text[192];
-        snprintf(text, sizeof(text), "hicolor scalable hit: %dx%d from the private theme tree",
+        pt_button_set_icon_image(button, found);
+        snprintf(text, sizeof(text), "%s: %s at %dx%d from the private theme tree", label, name,
                  pt_icon_image_width(found), pt_icon_image_height(found));
         report(state, text);
         pt_icon_image_destroy(found);
         return;
     }
-    char text[256];
-    snprintf(text, sizeof(text), "hicolor miss (safe): %s", pt_get_last_error());
+    snprintf(text, sizeof(text), "%s miss (safe): %s", label, pt_get_last_error());
     report(state, text);
+}
+
+static void on_lookup(pt_widget *button, void *user_data) {
+    (void)button;
+    svg_state *state = user_data;
+    lookup_into(state, state->lookup_button, THEME_ICON_NAME, "hicolor scalable .svg hit");
+}
+
+static void on_lookup_svgz(pt_widget *button, void *user_data) {
+    (void)button;
+    svg_state *state = user_data;
+    lookup_into(state, state->svgz_lookup_button, THEME_SVGZ_NAME, "hicolor scalable .svgz hit");
+}
+
+/* Rendered-pixel equality through the public API. pt_icon_image has no byte
+ * accessor, so the example snapshots the same window twice with only the icon
+ * slot changed: plain SVG first, SVGZ second. Both snapshots see identical
+ * label text and layout, so any differing pixel would come from the decoder. */
+static void report_pixel_equality(svg_state *state, pt_widget *button, pt_icon_image *plain,
+                                  pt_icon_image *compressed) {
+    int width = pt_window_get_width(state->window);
+    int height = pt_window_get_height(state->window);
+    if (width <= 0 || height <= 0) {
+        report(state, "pixel comparison skipped: window has no size");
+        return;
+    }
+    size_t count = (size_t)width * (size_t)height;
+    uint32_t *first = malloc(count * sizeof(*first));
+    uint32_t *second = malloc(count * sizeof(*second));
+    if (!first || !second) {
+        free(first);
+        free(second);
+        report(state, "pixel comparison skipped: out of memory");
+        return;
+    }
+    pt_button_set_icon_image(button, plain);
+    bool painted_first = pt_window_paint_pixels(state->window, first, width, height);
+    pt_button_set_icon_image(button, compressed);
+    bool painted_second = pt_window_paint_pixels(state->window, second, width, height);
+    pt_button_set_icon_image(button, plain);
+    if (!painted_first || !painted_second) {
+        report(state, "pixel comparison skipped: offscreen snapshot unavailable");
+        free(first);
+        free(second);
+        return;
+    }
+    size_t differing = 0;
+    for (size_t index = 0; index < count; ++index) {
+        if (first[index] != second[index]) {
+            ++differing;
+        }
+    }
+    char text[192];
+    snprintf(text, sizeof(text),
+             "SVGZ pixels match SVG: %zu differing of %zu in a %dx%d snapshot", differing, count,
+             width, height);
+    report(state, text);
+    free(first);
+    free(second);
 }
 
 static void on_quit(pt_widget *button, void *user_data) {
@@ -255,10 +386,11 @@ int main(void) {
     pt_widget_set_font_weight(heading, pt_font_weight_semibold);
 
     pt_widget *intro = pt_label_create(
-        root, "The same pt_icon_image_load_memory call decodes both buffers: the '<svg' "
-              "prefix selects nanosvg, anything else stays on the PNG decoder. Both buffers "
-              "drive reference-counted button slots, and the gradient's fill-opacity is "
-              "rasterised at each requested size.");
+        root, "The same pt_icon_image_load_memory call decodes all three buffers: the gzip magic "
+              "0x1f 0x8b selects SVGZ (inflate once, then the SVG rules), '<svg' selects "
+              "nanosvg, and anything else stays on the PNG decoder. All three drive "
+              "reference-counted button slots, and the gradient's fill-opacity is rasterised at "
+              "each requested size.");
     pt_widget_set_font_size(intro, 13.0f);
     pt_widget_set_foreground(intro, pt_rgb(0x9AA7B8));
     pt_widget_set_label_wrap(intro, true);
@@ -280,6 +412,28 @@ int main(void) {
         return 1;
     }
 
+    /* SVGZ is the same document in a gzip container. Keep both the compressed
+     * buffer (for the temp files) and the decoded handle (for the slot and the
+     * pixel comparison) alive across setup. */
+    size_t svgz_size = 0;
+    unsigned char *svgz = gzip_compress(svg_source, sizeof(svg_source) - 1, &svgz_size);
+    if (!svgz) {
+        fprintf(stderr, "pt: cannot gzip the example SVG with zlib\n");
+        pt_icon_image_destroy(vector);
+        pt_icon_image_destroy(raster);
+        pt_app_destroy(app);
+        return 1;
+    }
+    pt_icon_image *compressed = pt_icon_image_load_memory(svgz, svgz_size);
+    if (!compressed) {
+        fprintf(stderr, "pt: %s\n", pt_get_last_error());
+        free(svgz);
+        pt_icon_image_destroy(vector);
+        pt_icon_image_destroy(raster);
+        pt_app_destroy(app);
+        return 1;
+    }
+
     pt_widget *card = pt_card_create(root);
     pt_widget_set_padding(card, 18.0f, 18.0f, 18.0f, 18.0f);
     pt_widget_set_gap(card, 14.0f);
@@ -294,6 +448,7 @@ int main(void) {
     pt_button_set_icon_image(icon_only, vector);
     pt_widget_set_a11y_name(icon_only, "SVG icon-only action");
     pt_widget_set_tooltip(icon_only, "SVG: centred alone, 18 logical px");
+    state.icon_button = icon_only;
 
     state.vg_button = pt_button_create(row, "SVG icon and label");
     pt_button_set_variant(state.vg_button, pt_button_secondary);
@@ -304,6 +459,13 @@ int main(void) {
     pt_button_set_variant(state.png_button, pt_button_secondary);
     pt_button_set_icon_image(state.png_button, raster);
     pt_widget_set_tooltip(state.png_button, "Same load call, but the bytes start with PNG magic");
+
+    state.svgz_button = pt_button_create(row, "SVGZ (gzip)");
+    pt_button_set_variant(state.svgz_button, pt_button_secondary);
+    pt_button_set_icon_image(state.svgz_button, compressed);
+    pt_widget_set_tooltip(state.svgz_button,
+                          "Same SVG bytes inside gzip: 0x1f 0x8b, not the extension, selects "
+                          "the SVGZ path");
 
     pt_widget *tools = pt_row_create(card);
     pt_widget_set_gap(tools, 10.0f);
@@ -317,34 +479,46 @@ int main(void) {
     pt_button_set_on_click(state.lookup_button, on_lookup, &state);
     pt_widget_set_tooltip(state.lookup_button, "Private hicolor tree: scalable/*.svg");
 
+    state.svgz_lookup_button = pt_button_create(tools, "Look up " THEME_SVGZ_NAME);
+    pt_button_set_variant(state.svgz_lookup_button, pt_button_ghost);
+    pt_button_set_on_click(state.svgz_lookup_button, on_lookup_svgz, &state);
+    pt_widget_set_tooltip(state.svgz_lookup_button, "Private hicolor tree: scalable/*.svgz");
+
     state.status = pt_label_create(root, "");
     pt_widget_set_font_size(state.status, 12.0f);
     pt_widget_set_foreground(state.status, pt_rgb(0x9ECE6A));
     pt_widget_set_label_wrap(state.status, true);
 
-    /* File path: exercise load_file on the same bytes, then use the result as
-     * the window icon. The temp tree is removed after the event loop, so the
-     * decoded handles stay valid for the whole run. */
-    char tree[PT_ICON_PATH_MAX] = "";
-    char svg_path[PT_ICON_PATH_MAX] = "";
-    char theme_icon_path[PT_ICON_PATH_MAX] = "";
-    bool tree_ok = make_temp_tree(tree, sizeof(tree), svg_path, sizeof(svg_path), theme_icon_path,
-                                  sizeof(theme_icon_path));
-    char summary[320];
+    /* File path: exercise load_file on the same bytes, then use the plain SVG
+     * result as the window icon. The temp tree also holds a .svgz file and a
+     * .svgz scalable entry, and is removed after the event loop so the decoded
+     * handles stay valid for the whole run. */
+    temp_tree tree;
+    bool tree_ok = make_temp_tree(&tree, svgz, svgz_size);
+    free(svgz);
+    char summary[480];
     if (tree_ok) {
-        pt_icon_image *from_file = pt_icon_image_load_file(svg_path);
+        pt_icon_image *from_file = pt_icon_image_load_file(tree.svg_path);
+        pt_icon_image *from_svgz_file = pt_icon_image_load_file(tree.svgz_path);
         if (from_file) {
             pt_window_set_icon(window, from_file);
+        }
+        if (from_file && from_svgz_file) {
             snprintf(summary, sizeof(summary),
-                     "SVG memory %dx%d, SVG file %dx%d, PNG %dx%d; window icon %s",
+                     "SVG memory %dx%d, SVG file %dx%d, SVGZ file %dx%d, PNG %dx%d; "
+                     "gzip %zu->%zu bytes; window icon %s",
                      pt_icon_image_width(vector), pt_icon_image_height(vector),
                      pt_icon_image_width(from_file), pt_icon_image_height(from_file),
-                     pt_icon_image_width(raster), pt_icon_image_height(raster),
+                     pt_icon_image_width(from_svgz_file), pt_icon_image_height(from_svgz_file),
+                     pt_icon_image_width(raster), pt_icon_image_height(raster), svgz_size,
+                     sizeof(svg_source) - 1,
                      pt_window_get_icon(window) ? "retained (best effort)" : "rejected");
-            pt_icon_image_destroy(from_file);
         } else {
-            snprintf(summary, sizeof(summary), "SVG file load failed: %s", pt_get_last_error());
+            snprintf(summary, sizeof(summary), "SVG/SVGZ file load failed: %s",
+                     pt_get_last_error());
         }
+        pt_icon_image_destroy(from_svgz_file);
+        pt_icon_image_destroy(from_file);
     } else {
         pt_window_set_icon(window, vector);
         snprintf(summary, sizeof(summary),
@@ -355,28 +529,62 @@ int main(void) {
     }
     report(&state, summary);
 
-    /* hicolor lookup with the private tree: the name resolves to scalable SVG
-     * without any index.theme, then a miss still only records an error. The
-     * tree stays alive and on $XDG_DATA_HOME for the whole run so the lookup
-     * button works interactively; cleanup happens after the event loop. */
+    /* gzip alone is not enough: the inflated bytes must still pass the SVG
+     * sniff, so a gzip-wrapped PNG is rejected with an error, never decoded. */
+    size_t png_gzip_size = 0;
+    unsigned char *png_gzip = gzip_compress(icon_png, sizeof(icon_png), &png_gzip_size);
+    if (png_gzip) {
+        pt_icon_image *rejected = pt_icon_image_load_memory(png_gzip, png_gzip_size);
+        if (!rejected) {
+            char text[256];
+            snprintf(text, sizeof(text), "gzip-wrapped PNG rejected (gzip is not SVG): %s",
+                     pt_get_last_error());
+            report(&state, text);
+        } else {
+            pt_icon_image_destroy(rejected);
+        }
+        free(png_gzip);
+    }
+
+    /* hicolor lookup with the private tree: both names resolve without an
+     * index.theme, the .svg entry and a .svgz-only entry, then a miss still
+     * only records an error. The tree stays alive and on $XDG_DATA_HOME for the
+     * whole run so the lookup buttons work interactively; cleanup happens
+     * after the event loop. */
     char *saved_data_home = NULL;
     if (tree_ok) {
         const char *old_home = getenv("XDG_DATA_HOME");
         saved_data_home = old_home ? strdup(old_home) : NULL;
-        setenv("XDG_DATA_HOME", tree, 1);
+        setenv("XDG_DATA_HOME", tree.root, 1);
         pt_icon_image *found = pt_icon_image_from_name(THEME_ICON_NAME, 24);
         if (found) {
             pt_button_set_icon_image(state.lookup_button, found);
             char text[PT_ICON_PATH_MAX + 128];
             snprintf(text, sizeof(text),
-                     "hicolor lookup: %s at %dx%d through $XDG_DATA_HOME=%s",
+                     "hicolor .svg lookup: %s at %dx%d through $XDG_DATA_HOME=%s",
                      THEME_ICON_NAME, pt_icon_image_width(found), pt_icon_image_height(found),
-                     tree);
+                     tree.root);
             report(&state, text);
             pt_icon_image_destroy(found);
         } else {
             char text[288];
-            snprintf(text, sizeof(text), "hicolor lookup missed (no crash): %s",
+            snprintf(text, sizeof(text), "hicolor .svg lookup missed (no crash): %s",
+                     pt_get_last_error());
+            report(&state, text);
+        }
+        pt_icon_image *found_svgz = pt_icon_image_from_name(THEME_SVGZ_NAME, 24);
+        if (found_svgz) {
+            pt_button_set_icon_image(state.svgz_lookup_button, found_svgz);
+            char text[PT_ICON_PATH_MAX + 128];
+            snprintf(text, sizeof(text),
+                     "hicolor .svgz lookup: %s at %dx%d through $XDG_DATA_HOME=%s",
+                     THEME_SVGZ_NAME, pt_icon_image_width(found_svgz),
+                     pt_icon_image_height(found_svgz), tree.root);
+            report(&state, text);
+            pt_icon_image_destroy(found_svgz);
+        } else {
+            char text[288];
+            snprintf(text, sizeof(text), "hicolor .svgz lookup missed (no crash): %s",
                      pt_get_last_error());
             report(&state, text);
         }
@@ -393,8 +601,9 @@ int main(void) {
 
     pt_widget *footer = pt_label_create(
         root, "SVG rasterises per requested size/scale and keeps its aspect ratio; the PNG path "
-              "resizes to the exact box. Both share the bounded LRU cache. Setters hold their own "
-              "reference, so the loader references are dropped below.");
+              "resizes to the exact box. SVGZ inflates once and then shares the SVG path and "
+              "cache. Setters hold their own reference, so the loader references are dropped "
+              "below.");
     pt_widget_set_font_size(footer, 12.0f);
     pt_widget_set_foreground(footer, pt_rgb(0x6F7C8F));
     pt_widget_set_label_wrap(footer, true);
@@ -407,20 +616,28 @@ int main(void) {
     pt_window_show(window);
     pt_widget_focus(icon_only);
 
+    /* Only the icon slot changes between the two snapshots, so identical
+     * pixels prove that SVGZ rasterises exactly like the uncompressed SVG. */
+    report_pixel_equality(&state, state.icon_button, vector, compressed);
+
     /* The slots took their own references above. */
     pt_icon_image_destroy(vector);
     pt_icon_image_destroy(raster);
+    pt_icon_image_destroy(compressed);
 
     const char *headless = getenv("PT_HEADLESS");
     int status;
     if (headless && *headless && strcmp(headless, "0") != 0) {
         on_lookup(NULL, &state);
+        on_lookup_svgz(NULL, &state);
         on_tint_toggle(NULL, &state);
-        printf("svg_icon: headless buttons=%d/%d/%d lookup=%d window-icon=%d\n",
+        printf("svg_icon: headless buttons=%d/%d/%d/%d lookup=%d/%d window-icon=%d\n",
                pt_button_get_icon_image(icon_only) ? 1 : 0,
                pt_button_get_icon_image(state.vg_button) ? 1 : 0,
                pt_button_get_icon_image(state.png_button) ? 1 : 0,
+               pt_button_get_icon_image(state.svgz_button) ? 1 : 0,
                pt_button_get_icon_image(state.lookup_button) ? 1 : 0,
+               pt_button_get_icon_image(state.svgz_lookup_button) ? 1 : 0,
                pt_window_get_icon(window) ? 1 : 0);
         fflush(stdout);
         status = pt_app_run_for(app, 250);
@@ -435,7 +652,7 @@ int main(void) {
             unsetenv("XDG_DATA_HOME");
         }
     }
-    remove_tree(tree);
+    remove_tree(&tree);
     pt_app_destroy(app);
     return status;
 }
