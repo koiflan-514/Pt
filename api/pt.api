@@ -61,7 +61,7 @@ enum pt_a11y_role_alert = 20
 enum pt_a11y_role_check_box = 11
 enum pt_a11y_role_column_header = 27
 enum pt_a11y_role_combo_box = 34
-enum pt_a11y_role_count = 36
+enum pt_a11y_role_count = 37
 enum pt_a11y_role_dialog = 18
 enum pt_a11y_role_generic = 1
 enum pt_a11y_role_group = 15
@@ -80,6 +80,7 @@ enum pt_a11y_role_radio_button = 12
 enum pt_a11y_role_scroll_pane = 9
 enum pt_a11y_role_separator = 10
 enum pt_a11y_role_slider = 8
+enum pt_a11y_role_spin_button = 36
 enum pt_a11y_role_spinner = 14
 enum pt_a11y_role_switch = 7
 enum pt_a11y_role_tab = 31
@@ -846,6 +847,7 @@ func pt_window_get_theme_color pt_colorpt_window_get_theme_color(constpt_window*
 func pt_window_get_theme_metric floatpt_window_get_theme_metric(constpt_window*window,pt_theme_metricmetric)
 func pt_window_get_width intpt_window_get_width(constpt_window*window)
 func pt_window_hide voidpt_window_hide(pt_window*window)
+func pt_window_hide_input_panel boolpt_window_hide_input_panel(pt_window*window)
 func pt_window_is_open boolpt_window_is_open(constpt_window*window)
 func pt_window_maximize boolpt_window_maximize(pt_window*window)
 func pt_window_paint_pixels boolpt_window_paint_pixels(pt_window*window,uint32_t*pixels,intwidth,intheight)
@@ -882,6 +884,7 @@ func pt_window_set_theme_color voidpt_window_set_theme_color(pt_window*window,pt
 func pt_window_set_theme_metric voidpt_window_set_theme_metric(pt_window*window,pt_theme_metricmetric,floatvalue)
 func pt_window_set_title voidpt_window_set_title(pt_window*window,constchar*title)
 func pt_window_show voidpt_window_show(pt_window*window)
+func pt_window_show_input_panel boolpt_window_show_input_panel(pt_window*window)
 func pt_window_show_toast pt_toast*pt_window_show_toast(pt_window*window,constchar*text,pt_toast_kindkind,uint32_tduration_ms)
 func pt_wrap_create pt_widget*pt_wrap_create(pt_widget*parent)
 func pt_wrap_set_gap voidpt_wrap_set_gap(pt_widget*wrap,floatrow_gap,floatcolumn_gap)
