@@ -30,14 +30,17 @@
  * caller drops its own reference (whichever comes first).
  *
  * Errors. Loads and lookups return NULL and set pt_get_last_error on failure:
- * missing or unreadable files, corrupt, empty or unsupported PNG/SVG data,
+ * missing or unreadable files, corrupt, empty or unsupported PNG/SVG/SVGZ data,
  * dimensions above PT_ICON_MAX_DIMENSION, SVG documents with no drawable
  * shape, and theme names that do not resolve. A failed lookup never crashes or
  * aborts. Setters return void and ignore NULL objects.
  *
- * Image support. The loader sniffs the payload: after an optional UTF-8 BOM and
- * ASCII whitespace, a '<' that opens `<svg` or an `<?xml` declaration selects
- * the SVG path; every other byte stream stays on the byte-for-byte PNG path.
+ * Image support. The loader sniffs the payload. A payload whose first two bytes
+ * are the gzip magic 0x1f 0x8b takes the SVGZ path (see below); no other
+ * compressed container is recognised. Every other payload follows the text
+ * sniff: after an optional UTF-8 BOM and ASCII whitespace, a '<' that opens
+ * `<svg` or an `<?xml` declaration selects the SVG path; every other byte
+ * stream stays on the byte-for-byte PNG path.
  *
  * PNG. 8-bit non-interlaced colour types 0/2/3/4/6, decoded through the same
  * bounded decoder as clipboard images (16 MiB input cap, 8192x8192 decoder cap)
@@ -59,6 +62,21 @@
  * PT_ICON_MAX_DIMENSION. Rasterisation preserves the intrinsic aspect ratio
  * and centres the artwork in the requested pixel box (PNG, by contrast, is
  * resized to the exact box).
+ *
+ * SVGZ. A gzip-compressed SVG document is accepted by both loaders and by
+ * hicolor lookup. Compression is detected from the first two bytes (0x1f 0x8b),
+ * never from a file name, and gzip is the only container understood. The
+ * compressed input is subject to the same 16 MiB input cap, and the inflated
+ * document is capped at 16 MiB as well: a stream that would inflate past that
+ * bound is rejected rather than grown (the decompression-bomb guard). The
+ * inflated bytes must pass the same SVG sniff and the same intrinsic-size,
+ * shape and PT_ICON_MAX_DIMENSION rules, so a gzip-wrapped PNG, gzip-wrapped
+ * non-SVG text or any other gzip payload is rejected with an error. Malformed,
+ * truncated and bad-CRC gzip streams return NULL with an error and never crash.
+ * The handle retains the inflated SVG source, bounded by the same 16 MiB cap,
+ * and re-parses it at each requested size exactly as a plain SVG handle does;
+ * the compressed bytes are not retained and there is no separate SVGZ cache or
+ * tuning knob.
  *
  * Windows. pt_window_set_icon is best effort. When the compositor advertises
  * xdg_toplevel_icon_v1, Pt rasterises the image to a dedicated, immutable
@@ -108,12 +126,13 @@ extern "C" {
 /* Opaque reference-counted raster icon. */
 typedef struct pt_icon_image pt_icon_image;
 
-/* Loads a PNG or SVG file, sniffed by content. The file must be a regular file
- * no larger than the 16 MiB decoder cap. Since 1.2. */
+/* Loads a PNG, SVG or SVGZ file, sniffed by content. The file must be a regular
+ * file no larger than the 16 MiB input cap. Since 1.2; SVGZ since 1.4. */
 pt_api pt_icon_image *pt_icon_image_load_file(const char *path);
 
-/* Loads PNG or SVG bytes from memory, sniffed by content. The data is copied
- * during the call; the caller keeps ownership of the input buffer. Since 1.2. */
+/* Loads PNG, SVG or SVGZ bytes from memory, sniffed by content. The data is
+ * copied during the call; the caller keeps ownership of the input buffer.
+ * Since 1.2; SVGZ since 1.4. */
 pt_api pt_icon_image *pt_icon_image_load_memory(const void *data, size_t size);
 
 /* Looks a name up in the hicolor theme, following the XDG base directories
@@ -121,9 +140,10 @@ pt_api pt_icon_image *pt_icon_image_load_memory(const void *data, size_t size);
  * preferred logical size in pixels and selects the closest available size.
  * index.theme is parsed for its Directories/Size/Type fields; without a usable
  * index.theme the NxN and scalable directories are scanned. Fixed size
- * directories are searched for .png files, scalable directories for .svg first
- * and .png second. A name containing a path separator, an empty name or a miss
- * returns NULL. Since 1.2. */
+ * directories are searched for .png files only; scalable directories are
+ * searched in the order .svg, .svgz, then .png. A name containing a path
+ * separator, an empty name or a miss returns NULL. Since 1.2; .svgz lookup
+ * since 1.4. */
 pt_api pt_icon_image *pt_icon_image_from_name(const char *name, int size);
 
 /* Adds a reference and returns the same handle. NULL is accepted and returns

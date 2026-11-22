@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <zlib.h>
 
 #define pt_icon_input_max_bytes (16u * 1024u * 1024u)
 
@@ -395,6 +396,27 @@ static pt_icon_image *icon_image_wrap(pt_color *pixels, int width, int height) {
     return image;
 }
 
+/* Takes ownership of an SVG source buffer. SVGZ shares this path with plain
+ * SVG: the loader inflates the gzip stream once, validates the result with the
+ * normal SVG sniff and hands the inflated bytes to the handle. The handle keeps
+ * that source (never the compressed bytes), so every rasterisation re-parses it
+ * exactly as it does for plain SVG; the source is already bounded by the 16 MiB
+ * icon cap and no extra per-raster copy is cached. */
+static pt_icon_image *icon_image_take_svg(unsigned char *data, size_t size, int width,
+                                         int height) {
+    if (!data || size == 0 || width <= 0 || height <= 0) {
+        free(data);
+        return NULL;
+    }
+    pt_icon_image *image = pt_alloc_zeroed(1, sizeof(*image));
+    image->references = 1;
+    image->width = width;
+    image->height = height;
+    image->svg_data = data;
+    image->svg_size = size;
+    return image;
+}
+
 static pt_icon_image *icon_image_wrap_svg(const uint8_t *data, size_t size, int width,
                                           int height) {
     if (!data || size == 0 || width <= 0 || height <= 0) {
@@ -402,13 +424,7 @@ static pt_icon_image *icon_image_wrap_svg(const uint8_t *data, size_t size, int 
     }
     unsigned char *copy = pt_alloc(size);
     memcpy(copy, data, size);
-    pt_icon_image *image = pt_alloc_zeroed(1, sizeof(*image));
-    image->references = 1;
-    image->width = width;
-    image->height = height;
-    image->svg_data = copy;
-    image->svg_size = size;
-    return image;
+    return icon_image_take_svg(copy, size, width, height);
 }
 
 /* Content sniffing for the shared loader. PNG's signature never starts with
@@ -441,10 +457,127 @@ static bool icon_data_is_svg(const uint8_t *data, size_t size) {
     return remaining >= 5u && memcmp(data + start, "<?xml", 5u) == 0;
 }
 
+/* Inflates a gzip stream (the SVGZ container) into a fresh heap buffer. The
+ * output is capped at pt_icon_input_max_bytes, the same 16 MiB bound the icon
+ * loader applies to input; one extra byte of room is allocated only to tell a
+ * document that fits exactly from one that overflows, and an overflow is
+ * rejected instead of grown. gzip is the only compressed container accepted:
+ * the caller still runs the ordinary SVG sniff on the output, so a gzip-wrapped
+ * PNG or text document fails. Malformed, truncated and bad-CRC streams all
+ * return NULL with the error set and never abort. The caller owns the buffer
+ * (release with free). */
+static unsigned char *icon_gzip_inflate(const uint8_t *data, size_t size, size_t *out_size) {
+    if (out_size) {
+        *out_size = 0;
+    }
+    if (!data || size < 2u || !out_size) {
+        pt_set_error("invalid SVGZ icon data");
+        return NULL;
+    }
+    const size_t cap = pt_icon_input_max_bytes;
+    z_stream stream = {0};
+    if (inflateInit2(&stream, 15 + 16) != Z_OK) {
+        pt_set_error("cannot initialise the SVGZ decoder");
+        return NULL;
+    }
+    /* A small stream usually inflates to a small document; start within a
+     * modest bound and double up to the 16 MiB cap instead of reserving the cap
+     * for every SVGZ. */
+    size_t capacity = size * 4u;
+    if (capacity < 65536u) {
+        capacity = 65536u;
+    }
+    if (capacity > 1048576u) {
+        capacity = 1048576u;
+    }
+    unsigned char *buffer = malloc(capacity);
+    if (!buffer) {
+        inflateEnd(&stream);
+        pt_set_error("out of memory");
+        return NULL;
+    }
+    stream.next_in = (Bytef *)data;
+    stream.avail_in = (uInt)size;
+    bool ok = false;
+    for (;;) {
+        size_t produced = (size_t)stream.total_out;
+        if (produced == capacity) {
+            if (capacity == cap + 1u) {
+                pt_set_error("oversized SVGZ icon data");
+                break;
+            }
+            size_t grown = capacity * 2u;
+            if (grown > cap + 1u) {
+                grown = cap + 1u;
+            }
+            unsigned char *resized = realloc(buffer, grown);
+            if (!resized) {
+                pt_set_error("out of memory");
+                break;
+            }
+            buffer = resized;
+            capacity = grown;
+        }
+        stream.next_out = buffer + (size_t)stream.total_out;
+        stream.avail_out = (uInt)(capacity - (size_t)stream.total_out);
+        int z_result = inflate(&stream, Z_NO_FLUSH);
+        if (z_result == Z_STREAM_END) {
+            ok = true;
+            break;
+        }
+        if (z_result == Z_OK || z_result == Z_BUF_ERROR) {
+            if (stream.avail_in == 0) {
+                pt_set_error("truncated SVGZ icon data");
+                break;
+            }
+            if (z_result == Z_BUF_ERROR && stream.avail_out != 0) {
+                pt_set_error("corrupt SVGZ icon data");
+                break;
+            }
+            continue;
+        }
+        pt_set_error("corrupt SVGZ icon data");
+        break;
+    }
+    size_t inflated_size = (size_t)stream.total_out;
+    inflateEnd(&stream);
+    if (!ok || inflated_size > cap) {
+        free(buffer);
+        if (ok) {
+            pt_set_error("oversized SVGZ icon data");
+        }
+        return NULL;
+    }
+    *out_size = inflated_size;
+    return buffer;
+}
+
 pt_icon_image *pt_icon_image_load_memory(const void *data, size_t size) {
     if (!data || size == 0 || size > pt_icon_input_max_bytes) {
         pt_set_error("invalid or oversized icon data");
         return NULL;
+    }
+    /* The gzip magic is checked before the text sniff, so SVGZ never reaches
+     * the PNG path and plain SVG/PNG bytes are unchanged. */
+    if (size >= 2u && ((const uint8_t *)data)[0] == 0x1Fu &&
+        ((const uint8_t *)data)[1] == 0x8Bu) {
+        size_t inflated_size = 0;
+        unsigned char *inflated = icon_gzip_inflate(data, size, &inflated_size);
+        if (!inflated) {
+            return NULL;
+        }
+        if (!icon_data_is_svg(inflated, inflated_size)) {
+            free(inflated);
+            pt_set_error("gzip-compressed icon is not an SVG document");
+            return NULL;
+        }
+        int width = 0;
+        int height = 0;
+        if (!pt_svg_measure(inflated, inflated_size, &width, &height)) {
+            free(inflated);
+            return NULL;
+        }
+        return icon_image_take_svg(inflated, inflated_size, width, height);
     }
     if (icon_data_is_svg(data, size)) {
         int width = 0;
@@ -889,12 +1022,15 @@ static pt_icon_image *icon_theme_load(const char *theme_path, const char *name,
                                       const icon_theme_dir *dirs, int dir_count, bool scanned) {
     static const char *const contexts[] = {"apps", "devices", "places", "mimetypes", "status",
                                            "actions"};
-    static const char *const scalable_extensions[] = {".svg", ".png"};
+    /* Vector order: plain SVG, then its gzip container, then raster PNG. */
+    static const char *const scalable_extensions[] = {".svg", ".svgz", ".png"};
+    const size_t scalable_extension_count = sizeof(scalable_extensions) /
+                                           sizeof(scalable_extensions[0]);
     for (int i = 0; i < dir_count; ++i) {
         const icon_theme_dir *entry = &dirs[i];
         if (!scanned) {
             if (entry->scalable) {
-                for (size_t e = 0; e < 2; ++e) {
+                for (size_t e = 0; e < scalable_extension_count; ++e) {
                     pt_icon_image *image = icon_theme_try(theme_path, entry->name, NULL, name,
                                                           scalable_extensions[e]);
                     if (image) {
@@ -910,7 +1046,7 @@ static pt_icon_image *icon_theme_load(const char *theme_path, const char *name,
         } else {
             for (size_t c = 0; c < sizeof(contexts) / sizeof(contexts[0]); ++c) {
                 if (entry->scalable) {
-                    for (size_t e = 0; e < 2; ++e) {
+                    for (size_t e = 0; e < scalable_extension_count; ++e) {
                         pt_icon_image *image = icon_theme_try(theme_path, entry->name, contexts[c],
                                                               name, scalable_extensions[e]);
                         if (image) {
@@ -927,7 +1063,7 @@ static pt_icon_image *icon_theme_load(const char *theme_path, const char *name,
             }
             /* A user theme may place the SVG directly in scalable/. */
             if (entry->scalable) {
-                for (size_t e = 0; e < 2; ++e) {
+                for (size_t e = 0; e < scalable_extension_count; ++e) {
                     pt_icon_image *image = icon_theme_try(theme_path, entry->name, NULL, name,
                                                           scalable_extensions[e]);
                     if (image) {
