@@ -590,6 +590,20 @@ static bool entry_paint_needs_map(const pt_widget *entry, const char *display, s
            pt_bidi_text_may_reorder(display, len);
 }
 
+/* Entry text is anchored to the paragraph start: the left edge in LTR, the
+ * right edge in RTL. scroll_x counts the distance from that anchor, so the
+ * RTL line left sits to the right of the area and moves right as the caret
+ * travels towards the logical end (the visual left). */
+static float entry_line_origin(const pt_widget *entry, const pt_font *font, float scale,
+                               const char *text, size_t len, pt_rect area) {
+    pt_bidi_base base = entry_paint_base(entry, text, len);
+    if (base != pt_bidi_base_rtl) {
+        return area.x - entry->scroll_x;
+    }
+    float total = pt_font_measure_bidi(font, text, len, base) / scale;
+    return area.x + area.w - total + entry->scroll_x;
+}
+
 static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
     pt_color background = shape_background(entry, pt_theme_control);
     if (!entry->has_background && entry->hovered && !entry->focused) {
@@ -686,16 +700,17 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
             combined_map = NULL;
         }
     }
+    float line_origin = entry_line_origin(entry, font, scale, combined, combined_len, area);
     if (has_selection && selection_end > selection_start) {
         pt_color selection = color_from_theme(entry, pt_theme_selection);
         if (combined_map) {
             paint_map_range(canvas, combined_map, selection_start, selection_end,
-                            area.x - entry->scroll_x, area.y + 2.0f,
+                            line_origin, area.y + 2.0f,
                             pt_max_float(0.0f, area.h - 4.0f), selection);
         } else {
             float start_x = measure_prefix_width(font, combined, selection_start, scale);
             float end_x = measure_prefix_width(font, combined, selection_end, scale);
-            pt_canvas_fill_rect(canvas, area.x - entry->scroll_x + start_x, area.y + 2.0f,
+            pt_canvas_fill_rect(canvas, line_origin + start_x, area.y + 2.0f,
                                 end_x - start_x, pt_max_float(0.0f, area.h - 4.0f),
                                 selection);
         }
@@ -706,20 +721,21 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
             pt_color muted = color_from_theme(entry, pt_theme_text_muted);
             size_t placeholder_len = strlen(placeholder);
             pt_canvas_draw_text_line_bidi(
-                canvas, font, placeholder, placeholder_len, area.x, baseline, area.w,
-                pt_text_align_start, muted, true,
+                canvas, font, placeholder, placeholder_len,
+                entry_line_origin(entry, font, scale, placeholder, placeholder_len, area),
+                baseline, 0.0f, pt_text_align_start, muted, true,
                 paint_text_base(entry, placeholder, placeholder_len));
         }
     } else {
         /* Single-line display follows the paragraph direction; selection and
          * preedit rectangles above use the same per-run visual map. */
         pt_canvas_draw_text_line_bidi(canvas, font, combined, combined_len,
-                                      area.x - entry->scroll_x, baseline, 0.0f,
+                                      line_origin, baseline, 0.0f,
                                       pt_text_align_start, color, false,
                                       entry_paint_base(entry, combined, combined_len));
     }
     if (preedit_len > 0) {
-        float preedit_x = area.x - entry->scroll_x +
+        float preedit_x = line_origin +
                           measure_prefix_width(font, combined, preedit_start, scale);
         float preedit_w = measure_prefix_width(font, entry->preedit, preedit_len, scale);
         if (combined_map) {
@@ -747,7 +763,7 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
                         x1 = spans[i].x1;
                     }
                 }
-                preedit_x = area.x - entry->scroll_x + x0;
+                preedit_x = line_origin + x0;
                 preedit_w = x1 - x0;
             }
             free(spans);

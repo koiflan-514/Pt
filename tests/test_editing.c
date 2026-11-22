@@ -333,7 +333,23 @@ static float entry_caret_visual_x(pt_widget *entry) {
     pt_unused(y);
     pt_unused(w);
     pt_unused(h);
-    return (float)x - entry->x - entry->padding_left + entry->scroll_x;
+    /* The IME rectangle is window-relative; subtract the paragraph anchor so
+     * the result stays the caret's visual offset from the line's left edge.
+     * RTL lines are right-anchored (W5b), so their line origin is mirrored. */
+    const char *text = entry->text ? entry->text : "";
+    size_t len = strlen(text);
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
+    float origin = -entry->scroll_x;
+    pt_bidi_base base = pt_widget_text_base(entry, text, len);
+    if (font && base == pt_bidi_base_rtl) {
+        float area_w = pt_max_float(0.0f, entry->width - entry->padding_left -
+                                              entry->padding_right);
+        origin = area_w - pt_font_measure_bidi(font, text, len, base) / scale +
+                 entry->scroll_x;
+    }
+    return (float)x - entry->x - entry->padding_left - origin;
 }
 
 static float entry_expected_caret_x(pt_widget *entry) {
@@ -560,6 +576,83 @@ static void test_bidi_entry_editing(pt_app *app) {
     pt_window_free(window);
 }
 
+/* RTL entries anchor their text to the right edge (2.0 wave 5b): scroll_x = 0
+ * shows the logical start at the visual right, and overflowing backwards moves
+ * the line right. IME rectangles and click mapping use the same origin. */
+static void test_rtl_entry_anchor(pt_app *app) {
+    pt_window *window = pt_window_create(app, "rtl-entry-anchor", 640, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget_set_gap(root, 8.0f);
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_check(entry != NULL);
+    const char *long_rtl = HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE
+                           HE_BET HE_GIMEL_DALET_HE " abc " HE_BET;
+    pt_widget_set_text(entry, long_rtl);
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_size(entry, 200.0f, 32.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = NULL;
+    paint(window, &canvas);
+    pt_check(canvas != NULL);
+    pt_check(pt_widget_focus(entry));
+    window->caret_visible = true;
+
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    pt_check(font != NULL);
+    float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
+    float area_w = entry->width - entry->padding_left - entry->padding_right;
+    float total = font ? pt_font_measure_bidi(font, long_rtl, strlen(long_rtl),
+                                              pt_bidi_base_rtl) / scale
+                       : 0.0f;
+    pt_check(total > area_w);
+
+    /* Logical start: the caret sits on the entry's right edge, no scroll. */
+    pt_entry_set_selection(entry, 0, 0);
+    paint(window, &canvas);
+    pt_check_near(entry->scroll_x, 0.0, 0.01);
+    int x0 = 0;
+    pt_widget_ime_rect(entry, &x0, NULL, NULL, NULL);
+    pt_check_near((float)x0,
+                  entry->x + entry->width - entry->padding_right, 1.0f);
+
+    /* Logical end: the caret is pulled into view from the left, which scrolls
+     * the right-anchored line right by total - width + 12. */
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(entry->cursor == strlen(long_rtl));
+    paint(window, &canvas);
+    float expected_scroll = total - area_w + 12.0f;
+    pt_check_near(entry->scroll_x, expected_scroll, 0.6);
+    int x_end = 0;
+    pt_widget_ime_rect(entry, &x_end, NULL, NULL, NULL);
+    pt_check_near((float)x_end, entry->x + entry->padding_left + 12.0f, 1.0f);
+    pt_check(x_end >= (int)entry->x && x_end <= (int)(entry->x + entry->width));
+
+    /* Going back to the logical start returns to the right anchor. */
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(entry->cursor == 0);
+    paint(window, &canvas);
+    pt_check_near(entry->scroll_x, 0.0, 0.01);
+
+    /* Click mapping follows the same origin: the right edge is the logical
+     * start, the left edge the logical end. */
+    float mid_y = entry->y + entry->height * 0.5f;
+    click_at(window, entry->x + entry->width - 6.0f, mid_y, 100);
+    pt_check(entry->cursor <= 2);
+    click_at(window, entry->x + 4.0f, mid_y, 140);
+    pt_check(entry->cursor + 2 >= strlen(long_rtl));
+    paint(window, &canvas);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.editing");
@@ -570,6 +663,7 @@ int main(void) {
     test_table_editing(app);
     test_tree_rename(app);
     test_bidi_entry_editing(app);
+    test_rtl_entry_anchor(app);
     pt_app_destroy(app);
     return pt_test_finish("editing");
 }

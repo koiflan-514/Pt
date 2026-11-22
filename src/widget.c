@@ -697,14 +697,28 @@ static float entry_caret_offset(const pt_widget *entry, const pt_font *font, flo
     return width;
 }
 
+/* Visual origin of the single display line in area-local coordinates. Entry
+ * text is anchored at the paragraph start: left in LTR, right in RTL, where
+ * scroll_x counts inward from that anchor. */
+static float entry_line_origin(const pt_widget *entry, const pt_font *font, float scale,
+                               const char *display, size_t len, float area_w) {
+    pt_bidi_base base = entry_display_base(entry, display, len);
+    if (base != pt_bidi_base_rtl) {
+        return -entry->scroll_x;
+    }
+    float total = pt_font_measure_bidi(font, display, len, base) / scale;
+    return area_w - total + entry->scroll_x;
+}
+
 static size_t entry_position_from_x(const pt_widget *entry, const pt_font *font, float scale,
                                     float local_x) {
-    float target = local_x + entry->scroll_x;
+    size_t len = 0;
+    char *display = entry_display_text(entry, &len);
+    float area_w = pt_max_float(0.0f, entry->width - entry->padding_left - entry->padding_right);
+    float target = local_x - entry_line_origin(entry, font, scale, display, len, area_w);
     if (target < 0.0f) {
         target = 0.0f;
     }
-    size_t len = 0;
-    char *display = entry_display_text(entry, &len);
     if (!entry_display_needs_map(entry, display, len)) {
         float best_distance = FLT_MAX;
         size_t best_display = 0;
@@ -4508,8 +4522,14 @@ void pt_widget_ime_rect(const pt_widget *widget, int *x, int *y, int *w, int *h)
         if (font) {
             float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
             float line_height = font->line_height / scale;
-            float caret = widget->padding_left + entry_caret_offset(widget, font, scale) -
-                          widget->scroll_x;
+            float area_w = pt_max_float(0.0f, widget->width - widget->padding_left -
+                                                  widget->padding_right);
+            size_t len = 0;
+            char *display = entry_display_with_preedit(widget, &len, NULL);
+            float local = entry_line_origin(widget, font, scale, display, len, area_w) +
+                          entry_caret_offset(widget, font, scale);
+            free(display);
+            float caret = widget->padding_left + local;
             out_x = (int)lroundf(widget->x + caret);
             out_y = (int)lroundf(widget->y +
                                  (widget->height - line_height) * 0.5f);
@@ -4540,7 +4560,17 @@ void pt_widget_entry_ensure_caret_visible(pt_widget *entry, float available_widt
     if (!entry || entry->kind != pt_widget_entry || !font) {
         return;
     }
+    size_t len = 0;
+    char *display = entry_display_with_preedit(entry, &len, NULL);
+    pt_bidi_base base = entry_display_base(entry, display, len);
     float caret = entry_caret_offset(entry, font, scale);
+    if (base == pt_bidi_base_rtl) {
+        /* scroll_x counts from the paragraph anchor, which for RTL is the
+         * visual right edge: turn the visual-left caret into a distance from
+         * that edge so the same window arithmetic applies. */
+        caret = pt_font_measure_bidi(font, display, len, base) / scale - caret;
+    }
+    free(display);
     float left = entry->scroll_x;
     float right = left + pt_max_float(1.0f, available_width);
     if (caret < left) {
