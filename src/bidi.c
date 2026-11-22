@@ -83,13 +83,11 @@ static bool pt_bidi_byte_to_codepoint(const size_t *offsets, size_t codepoint_co
     return false;
 }
 
-bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
-                               pt_bidi_paragraph **out) {
+static bool pt_bidi_paragraph_create(const char *text, size_t len, SBLevel sb_base,
+                                     uint8_t empty_base, pt_bidi_paragraph **out) {
     if (!out) return false;
     *out = NULL;
     if (!text && len != 0) return false;
-    if (base != pt_bidi_base_auto && base != pt_bidi_base_ltr && base != pt_bidi_base_rtl)
-        return false;
     if (len > SIZE_MAX / sizeof(uint32_t) - 1 || len > SIZE_MAX / sizeof(size_t) - 1)
         return false;
 
@@ -102,7 +100,7 @@ bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
     paragraph->codepoint_count = 0;
     paragraph->codepoint_length = 0;
     paragraph->length = 0;
-    paragraph->base_level = base == pt_bidi_base_rtl ? 1 : 0;
+    paragraph->base_level = empty_base;
 
     if (len == 0) {
         *out = paragraph;
@@ -146,7 +144,7 @@ bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
     }
 
     paragraph->paragraph = SBAlgorithmCreateParagraph(paragraph->algorithm, 0, (SBUInteger)count,
-                                                     pt_bidi_sb_base_level(base));
+                                                     sb_base);
     if (!paragraph->paragraph) {
         pt_bidi_paragraph_dispose(paragraph);
         return false;
@@ -166,6 +164,21 @@ bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
 
 void pt_bidi_paragraph_free(pt_bidi_paragraph *paragraph) {
     if (paragraph) pt_bidi_paragraph_dispose(paragraph);
+}
+
+bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
+                               pt_bidi_paragraph **out) {
+    if (base != pt_bidi_base_auto && base != pt_bidi_base_ltr && base != pt_bidi_base_rtl)
+        return false;
+    return pt_bidi_paragraph_create(text, len, pt_bidi_sb_base_level(base),
+                                    base == pt_bidi_base_rtl ? 1 : 0, out);
+}
+
+bool pt_bidi_paragraph_analyze_default(const char *text, size_t len, bool rtl_default,
+                                       pt_bidi_paragraph **out) {
+    return pt_bidi_paragraph_create(text, len,
+                                    rtl_default ? SBLevelDefaultRTL : SBLevelDefaultLTR,
+                                    rtl_default ? 1 : 0, out);
 }
 
 uint8_t pt_bidi_paragraph_base_level(const pt_bidi_paragraph *paragraph) {

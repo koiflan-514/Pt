@@ -4,9 +4,10 @@
  * Licensed under the Apache License, Version 2.0.
  *
  * Covers the explicit storage contract, the widget -> ancestor -> window ->
- * application resolution chain, P2/P3 first-strong detection (including
- * isolates), the neutral-only UI fallback, invalid-value rejection and the
- * layout/repaint invalidation marks. No visual reordering is involved.
+ * application resolution chain, auto P2/P3 resolution through the vendored
+ * engine (including isolates and neutral/empty UI fallback), invalid-value
+ * rejection and the layout/repaint invalidation marks. No visual reordering is
+ * involved.
  */
 
 #include "../src/internal.h"
@@ -15,9 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define CHECK_FIRST_STRONG(literal, expected)                                        \
-    pt_check(pt_text_first_strong_direction((literal), sizeof(literal) - 1) ==       \
-             (expected))
+#define CHECK_RESOLVED(widget, literal, expected)                                       \
+    pt_check(pt_widget_resolved_text_direction((widget), (literal),                    \
+                                               sizeof(literal) - 1) == (expected))
 
 static void reset_marks(pt_window *window) {
     window->needs_layout = false;
@@ -119,49 +120,92 @@ static void check_ui_resolution(pt_app *app, pt_window *window, pt_widget *box,
     pt_widget_destroy(detached);
 }
 
-static void check_first_strong(void) {
-    /* Empty and neutral-only text has no strong character. */
-    pt_check(pt_text_first_strong_direction(NULL, 0) == pt_text_direction_auto);
-    CHECK_FIRST_STRONG("", pt_text_direction_auto);
-    CHECK_FIRST_STRONG(" \t1234!?-.,", pt_text_direction_auto);
-    CHECK_FIRST_STRONG("\xE2\x80\x8B", pt_text_direction_auto); /* ZWSP is BN */
+static void check_auto_direction(pt_widget *box, pt_widget *label) {
+    /* Reset to auto text with an LTR UI so neutral paragraphs exercise the
+       documented UI fallback. */
+    pt_widget_set_text_direction(label, pt_text_direction_auto);
+    pt_widget_set_ui_direction(box, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(label, pt_ui_direction_inherit);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+
+    /* Empty and neutral-only text has no strong character and falls back to
+       the resolved UI direction. */
+    CHECK_RESOLVED(label, "", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, " \t1234!?-.,", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, "\xE2\x80\x8B", pt_text_direction_ltr); /* ZWSP is BN */
+
+    /* The fallback follows an RTL UI direction, while a strong character still
+       wins over it. */
+    pt_widget_set_ui_direction(label, pt_ui_direction_rtl);
+    CHECK_RESOLVED(label, "1234", pt_text_direction_rtl);
+    CHECK_RESOLVED(label, "", pt_text_direction_rtl);
+    CHECK_RESOLVED(label, "\xE2\x80\x8B", pt_text_direction_rtl);
+    CHECK_RESOLVED(label, "Hello", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, "\xD7\x90\xD7\x91", pt_text_direction_rtl);
+    pt_widget_set_ui_direction(label, pt_ui_direction_inherit);
 
     /* Latin first strong, including weak digits before it. */
-    CHECK_FIRST_STRONG("Hello", pt_text_direction_ltr);
-    CHECK_FIRST_STRONG("123 abc", pt_text_direction_ltr);
-    CHECK_FIRST_STRONG("_#! abc", pt_text_direction_ltr);
-    CHECK_FIRST_STRONG("\xC3\xA9t\xC3\xA9", pt_text_direction_ltr); /* été */
+    CHECK_RESOLVED(label, "Hello", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, "123 abc", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, "_#! abc", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, "\xC3\xA9t\xC3\xA9", pt_text_direction_ltr); /* été */
 
     /* Hebrew and Arabic first strong. */
-    CHECK_FIRST_STRONG("\xD7\x90\xD7\x91\xD7\x92", pt_text_direction_rtl); /* אבג */
-    CHECK_FIRST_STRONG("\xD7\x90\xD7\x91 abc", pt_text_direction_rtl);
-    CHECK_FIRST_STRONG("\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7",
-                       pt_text_direction_rtl); /* مرحبا */
-    CHECK_FIRST_STRONG("\xEF\xAD\x90", pt_text_direction_rtl); /* U+FB50 */
+    CHECK_RESOLVED(label, "\xD7\x90\xD7\x91\xD7\x92", pt_text_direction_rtl); /* אבג */
+    CHECK_RESOLVED(label, "\xD7\x90\xD7\x91 abc", pt_text_direction_rtl);
+    CHECK_RESOLVED(label, "\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7",
+                   pt_text_direction_rtl); /* مرحبا */
+    CHECK_RESOLVED(label, "\xEF\xAD\x90", pt_text_direction_rtl); /* U+FB50 */
 
     /* Weak character classes never win: ASCII digits, Arabic-Indic digits,
-       separators and punctuation all stay auto on their own. */
-    CHECK_FIRST_STRONG("\xD9\xA1\xD9\xA2\xD9\xA3",
-                       pt_text_direction_auto); /* ١٢٣ Arabic-Indic digits */
-    CHECK_FIRST_STRONG("\xD9\xA1\xD9\xA2\xD9\xA3 \xD7\x90", pt_text_direction_rtl);
+       separators and punctuation all fall back on their own. */
+    CHECK_RESOLVED(label, "\xD9\xA1\xD9\xA2\xD9\xA3",
+                   pt_text_direction_ltr); /* ١٢٣ Arabic-Indic digits */
+    CHECK_RESOLVED(label, "\xD9\xA1\xD9\xA2\xD9\xA3 \xD7\x90", pt_text_direction_rtl);
 
     /* Isolates: their contents are skipped, and unbalanced initiators hide the
        rest of the paragraph. */
-    CHECK_FIRST_STRONG("\xE2\x81\xA7\xD7\x90\xD7\x91\xD7\x92\xE2\x81\xA9 abc",
-                       pt_text_direction_ltr); /* RLI Hebrew PDI " abc" */
-    CHECK_FIRST_STRONG("\xE2\x81\xA7\xD7\x90\xD7\x91\xD7\x92\xE2\x81\xA9",
-                       pt_text_direction_auto); /* RLI Hebrew PDI only */
-    CHECK_FIRST_STRONG("\xE2\x81\xA8\xD7\x90\xE2\x81\xA6\xD7\x91\xE2\x81\xA9"
-                       "\xE2\x81\xA9 abc",
-                       pt_text_direction_ltr); /* nested FSI/LRI/PDI/PDI */
-    CHECK_FIRST_STRONG("\xE2\x81\xA6\xD7\x90",
-                       pt_text_direction_auto); /* unclosed LRI hides Hebrew */
+    CHECK_RESOLVED(label, "\xE2\x81\xA7\xD7\x90\xD7\x91\xD7\x92\xE2\x81\xA9 abc",
+                   pt_text_direction_ltr); /* RLI Hebrew PDI " abc" */
+    CHECK_RESOLVED(label, "\xE2\x81\xA8\xD7\x90\xE2\x81\xA6\xD7\x91\xE2\x81\xA9"
+                           "\xE2\x81\xA9 abc",
+                   pt_text_direction_ltr); /* nested FSI/LRI/PDI/PDI */
+
+    /* Isolate-only text has no strong character outside the isolate, so it
+       falls back to the resolved UI direction. */
+    pt_widget_set_ui_direction(label, pt_ui_direction_rtl);
+    CHECK_RESOLVED(label, "\xE2\x81\xA7\xD7\x90\xD7\x91\xD7\x92\xE2\x81\xA9",
+                   pt_text_direction_rtl); /* RLI Hebrew PDI only */
+    CHECK_RESOLVED(label, "\xE2\x81\xA6\xD7\x90",
+                   pt_text_direction_rtl); /* unclosed LRI hides Hebrew */
+    pt_widget_set_ui_direction(label, pt_ui_direction_inherit);
 
     /* Invalid UTF-8 is skipped (decoded as U+FFFD) rather than crashing. */
-    CHECK_FIRST_STRONG("\xFF\xD7\x90", pt_text_direction_rtl);
+    CHECK_RESOLVED(label, "\xFF\xD7\x90", pt_text_direction_rtl);
 
     /* Combining marks alone are not strong; the Latin base before them is. */
-    CHECK_FIRST_STRONG("a\xCC\x81", pt_text_direction_ltr);
+    CHECK_RESOLVED(label, "a\xCC\x81", pt_text_direction_ltr);
+
+    /* Review counterexamples against the engine's Unicode data. These are the
+       cases a hand-written strong-range table got wrong; the engine is now the
+       single source of truth for P2/P3. */
+    CHECK_RESOLVED(label, "\xE4\xBD\xA0\xE5\xA5\xBD", pt_text_direction_ltr); /* 你好 L */
+    CHECK_RESOLVED(label, "\xD4\xB1\xD7\x90",
+                   pt_text_direction_ltr); /* U+0531 Armenian L, then Hebrew R */
+    CHECK_RESOLVED(label, "\xE0\xB8\xAA\xE0\xB8\xA7\xE0\xB8\xB1\xE0\xB8\xAA",
+                   pt_text_direction_ltr); /* สวัส Thai L */
+    CHECK_RESOLVED(label, "\xE0\xA4\xB9\xE0\xA4\xBF",
+                   pt_text_direction_ltr); /* हि Devanagari L */
+    CHECK_RESOLVED(label, "\xD8\x9F" "abc", pt_text_direction_rtl); /* U+061F AL */
+    CHECK_RESOLVED(label, "\xD8\x9C" "abc", pt_text_direction_rtl); /* U+061C ALM AL */
+    CHECK_RESOLVED(label, "\xD6\xB0" "abc", pt_text_direction_ltr); /* U+05B0 NSM */
+    CHECK_RESOLVED(label, "\xEF\xB4\xBE" "abc", pt_text_direction_ltr); /* U+FD3E ON */
+    CHECK_RESOLVED(label, "\xE0\xA3\xA2" "abc", pt_text_direction_ltr); /* U+08E2 AN */
+
+    /* Paragraph semantics: only the first paragraph selects the base, both for
+       a following newline and a following paragraph separator. */
+    CHECK_RESOLVED(label, "\xD7\x90\nabc", pt_text_direction_rtl);
+    CHECK_RESOLVED(label, "abc\n\xD7\x90", pt_text_direction_ltr);
 }
 
 static void check_text_resolution(pt_app *app, pt_window *window, pt_widget *box,
@@ -293,7 +337,7 @@ int main(void) {
         check_default_getters(app, window, label);
         check_explicit_storage(app, window, label);
         check_ui_resolution(app, window, box, label);
-        check_first_strong();
+        check_auto_direction(box, label);
         check_text_resolution(app, window, box, label);
         check_invalidation(app, window, box, label);
         check_text_unchanged(label);

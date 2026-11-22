@@ -1043,16 +1043,13 @@ pt_app *pt_widget_app(const pt_widget *widget);
 /* ---------- direction properties (since 2.0) ---------- */
 
 /* Resolves the explicit values through widget -> nearest ancestor -> window ->
- * application -> LTR. The text helper also runs P2/P3 first-strong detection
- * when the inherited value is auto; a neutral-only paragraph falls back to the
- * resolved UI direction. Both are side-effect free and never look at layout. */
+ * application -> LTR. Text auto resolution runs UBA P2/P3 through the vendored
+ * engine (first paragraph only) and falls back to the resolved UI direction
+ * when the paragraph is empty or has no strong character. Both are side-effect
+ * free and never look at layout. */
 pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget);
 pt_text_direction pt_widget_resolved_text_direction(const pt_widget *widget,
                                                     const char *text, size_t length);
-/* P2/P3 over one paragraph: R/AL -> RTL, L -> LTR, no strong character ->
- * auto. Isolate contents are skipped. Exposed to tests and the W2 bidi pass,
- * which cross-validates it against SheenBidi. */
-pt_text_direction pt_text_first_strong_direction(const char *text, size_t length);
 /* Liveness check usable after a user callback that may have destroyed widget:
  * it scans the window's live trees (root and overlay panels) instead of
  * dereferencing widget. A NULL window means "not attached". */
@@ -1857,6 +1854,12 @@ typedef struct pt_bidi_paragraph pt_bidi_paragraph;
  * requested direction. */
 bool pt_bidi_paragraph_analyze(const char *text, size_t len, pt_bidi_base base,
                                pt_bidi_paragraph **out);
+/* Auto P2/P3 analysis with an explicit P3 default when no strong character is
+ * found. Explicit pt_bidi_base_ltr/_rtl bypass P2/P3, so this is how direction
+ * resolution tells "no strong character" apart from a leading L: analyse with
+ * an LTR default first, then with an RTL default, and compare the base levels. */
+bool pt_bidi_paragraph_analyze_default(const char *text, size_t len, bool rtl_default,
+                                       pt_bidi_paragraph **out);
 void pt_bidi_paragraph_free(pt_bidi_paragraph *paragraph);
 uint8_t pt_bidi_paragraph_base_level(const pt_bidi_paragraph *paragraph);
 size_t pt_bidi_paragraph_length(const pt_bidi_paragraph *paragraph);
@@ -1868,7 +1871,9 @@ bool pt_bidi_line_create(const pt_bidi_paragraph *paragraph, size_t offset, size
                          pt_bidi_line *out);
 void pt_bidi_line_free(pt_bidi_line *line);
 
-/* Resolved level of the byte at `byte_offset`, or -1 when outside the line. */
+/* Resolved level of the byte at `byte_offset`, or -1 when outside the line.
+ * Removed control bytes still return the level of their run, so callers must
+ * check pt_bidi_is_removed before painting or measuring them. */
 int pt_bidi_line_level_at(const pt_bidi_line *line, size_t byte_offset);
 
 /* True for the X9 controls removed by the bidi algorithm (BN, LRE, RLE, LRO,
