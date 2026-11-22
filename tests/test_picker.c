@@ -1425,6 +1425,69 @@ static void test_color_limits_and_teardown(pt_app *app) {
     pt_check(!pt_color_picker_is_open(NULL));
 }
 
+
+/* RTL moves the spin buttons to the leading (left) edge and mirrors the
+ * calendar header so Previous takes the right-hand slot. */
+static void test_picker_rtl(pt_app *app) {
+    picker_fixture fx;
+    fixture_open(&fx, app);
+    pt_widget *root = pt_window_root(fx.window);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *number = pt_number_picker_create(root);
+    pt_widget_set_width(number, 220.0f);
+    pt_check(number != NULL);
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_picker *number_state = picker_of(number);
+    pt_check(number_state && number_state->up && number_state->down);
+    if (number_state && number_state->up && number_state->down) {
+        pt_rect host = bounds_of(number);
+        pt_rect up = bounds_of(number_state->up);
+        pt_rect down = bounds_of(number_state->down);
+        pt_rect field = bounds_of(number_state->field);
+        float inner_x = host.x + 12.0f;
+        float inner_w = host.w - 24.0f;
+        pt_check_near(up.x, inner_x, 0.01);
+        pt_check_near(down.x, inner_x, 0.01);
+        pt_check_near(field.x, inner_x + 44.0, 0.01);
+        pt_check_near(field.w, inner_w - 44.0, 0.01);
+        /* The buttons still step the value in their logical direction. */
+        click_at(fx.window, up.x + up.w * 0.5f, up.y + up.h * 0.5f);
+        pt_check_near(pt_number_picker_get_value(number), 1.0, 1e-9);
+    }
+
+    pt_widget *picker = pt_date_picker_create(root);
+    pt_widget_set_width(picker, 260.0f);
+    pt_check(picker != NULL);
+    pt_check(pt_date_picker_set_date(picker, (pt_date){2026, 11, 22}));
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_check(pt_widget_focus(field_of(picker)));
+    type(fx.window, XKB_KEY_F4, NULL);
+    pt_check(pt_date_picker_is_open(picker));
+    /* The popup lives in its own surface; paint it before reading geometry. */
+    pt_check(pt_window_paint(fx.window, fx.canvas));
+    pt_picker *state = picker_of(picker);
+    pt_check(state && state->content);
+    if (state && state->content) {
+        pt_widget *previous = find_named(state->content, "Previous month");
+        pt_widget *next = find_named(state->content, "Next month");
+        pt_check(previous && next);
+        if (previous && next) {
+            /* The header row mirrors: the first child sits on the right. */
+            pt_check(bounds_of(previous).x > bounds_of(next).x);
+            pt_check(previous->icon == pt_icon_chevron_right);
+            pt_check(next->icon == pt_icon_chevron_left);
+            pt_rect previous_bounds = bounds_of(previous);
+            click_at(fx.window, previous_bounds.x + previous_bounds.w * 0.5f,
+                     previous_bounds.y + previous_bounds.h * 0.5f);
+            pt_check(state->view_month == 10u);
+            pt_check(find_named(state->content, "October 2026") != NULL);
+        }
+    }
+
+    fixture_close(&fx);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.picker");
@@ -1448,6 +1511,7 @@ int main(void) {
     test_color_values();
     test_color_keyboard_and_pointer(app);
     test_color_limits_and_teardown(app);
+    test_picker_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("picker");
 }

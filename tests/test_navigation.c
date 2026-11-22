@@ -323,6 +323,67 @@ static void test_sidebar(pt_app *app) {
     pt_window_free(window);
 }
 
+
+/* RTL puts the first tab against the right edge and flips the strip arrows so
+ * Left moves to the next tab. */
+static void test_tabs_sidebar_rtl(pt_app *app) {
+    pt_window *window = pt_window_create(app, "nav-rtl", 520, 360);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *tabs = pt_tabs_create(root);
+    pt_check(tabs != NULL);
+    pt_widget_set_align_self(tabs, pt_align_start);
+    pt_widget_set_width(tabs, 380.0f);
+    pt_widget_set_height(tabs, 240.0f);
+    pt_tabs_add_page(tabs, "Overview");
+    pt_tabs_add_page(tabs, "Activity");
+    pt_tabs_add_page(tabs, "Preferences");
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 360, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+
+    pt_tabs_state *state = tabs->extra;
+    pt_check(state != NULL);
+    if (state && state->count == 3) {
+        for (uint32_t i = 1; i < state->count; ++i) {
+            pt_check(state->tab_x[i] < state->tab_x[i - 1]);
+        }
+        float inner_right = bounds_of(tabs).x + bounds_of(tabs).w - 4.0f;
+        pt_check_near(state->tab_x[0] + state->tab_width[0], inner_right, 0.01);
+    }
+
+    /* With the strip mirrored, Left advances and Right retreats. */
+    pt_tabs_set_active(tabs, 0);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(pt_tabs_get_active(tabs) == 1);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(pt_tabs_get_active(tabs) == 2);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(pt_tabs_get_active(tabs) == 1);
+
+    /* A sidebar item hugs the right edge in RTL. */
+    pt_widget *sidebar = pt_sidebar_create(root);
+    pt_check(sidebar != NULL);
+    pt_widget_set_align_self(sidebar, pt_align_start);
+    pt_widget *home = pt_sidebar_add_item(sidebar, pt_icon_home, "Home");
+    pt_widget *docs = pt_sidebar_add_item(sidebar, pt_icon_document, "Documents");
+    pt_check(home && docs);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect sidebar_rect = bounds_of(sidebar);
+    pt_check_near(bounds_of(home).x + bounds_of(home).w,
+                  sidebar_rect.x + sidebar_rect.w - 10.0, 0.01);
+    pt_check_near(bounds_of(docs).w, sidebar_rect.w - 20.0, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.navigation");
@@ -333,6 +394,7 @@ int main(void) {
     test_icons(app);
     test_tabs(app);
     test_sidebar(app);
+    test_tabs_sidebar_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("navigation");
 }

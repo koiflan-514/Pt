@@ -510,9 +510,19 @@ static bool picker_ensure_popup(pt_widget *host) {
     if (!content) {
         return false;
     }
+    /* The popup lives in its own surface, so it cannot inherit the shell's
+     * direction through the tree; the owner's resolved direction carries over
+     * so rows inside the calendar mirror with the rest of the shell. */
+    content->ui_direction = (uint8_t)pt_widget_resolved_ui_direction(host);
     pt_popup *popup = pt_popup_create(window, content);
     if (!popup) {
         return false;
+    }
+    /* The popup surface does not hang off the shell's tree, so its panel carries
+     * the resolved direction too: the content inherits through the panel. */
+    if (popup->overlay.panel) {
+        popup->overlay.panel->ui_direction =
+            (uint8_t)pt_widget_resolved_ui_direction(host);
     }
     picker->popup = popup;
     picker->window = window;
