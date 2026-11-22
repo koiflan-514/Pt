@@ -1,8 +1,10 @@
 # Release process
 
 Pt follows semantic versioning. The shared object carries SONAME `libpt.so.1`
-from 1.0.0 onward; the 0.x series used `libpt.so.0`. The pkg-config version
-tracks `pt_version_string`.
+from 1.0.0 onward; the 0.x series used `libpt.so.0`. From 2.0 the Makefile tracks
+`ABI_MAJOR` separately from `VERSION`, so a release that only adds declarations
+and corrects behavior may advance the version without bumping the SONAME. The
+pkg-config version tracks `pt_version_string`.
 
 ## Version checklist
 
@@ -37,7 +39,7 @@ Before tagging a release:
 
 - a clean `werror=1` build of the library, C/C++ examples and every C test;
 - `make check` (C suites, C++/Python/Java binding suites, exported-symbol and
-  API-baseline audit, 556/556 binding parity, the 0.6-0.10 surface audits,
+  API-baseline audit, 564/564 binding parity, the 0.6-0.10 surface audits,
   generated reference check);
 - `make perf-check` (dense, startup, data-view and guard benchmarks);
 - `tools/install-check.sh` (staged install, relocatable pkg-config, SONAME,
@@ -1155,6 +1157,178 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 `859233f`, and `make dist` on the tagged tree reproduces its own digest exactly
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
+
+## 2.0.0 validation record (2026-11-23, draft — pending final gate run)
+
+Environment: the integration tree `cf520a0` on `m22/integration` (W0-W4, W5a,
+W6a and the W7prep LTR gate) plus the `m22/w6b-docs` documentation branch on the
+reference machine (CachyOS, Wayland, niri 26.04) with GCC 16.2.1, Python 3.14
+and OpenJDK 25.
+
+**This record is a draft.** The scope, behaviour changes, known limits and the
+already-measured numbers are complete; every row that says *pending final gate
+run* is deliberately blank until W5b lands and W7 runs the full gate. Do not
+publish or tag from this page until those markers are replaced.
+
+### Scope
+
+2.0.0 is the first structural release since 1.0 and the RTL/bidirectional-text
+milestone. It adds **8 public functions and 2 enums (6 values)** and the
+baseline becomes **564 functions / 924 entries** (564 `func`, 288 `enum`, 43
+`callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1 `type`), with 0 removed and
+0 changed against 1.4.0. Every declaration carries a since
+marker (412 × 1.0, 36 × 1.1, 106 × 1.2, 2 × 1.3, 8 × 2.0). SONAME stays
+`libpt.so.1`: the Makefile tracks `ABI_MAJOR := 1` separately from `VERSION`,
+because 2.0 only adds declarations and corrects bidi rendering.
+
+- **Engine.** Vendored SheenBidi v3.0.0 (Apache-2.0, tag `cfe430e`, UCD 17.0.0)
+  under `third_party/sheenbidi`, unity-compiled with isolated warnings and
+  hidden `SB*` symbols. The adapter decodes UTF-8 to UTF-32 with a byte-offset
+  table because the upstream UTF-8 path has an L1 line-end whitespace defect;
+  `PROVENANCE.md` records the vendoring and the upgrade policy, and
+  [THIRD_PARTY.md](../THIRD_PARTY.md) records the license.
+- **Conformance.** Unicode 18.0.0 `BidiTest.txt` + `BidiCharacterTest.txt`
+  (Unicode License v3) are vendored gzipped under `tests/data/bidi`;
+  `test_bidi_conformance` runs 770,241 + 91,707 cases with 0 failures in
+  `make check` (about 0.5 s).
+- **Direction API.** `pt_ui_direction` (`inherit`/`ltr`/`rtl`) and
+  `pt_text_direction` (`auto`/`ltr`/`rtl`), plus app, window and widget UI
+  setters/getters and widget text setters/getters. Resolution is widget →
+  nearest explicit ancestor → window → app → LTR; auto follows UBA P2/P3 per
+  paragraph and falls back to the resolved UI direction for neutral-only text.
+  Getters return the explicit value; both zero values inherit.
+- **Rendering.** UBA levels and reorder, X9 controls kept for shaping but
+  skipped when painted, single-line and wrapped/text-area visual order,
+  per-paragraph base, L1 line-end whitespace, ellipsis on the visual end,
+  HarfBuzz bracket mirroring with no pre-mirroring, Arabic joining,
+  shape-cache direction keys and the data-driven LTR fast path.
+- **Editing.** Visual caret movement by default (cluster edges, Home/End visual
+  line ends, Ctrl+Home/End document logical, Shift logical anchor,
+  Backspace/Delete logical), soft-wrap affinity, multi-rectangle selection,
+  visual IME rectangles, and password bullets from the stored text direction.
+  The logical-movement escape hatch is the existing window key callback; there
+  is no ninth API.
+- **UI mirroring.** Flex/wrap/grid/scroll geometry, tabs, sidebar, picker
+  popups, client-side decoration, overlay and menu chrome; table/tree columns
+  stay logical through an internal opt-out; scrollbar on the RTL left; tree
+  chevron on the right; RTL entry right-anchored; padding and margin physical.
+- **Accessibility.** Object-level `direction` attribute plus
+  `Text.GetAttributes`/`GetDefaultAttributes` direction with a scalar range;
+  passwords report direction but no character; the C getter keeps byte offsets
+  and only the D-Bus `Text` interface uses scalar offsets.
+- **LTR protection.** The 17 pure-LTR snapshots in `test_visuals` are unchanged
+  and `tools/ltr-compat.sh` compares 10 LTR scenes between 1.4.0 and this tree,
+  requiring 10/10 `SAME` with no checked-in golden hash.
+- **Examples.** `examples/c/rtl_gallery.c` plus
+  `examples/cpp/rtl_direction.cpp`, `examples/python/rtl_direction.py` and
+  `examples/java/RtlDirection.java`, each wired to a `run-*` target.
+
+### Behaviour changes
+
+The ABI delta is additive, but these observable behaviours changed and are the
+section an upgrading application must read:
+
+- **RTL text renders correctly instead of heuristically.** Mixed-direction
+  lines, brackets, numbers and isolates now follow the UBA. An application that
+  already displayed RTL text sees different pixels; this is the rendering
+  correction the major marks. An application that sets nothing keeps the 1.4
+  pixels, which the two LTR gates enforce.
+- **Direction properties are new and default to inherit.** `pt_ui_direction`
+  and `pt_text_direction` are zero-valued in existing code; setters store the
+  explicit value, and `auto` resolves per paragraph. Widgets that never set a
+  direction resolve to LTR exactly as before.
+- **Start/end alignment becomes effective in RTL.** `pt_text_align_start` and
+  `pt_align_start`/`pt_justify_start` now resolve against the paragraph or UI
+  direction rather than always left; a pure LTR widget resolves them to left as
+  before. A multi-paragraph text area can therefore align opposite paragraphs
+  in opposite directions while the caret and selection remain one logical
+  range.
+- **An RTL entry is right-anchored.** At `scroll_x = 0` it shows the logical
+  start of its text at the visual right, and typing or scrolling moves text
+  leftwards. The 1.4 left-anchored behavior for RTL content is the intentional
+  correction (W5b); it does not affect LTR entries.
+- **Caret movement is visual by default.** Left/Right move to the visually
+  adjacent cluster boundary, which can raise or lower the logical byte offset
+  inside an RTL run. Home/End are visual line ends, Ctrl+Home/End are document
+  logical, Shift keeps a logical anchor, and Backspace/Delete stay logical.
+  Applications that need logical arrows intercept the key in the existing
+  window callback.
+- **Table and tree columns keep logical order** when the UI direction is RTL;
+  only the horizontal start edge changes. Padding and margin remain physical by
+  decision, not by omission.
+- **The earlier multi-touch focus correction is 1.4 history and is not repeated
+  here.** This record lists it only to avoid implying a second change.
+- **No existing declaration, enum value or offset unit moved.** Public text and
+  selection offsets stay UTF-8 bytes; the C accessibility getter stays bytes;
+  the D-Bus `Text` interface stays scalar.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass on the documentation branch: `include/pt/base.h`, `Makefile` `VERSION`, the README status line and the generated reference say 2.0.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| API baseline | pass: `api/pt.api` reads 564 functions / 924 entries; the reference names all 564 |
+| Since audit | pass: 564/564 declarations carry a since marker (412/36/106/2/8), zero missing |
+| Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| Direction, bidi and rich-text suites | pass on `cf520a0`: `test_direction`, `test_bidi`, `test_bidi_conformance`, `test_rich_text`, plus the RTL cases in `test_text_area`, `test_visuals`, `test_table`, `test_tree` and `test_navigation` |
+| LTR byte stability | pass: 17 pure-LTR snapshots unchanged; `tools/ltr-compat.sh` reports 10/10 `SAME` (same-machine comparison, no checked-in hash) |
+| Binding parity | pass: 564/564 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted |
+| Bilingual documentation | pass: 9 public guides, including the rewritten `rtl.md`, with byte-identical code blocks |
+| RTL examples | pass: C/C++/Python/Java examples build under `werror=1`, exit 0 with `PT_HEADLESS=1`, and exit 124 under the nested niri smoke timeout |
+| `make check` / `make check-bindings` | pending final gate run (W7), after W5b lands |
+| `make perf-check` with bidi profiles | pending final gate run (W7) |
+| Live RTL caret/selection and the existing live suites | pending final gate run (W7) |
+| Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pending final gate run (W7) |
+| ABI diff against 1.4.0 | expected 556 → 564 exported `pt_*` symbols, 0 removed, 0 changed, 8 added, SONAME unchanged; symbol-level run pending the final gate because libabigail is unavailable on the reference machine |
+| `tools/release-check.sh --full` | pending final gate run; the two README failures of the integration checkpoint are closed by this branch once the full report is rerun |
+
+### ABI statement
+
+2.0.0 adds eight declarations and two enums and removes or changes nothing. The
+release major is not the ABI major: `ABI_MAJOR := 1` keeps SONAME
+`libpt.so.1`, and [api-policy.md](api-policy.md) records that a
+behavior-contract correction with additive declarations may advance the version
+without a SONAME bump. The review artifact expected on the final tree is
+`556 → 564` exported `pt_*` symbols with 0 removed, 0 changed and 8 added, no
+`SB_*` exports and no type changes among the common symbols. `abidiff`
+(libabigail) is still unavailable on the reference machine, so the release-time
+run is symbol-level with `nm -D --defined-only`; a type-level run is recommended
+where libabigail exists.
+
+### Known issues
+
+- **W5b is not in this tree.** Entry right-anchoring, the RTL scrollbar/tree
+  chevron paint side and the menu first-open anchor warm-up land in W5b. The
+  final gate must backfill its commit and record whether the menu anchor needs
+  a documented caveat; this draft does not claim it fixed.
+- **Table horizontal scrolling needs the scrollbar or keyboard.** The tested
+  Wayland compositors expose no horizontal wheel axis; this is a platform limit
+  recorded in [rtl.md](rtl.md), not a table defect.
+- **Shift+arrow across a soft wrap in RTL stays an in-line visual move**, and a
+  multi-line mapped selection collapses toward its logical edge at the mapped
+  boundary while the painted rectangles stay correct.
+- **`pt_text_span` has no direction field** and stays frozen; paragraph
+  direction comes from the widget or Unicode isolate controls.
+- **Missing Arabic/Hebrew glyphs are fallback/tofu**, reported by
+  `pt_app_font_uncovered_count`, not a hard configuration error. The examples
+  use whatever covering font the machine has; Noto Sans Arabic/Hebrew or DejaVu
+  Sans is recommended.
+- **Bidi control characters are not sanitized automatically.** Untrusted text
+  can reorder what a reader sees; an application that accepts it should strip
+  or display the controls. A future optional API may expose the inventory.
+- The 1.4 known issues that are unchanged still apply: KWin+fcitx5 v2 and
+  Mutter+IBus v2 live composition are unrecorded, the SVG subset is honest, the
+  toplevel-icon path and binding raw dispatch have no physical-seat run, and the
+  pickers are locale-independent by design.
+
+### Gate transcript
+
+This draft has no final gate transcript. On W7, replace this paragraph with
+the `tools/ci.sh` transcript, the live-suite results, the bidi performance
+numbers, the final parity counts and the ABI symbol diff, and remove every
+*pending final gate run* marker above. The 2.0.0 tag is created from that frozen
+tree; the two human open items remain the freeze commit/tag and the live-suite
+sign-off.
 
 ## 1.4.0 validation record (2026-11-22)
 

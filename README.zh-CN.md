@@ -6,11 +6,13 @@
 应用可以使用 C、C++、Python 或 Java 编写，面向同一套扁平 C ABI。
 这个名字是铂的化学符号：小而致密、不易反应。
 
-状态：**1.4.0**。输入线路矩阵补全与格式打磨版本：既有加载器支持 SVGZ 图标源、
-触摸/手写板/拖放输入的无头线路覆盖、多触点焦点修正，以及 niri+fcitx5 实时 IME
-组合闭环。它不新增任何公共函数、枚举或结构，因此表面仍为包含 556 个函数的 C ABI，
-由 C++/Python/Java 封装，并强制要求绑定功能对等。
-发布记录已写好，带注释的标签将在最终门禁运行后创建；参见
+状态：**2.0.0**。从右到左与双向文本版本：通过随源码附带的 SheenBidi 引擎实现
+完整的 Unicode 双向算法并达到 100% 一致性，新增八个方向函数，视觉插入符号移动
+与选择，镜像 UI 几何和界面元素，无障碍方向属性，以及逐字节的 LTR 兼容闸门。
+表面为包含 564 个函数的 C ABI，由 C++/Python/Java 封装，并强制要求绑定功能对等；
+SONAME 保持 `libpt.so.1`，因为 2.0 只新增声明并修正双向文本渲染，不破坏二进制
+接口（`ABI_MAJOR` 与 `VERSION` 分开跟踪）。
+发布记录已写好，最终门禁运行与带注释的标签随后进行；参见
 [docs/release.md](docs/release.md)。API 由经审阅的基线、生成的函数参考和
 兼容性策略共同跟踪；参见 [docs/api-reference.md](docs/api-reference.md)、
 [docs/api-policy.md](docs/api-policy.md) 和 [docs/ROADMAP.md](docs/ROADMAP.md)。
@@ -21,6 +23,9 @@
   `fractional-scale-v1` 和 `text-input-v3`，不背负 X11 或 GL 运行时包袱。
 - 保留模式控件树，以及一套扁平、不透明、便于绑定的 C ABI。
 - 清晰的 FreeType + HarfBuzz 文本，包括 CJK 字形整形和分数缩放。
+- 正确实现从右到左文本：完整的 Unicode 双向算法、带自动括号镜像的阿拉伯文和
+  希伯来文整形、镜像行、列序保持逻辑的表格、视觉插入符号移动，以及无障碍方向
+  属性——纯 LTR 界面的像素保持不变。
 - 现代令牌化设计语言：38 个语义颜色角色和 10 个几何度量，
   深邃的深色调色板与干净的浅色调色板，色调化控件表面，柔和强调色，
   焦点可见环和克制的动效，可按窗口覆盖。
@@ -48,6 +53,59 @@
 - 基于 `wl_shm` 的软件渲染：冷启动快，窗口未获焦时空闲占用不到单核的 0.3%，
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
+
+## 2.0.0 的新特性
+
+2.0.0 是 1.0 以来第一个结构性版本，也是双向文本/从右到左里程碑。它新增
+**8 个公共函数和 2 个枚举（6 个值）**，零值默认保持 LTR 行为：表面为
+**564 个函数和 924 条基线条目**，0 移除、0 变更。SONAME 保持
+`libpt.so.1`：本版本标记渲染修正和追加式 API，而不是二进制破坏，因此 Makefile
+将 `ABI_MAJOR` 与 `VERSION` 分开跟踪。带注释的标签在最终门禁运行后创建，记录见
+[release.md](docs/release.md)。
+
+- **真正的双向文本引擎。** 2.0 随源码附带 SheenBidi v3.0.0（Apache-2.0），作为
+  单个 unity 对象编译，并通过 UTF-32 适配层驱动，在码点旁保留字节偏移表。适配层
+  存在的原因是上游 UTF-8 入口存在 L1 行末空白缺陷；内部路径避开它，且不修改
+  引擎。Unicode 双向算法现在完整：显式嵌入和覆盖、隔离、弱字符和中性字符解析、
+  配对括号、隐式层级以及换行后的行级规则。
+- **100% 一致性，纳入 `make check`。** 随源码附带的 Unicode 18.0.0
+  `BidiTest.txt` 和 `BidiCharacterTest.txt` 数据（Unicode License v3，gzip 压缩）
+  运行 **770,241 + 91,707 个用例，0 失败**，耗时约 0.5 秒。`THIRD_PARTY.md`
+  记录引擎标签、摘要、许可证和升级政策。
+- **方向 API 不引入新的编辑模型。** `pt_ui_direction`（`inherit`/`ltr`/`rtl`）
+  和 `pt_text_direction`（`auto`/`ltr`/`rtl`）加上应用、窗口和控件的 UI
+  setter/getter 以及控件的文本 setter/getter，共八个函数。解析顺序为控件 →
+  最近显式祖先 → 窗口 → 应用 → LTR；自动按段落遵循 UBA P2/P3，对仅含中性字符的
+  文本回退到解析后的 UI 方向。getter 返回显式值，`inherit`/`auto` 是零值，
+  因此零初始化的控件与 1.x 行为一致。
+- **默认视觉编辑。** 左/右方向键移动到视觉相邻的 cluster 边界（在 RTL 文本段内
+  可能增大或减小逻辑偏移），Home/End 前往视觉行末，Ctrl+Home/End 保持文档逻辑
+  首尾，Shift 保持逻辑锚点，Backspace/Delete 保持逻辑语义。软换行边界携带插入
+  符号亲和性，选择为每个视觉文本段绘制一个矩形，输入法矩形是视觉的，密码圆点
+  根据存储文本派生方向。需要逻辑移动的应用在现有窗口按键回调中拦截按键；没有
+  第九个 API。
+- **镜像 UI 几何与界面元素。** flex、换行、网格和滚动几何镜像；标签页、侧边栏、
+  选择器弹出层、客户端装饰、覆盖层和菜单根据解析后的 UI 方向放置界面元素。
+  滚动条移到 RTL 左侧，树箭头移到右侧。表格和树**列序保持逻辑**（内部退出
+  选项），RTL 输入框右锚定（`scroll_x = 0` 时在视觉右端显示逻辑开头），
+  内边距/外边距保持物理方向，没有 start/end API。
+- **无障碍方向。** 每个无障碍对象把解析后的 UI 方向发布为 `direction` 属性，
+  文本对象通过 `Text.GetAttributes` 和 `Text.GetDefaultAttributes` 以标量范围
+  发布段落方向。C 层 `pt_widget_get_a11y_text` 保持**字节**偏移，而 D-Bus
+  `Text` 接口使用**标量**偏移；密码报告方向但不报告字符。旧措辞把所有无障碍
+  getter 称为标量，已更正。
+- **LTR 由两道硬门保护。** `test_visuals` 中 17 张纯 LTR PNG 快照与 1.4 逐字节
+  一致，`tools/ltr-compat.sh` 在同一台机器上构建 1.4.0 和 2.0 树，并在十个 LTR
+  场景中报告 **10/10 `SAME`**。不签入 golden hash，因为字体光栅化在不同机器上
+  有差异；同时构建两个版本可让该因素保持恒定。
+- **诚实的性能措辞。** LTR 快速路径根据引擎的 Unicode 双向类型分类文本（任何
+  R/AL 字符或双向格式控制字符都需要 UBA），并保留旧的单文本段路径；对
+  292,531 个已分配码点的扫描发现 0 处失配。双向分析每次重建为 O(n)，分配受行
+  长度限制，整形缓存以方向为键。旧的“无逐帧分配”承诺被撤回，因为 1.4 本就每次
+  绘制都重建行布局；契约现在是**每次重建有界**。
+- **四种语言的示例。** `examples/c/rtl_gallery.c` 展示阿拉伯文/希伯来文/拉丁文
+  混排标签、RTL 输入框和文本区域、镜像容器、嵌套 LTR 面板和方向切换；
+  C++、Python 和 Java 各有一个更小的方向切换，用于演练封装层。
 
 ## 1.4.0 的新特性
 
@@ -476,7 +534,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` 以无头方式运行，不需要合成器。它包含 C 测试套件、
 C++/Python/Java 绑定测试套件、导出符号和 API 基线审计、
-硬性的 556/556 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
+硬性的 564/564 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
 `docs/api-reference.md` 与头文件一致的检查，以及针对文本编辑、URI 解析、
 数据视图索引和损坏矩形的随机属性测试套件。
 实时 Wayland 冒烟测试不属于 `make check`。`make check-wayland`
@@ -504,16 +562,20 @@ C++/Python/Java 绑定测试套件、导出符号和 API 基线审计、
 | C | [accessibility.c](examples/c/accessibility.c) | `make run-a11y` |
 | C | [notes.c](examples/c/notes.c) | `make run-notes` |
 | C | [combobox.c](examples/c/combobox.c) | `make run-combobox` |
+| C | [rtl_gallery.c](examples/c/rtl_gallery.c) | `make run-rtl-gallery` |
 | C++23 | [counter.cpp](examples/cpp/counter.cpp) | `make run-counter` |
 | C++23 | [workspace.cpp](examples/cpp/workspace.cpp) | `make run-cpp-workspace` |
 | C++23 | [combobox.cpp](examples/cpp/combobox.cpp) | `make run-cpp-combobox` |
+| C++23 | [rtl_direction.cpp](examples/cpp/rtl_direction.cpp) | `make run-cpp-rtl-direction` |
 | Python | [counter.py](examples/python/counter.py) | `make run-python` |
 | Python | [notes.py](examples/python/notes.py) | `python examples/python/notes.py` |
 | Python | [workspace.py](examples/python/workspace.py) | `make run-python-workspace` |
 | Python | [combobox.py](examples/python/combobox.py) | `make run-python-combobox` |
+| Python | [rtl_direction.py](examples/python/rtl_direction.py) | `make run-python-rtl-direction` |
 | Java 25 | [HelloPt.java](examples/java/HelloPt.java) | `make run-java` |
 | Java 25 | [Workspace.java](examples/java/Workspace.java) | `make run-java-workspace` |
 | Java 25 | [Combobox.java](examples/java/Combobox.java) | `make run-java-combobox` |
+| Java 25 | [RtlDirection.java](examples/java/RtlDirection.java) | `make run-java-rtl-direction` |
 
 C 和 C++ 示例由 `make` 构建；Python 和 Java 运行目标会自动构建或定位库。
 所有示例既可原生运行，也可在无头测试环境中运行。
@@ -641,7 +703,7 @@ pkg-config --modversion pt
 - [架构](docs/zh-CN/architecture.md)
 - [主题](docs/zh-CN/theming.md)
 - [无障碍](docs/zh-CN/accessibility.md)
-- [从右到左文本计划](docs/zh-CN/rtl.md)
+- [从右到左与双向文本](docs/zh-CN/rtl.md)
 - [迁移到 1.0](docs/zh-CN/migration-1.0.md)
 - [API 兼容性策略](docs/api-policy.md)
 - [性能](docs/performance.md)
@@ -651,12 +713,12 @@ pkg-config --modversion pt
 - [工程规范](docs/standards.md)
 - [合成器与协议矩阵](docs/compositor-matrix.md)
 
-快速入门、架构、绑定、主题、无障碍、RTL 计划、迁移和比较指南提供简体中文版；
+快速入门、架构、绑定、主题、无障碍、RTL/双向文本、迁移和比较指南提供简体中文版；
 生成的 API 参考、发布记录、路线图、性能说明和政策页面保留英文。
 
-<a id="limitations-in-11"></a>
+<a id="limitations-in-20"></a>
 
-## 1.4 中的限制
+## 2.0 中的限制
 
 - 仅支持 Wayland；没有 X11、Windows 或 macOS 后端。
 - 1.x ABI 为只追加：移除需要主版本发布和 SONAME 提升。
@@ -692,9 +754,19 @@ pkg-config --modversion pt
   解码 JSON 或 URI 列表是应用的工作。触摸捏合与旋转测量前两个被跟踪的触点；
   额外触点会被跟踪，但不改变手势度量。触控笔支持取决于合成器提供的 `tablet-v2`。
 - 样式化文本段覆盖标签和文本区域字节范围内的字重、倾斜、颜色、下划线、
-  逐段字体族和逐段字号。没有双向文本段落布局，没有内联图像，
-  也没有逐段拉伸或光学对齐，文本区域仍以统一的段落几何编辑纯文本。
-  1.0 之后的设计、兼容性规则和测试义务写在 [RTL 计划](docs/zh-CN/rtl.md)中。
+  逐段字体族和逐段字号。没有内联图像、没有逐段拉伸或光学对齐，也没有逐段双向
+  文本方向：`pt_text_span` 作为纯样式保持冻结。段落方向来自控件或窗口，段落内
+  的反向短语使用 Unicode 隔离控制字符。文本区域编辑纯文本并保持一个逻辑范围，
+  而换行后的不同行可以有不同的段落基础方向。
+- 双向文本和 RTL 有限制记录在案，而不是隐藏的回退。表格需要滚动条或键盘进行
+  水平滚动，因为已测试的 Wayland 合成器不提供水平滚轮轴。在 RTL 中，Shift+
+  方向键跨软换行仍是行内视觉移动，跨多个映射行的选择会在映射边界处向逻辑边缘
+  折叠，而绘制的矩形保持正确。`pt_text_span` 没有方向字段。缺失的阿拉伯文/
+  希伯来文字形是记录在案的豆腐块，由 `pt_app_font_uncovered_count` 报告，
+  不是硬错误；请安装覆盖它们的字体，例如 Noto Sans Arabic/Hebrew 或
+  DejaVu Sans。双向控制字符可以重排显示文本（Trojan Source 一类问题），且不会
+  被自动清理；接受不可信文本的应用应自行剥离或显示它们。详情见
+  [RTL 与双向文本指南](docs/zh-CN/rtl.md)。
 - 表格列保留应用设置的宽度，这些宽度在重新绑定和行回收后仍然有效；
   列可以隐藏、通过拖动调整大小，也可以由用户重新排序。排序报告最多四个
   按优先级排列的列，单元格编辑加多行选择也已就位，

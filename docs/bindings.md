@@ -12,7 +12,8 @@ pickers. From 1.1 the extension surface is consistent across C, C++, Python and
 Java: the wrappers cover every declared name, and the parity audit treats a
 missing name as a `make check` failure rather than reporting a percentage. The
 1.2 surface shipped 554/554; 1.3 adds the two IME input-panel functions and the
-spin-button role for 556/556. The 0.10 combobox and multi-row selection surface, and
+spin-button role for 556/556. 2.0 adds the eight direction functions for
+564/564. The 0.10 combobox and multi-row selection surface, and
 the 0.9 theme, chip/skeleton, data-view editing and per-run typography surface,
 remain wrapped in full.
 
@@ -1626,16 +1627,44 @@ capability of the existing icon loaders, so `pt::icon_image::load_file`,
 `pt.IconImage.load_memory`, `Pt.icon_image_load_file` and
 `Pt.icon_image_load_memory` accept a gzip-compressed SVG with no signature,
 argument or ownership change; hicolor `.svgz` lookup likewise rides the existing
-`from_name` wrappers. The 1.3 table above is still the current extension table,
-and the wire-matrix and multi-touch work is test/runtime infrastructure that the
-bindings do not surface.
+`from_name` wrappers. The 2.0 direction table below is the current extension
+table; the wire-matrix and multi-touch work is test/runtime infrastructure that
+the bindings do not surface.
+
+## 2.0 direction surface
+
+2.0 adds eight direction functions: app, window and widget UI setters/getters
+plus widget text setters/getters. The C enums are `pt_ui_direction`
+(`inherit`/`ltr`/`rtl`) and `pt_text_direction` (`auto`/`ltr`/`rtl`); the
+zero values inherit, so no existing wrapper call changes behavior. Every wrapper
+is a plain value setter/getter, and getters return the stored explicit value
+rather than the resolved one.
+
+| C function | C++23 | Python | Java |
+| --- | --- | --- | --- |
+| `pt_app_set_ui_direction` | `app::set_ui_direction` | `App.ui_direction =` / `set_ui_direction` | `Pt.app_set_ui_direction` |
+| `pt_app_get_ui_direction` | `app::ui_direction` | `App.ui_direction` | `Pt.app_get_ui_direction` |
+| `pt_window_set_ui_direction` | `window::set_ui_direction` | `Window.ui_direction =` / `set_ui_direction` | `Pt.window_set_ui_direction` |
+| `pt_window_get_ui_direction` | `window::ui_direction` | `Window.ui_direction` | `Pt.window_get_ui_direction` |
+| `pt_widget_set_ui_direction` | `widget::set_ui_direction` | `Widget.ui_direction =` / `set_ui_direction` | `Pt.widget_set_ui_direction` |
+| `pt_widget_get_ui_direction` | `widget::ui_direction` | `Widget.ui_direction` | `Pt.widget_get_ui_direction` |
+| `pt_widget_set_text_direction` | `widget::set_text_direction` | `Widget.text_direction =` / `set_text_direction` | `Pt.widget_set_text_direction` |
+| `pt_widget_get_text_direction` | `widget::text_direction` | `Widget.text_direction` | `Pt.widget_get_text_direction` |
+
+Python exposes these as properties as well as fluent `set_*` methods, so
+`widget.ui_direction = pt.ui_direction_rtl` and
+`widget.set_text_direction(pt.text_direction_auto)` both work. Java passes the
+enum value as an `int` and returns an `int`. C++ setters return the wrapper for
+chaining, and the getters are `[[nodiscard]]`.
 
 ## Binding coverage
 
-From 1.3 every function in the public C ABI (556) is wrapped in C++, Python
-and Java, and 1.4 keeps that count unchanged: it adds no function, so parity
-stays 556/556. The 1.2 surface shipped 554/554; 1.3 added the two IME
-input-panel entry points. The parity audit is a hard `make check` gate: it scans the
+From 1.3 every function in the public C ABI was wrapped in C++, Python and
+Java. 1.4 added no function and kept 556/556. 2.0 adds the eight direction
+functions and brings the surface to **564 functions, wrapped 564/564 in every
+language with an empty allowlist**. The 1.2 surface shipped 554/554; 1.3 added
+the two IME input-panel entry points. The parity audit is a hard `make check`
+gate: it scans the
 comment-stripped binding sources for every declared function name and allows
 zero unreviewed gaps. The reviewed allowlist is empty. The 124
 functions in the 0.6 surface (one fewer than 0.9 carried, because

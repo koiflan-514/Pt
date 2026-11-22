@@ -545,3 +545,20 @@ check-ime-live: $(TEST_BIN)/ime_live_probe $(TEST_BIN)/vkbd_type
 
 check-ltr-compat:
 	$(abspath tools/ltr-compat.sh)
+
+run-rtl-gallery: $(EXAMPLES)/c/rtl_gallery
+	$(EXAMPLES)/c/rtl_gallery
+
+run-cpp-rtl-direction: $(EXAMPLES)/cpp/rtl_direction
+	$(EXAMPLES)/cpp/rtl_direction
+
+run-python-rtl-direction: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/rtl_direction.py
+
+run-java-rtl-direction: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpt.library=$(abspath $(BUILD)/libpt.so) -cp $(BUILD)/java RtlDirection
+
+.PHONY: run-rtl-gallery run-cpp-rtl-direction run-python-rtl-direction \
+	run-java-rtl-direction
