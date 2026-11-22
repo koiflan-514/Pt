@@ -212,6 +212,32 @@ static void test_controls_and_combining(void) {
     pt_check(saw_odd);
     pt_bidi_line_free(&line);
     pt_bidi_paragraph_free(paragraph);
+    paragraph = NULL;
+
+    /* Nested isolates: both isolated runs are skipped by P2 and their control
+     * bytes survive for shaping/byte maps. */
+    const char *nested = "a\xE2\x81\xA7\xE2\x81\xA6" "\xD7\x90" "\xE2\x81\xA9"
+                         "\xE2\x81\xA7" "\xD7\x91" "\xE2\x81\xA9\xE2\x81\xA9" "b";
+    len = strlen(nested);
+    pt_check(pt_bidi_text_may_reorder(nested, len));
+    pt_check(pt_bidi_paragraph_analyze(nested, len, pt_bidi_base_auto, &paragraph));
+    pt_check(pt_bidi_paragraph_base_level(paragraph) == 0);
+    pt_check(pt_bidi_line_create(paragraph, 0, len, &line));
+    pt_check(run_bytes(&line) == len);
+    pt_check(line.run_count >= 2);
+    pt_bidi_line_free(&line);
+    pt_bidi_paragraph_free(paragraph);
+    paragraph = NULL;
+
+    /* Paragraph splitting: the adapter analyses the first paragraph only, so a
+     * later Hebrew paragraph cannot flip an LTR first paragraph's base. */
+    const char *paragraphs = "abc\n\xD7\x90\xD7\x91";
+    len = strlen(paragraphs);
+    pt_check(pt_bidi_paragraph_analyze(paragraphs, len, pt_bidi_base_auto, &paragraph));
+    pt_check(pt_bidi_paragraph_base_level(paragraph) == 0);
+    pt_check(pt_bidi_paragraph_length(paragraph) <= 4);
+    pt_bidi_paragraph_free(paragraph);
+    paragraph = NULL;
 
     /* Malformed UTF-8 is decoded as faulty code points, never out of bounds. */
     const char bad[] = {'a', (char)0xFF, 'b', (char)0xC3};
