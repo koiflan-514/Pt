@@ -10,9 +10,10 @@ Status: **1.3.0**. The wire-verification and contract-completion release: an
 in-process fake compositor that replays protocol sequences headlessly, the IME
 visual completion (`preedit_hint` underlines and the input-panel requests), SVG
 icon sources through a vendored decoder, a dedicated spin-button accessibility
-role, and C++ owned-getter hardening — an append-only surface on a 556-function
-C ABI wrapped in C++/Python/Java with binding parity enforced. The release
-record is written and the annotated tag is created after the final gate run; see
+role, and C++ owned-getter hardening — an append-only surface on
+a 556-function C ABI wrapped in C++/Python/Java with binding parity enforced.
+The release record is written and the annotated tag is created after the final
+gate run; see
 [docs/release.md](docs/release.md). The API is tracked by a reviewed baseline, a
 generated function reference and a compatibility policy; see
 [docs/api-reference.md](docs/api-reference.md),
