@@ -1829,6 +1829,17 @@ void pt_window_input_touch_motion(pt_window *window, int32_t id, float x, float 
     window->touches[index].x = x;
     window->touches[index].y = y;
     if (window->touch_pinch) {
+        if (window->touch_count < 2) {
+            /* One contact lifted and ended the pinch gesture. Track the
+             * surviving contact with the emulated pointer instead of dropping
+             * its motion; the full release still clears the pinch state. */
+            if (window->touch_count == 1) {
+                window->pointer_x = window->touches[0].x;
+                window->pointer_y = window->touches[0].y;
+                window->needs_draw = true;
+            }
+            return;
+        }
         touch_update_pinch(window);
         return;
     }
@@ -1837,30 +1848,31 @@ void pt_window_input_touch_motion(pt_window *window, int32_t id, float x, float 
     }
 }
 
-void pt_window_input_touch_up(pt_window *window, int32_t id, uint32_t time) {
+uint32_t pt_window_input_touch_up(pt_window *window, int32_t id, uint32_t time) {
     if (!window) {
-        return;
+        return 0;
     }
     int index = touch_index_of(window, id);
     if (index < 0) {
-        return;
+        return window->touch_count;
     }
     bool primary = window->touch_id == id;
     touch_remove_at(window, (uint32_t)index);
+    uint32_t remaining = window->touch_count;
     if (window->touch_pinch) {
-        if (window->touch_gesture && window->touch_count < 2) {
+        if (window->touch_gesture && remaining < 2) {
             pt_window_gesture_input(window, pt_gesture_kind_pinch, pt_gesture_phase_end,
                                     window->gesture_fingers, 0.0f, 0.0f, 1.0f, 0.0f);
             window->touch_gesture = false;
         }
-        if (window->touch_count == 0) {
+        if (remaining == 0) {
             window->touch_pinch = false;
             window->touch_active = false;
             window->touch_id = -1;
             pt_window_input_pointer_leave(window);
         }
         window->needs_draw = true;
-        return;
+        return remaining;
     }
     if (primary) {
         float x = window->pointer_x;
@@ -1870,6 +1882,7 @@ void pt_window_input_touch_up(pt_window *window, int32_t id, uint32_t time) {
         window->touch_id = -1;
         pt_window_input_pointer_leave(window);
     }
+    return remaining;
 }
 
 void pt_window_input_touch_cancel(pt_window *window) {

@@ -277,37 +277,120 @@ static void test_touch_wire(void) {
     pt_check(fake_compositor_wait_request(&fc, app, FC_K_TOUCH, 0, 1, 8));
     pt_check(!fake_compositor_touch_down(&fc, 9302u, 401u, surface, 0, 10.0, 10.0));
 
-    /* Known Pt limitation (reported, not masked): platform.c touch_up clears
-     * touch_focus after the first lifted contact, so later up/motion events for
-     * the remaining contact never reach the window. The wire path is real
-     * multi-contact, but only the first up is delivered. */
+    /* Touch focus survives until the last contact lifts: dropping the first
+     * finger of a two-contact pinch must not orphan the survivor. */
     pt_check(fake_compositor_seat_capabilities(&fc, 7u)); /* touch back */
     pt_check(fake_compositor_sync(&fc, app));
     pt_check(fake_compositor_wait_object(&fc, app, FC_K_TOUCH, true, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TOUCH) != 0);
+    int gesture_base = gestures.count;
     pt_check(fake_compositor_touch_down(&fc, 9401u, 500u, surface, 0, 100.0, 100.0));
     pt_check(fake_compositor_touch_down(&fc, 9402u, 501u, surface, 1, 200.0, 100.0));
     pt_check(fake_compositor_sync(&fc, app));
     pt_check(window->touch_count == 2);
+    pt_check(window->touch_pinch);
+    pt_check(app->platform->touch_focus == window);
+    pt_check(gestures.count == gesture_base + 1);
+    if (gestures.count > gesture_base) {
+        pt_check(gestures.events[gesture_base].phase == pt_gesture_phase_begin);
+        pt_check(gestures.events[gesture_base].fingers == 2);
+    }
+
+    /* The first lifted contact leaves the focus and the surviving contact
+     * intact: one touch, pinch mode still on, the pinch gesture ended once. */
     pt_check(fake_compositor_touch_up(&fc, 9403u, 502u, 1));
     pt_check(fake_compositor_sync(&fc, app));
     pt_check(window->touch_count == 1);
-    pt_check(app->platform->touch_focus == NULL);
-    pt_check(fake_compositor_touch_up(&fc, 9404u, 503u, 0));
-    pt_check(fake_compositor_sync(&fc, app));
-    pt_check(window->touch_count == 1); /* second up is dropped by Pt */
     pt_check(window->touch_pinch);
-    float stale_x = window->pointer_x;
-    pt_check(fake_compositor_touch_motion(&fc, 504u, 0, 10.0, 10.0));
+    pt_check(window->touch_active);
+    pt_check(app->platform->touch_focus == window);
+    pt_check(gestures.count == gesture_base + 2);
+    if (gestures.count > gesture_base + 1) {
+        pt_check(gestures.events[gesture_base + 1].phase == pt_gesture_phase_end);
+    }
+
+    /* Motion from the surviving contact now reaches the window. The pinch is
+     * over, so the emulated pointer follows the remaining contact. */
+    pt_check(fake_compositor_touch_motion(&fc, 503u, 0, 150.0, 140.0));
     pt_check(fake_compositor_sync(&fc, app));
-    pt_check_near(window->pointer_x, stale_x, 0.01); /* motion also dropped */
+    pt_check_near(window->pointer_x, 150.0, 0.5);
+    pt_check_near(window->pointer_y, 140.0, 0.5);
+    pt_check(gestures.count == gesture_base + 2); /* no update after end */
+
+    /* The final up is delivered too, clearing every contact-related state. */
+    pt_check(fake_compositor_touch_up(&fc, 9404u, 504u, 0));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 0);
+    pt_check(!window->touch_pinch);
+    pt_check(!window->touch_active);
+    pt_check(window->touch_id == -1);
+    pt_check(!window->pointer_inside);
+    pt_check(app->platform->touch_focus == NULL);
+    pt_check(gestures.count == gesture_base + 2);
+
+    /* A fresh pinch after a full release starts over with a new baseline:
+     * 100..300 is 200 apart, then moving the second finger to 400 gives 1.5,
+     * not the stale 3.0 a retained 100-wide baseline would produce. */
+    gesture_base = gestures.count;
+    pt_check(fake_compositor_touch_down(&fc, 9501u, 600u, surface, 2, 100.0, 100.0));
+    pt_check(fake_compositor_touch_down(&fc, 9502u, 601u, surface, 3, 300.0, 100.0));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 2);
+    pt_check(window->touch_pinch);
+    pt_check(app->platform->touch_focus == window);
+    pt_check(gestures.count == gesture_base + 1);
+    if (gestures.count > gesture_base) {
+        pt_check(gestures.events[gesture_base].phase == pt_gesture_phase_begin);
+        pt_check(gestures.events[gesture_base].fingers == 2);
+    }
+    pt_check(fake_compositor_touch_motion(&fc, 602u, 3, 400.0, 100.0));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(gestures.count == gesture_base + 2);
+    if (gestures.count > gesture_base + 1) {
+        pt_check(gestures.events[gesture_base + 1].phase == pt_gesture_phase_update);
+        pt_check_near(gestures.events[gesture_base + 1].scale, 1.5, 0.01);
+    }
+    pt_check(fake_compositor_touch_up(&fc, 9503u, 603u, 3));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 1);
+    pt_check(app->platform->touch_focus == window);
+    pt_check(gestures.count == gesture_base + 3);
+    if (gestures.count > gesture_base + 2) {
+        pt_check(gestures.events[gesture_base + 2].phase == pt_gesture_phase_end);
+    }
+    pt_check(fake_compositor_touch_up(&fc, 9504u, 604u, 2));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 0);
+    pt_check(!window->touch_pinch);
+    pt_check(!window->touch_active);
+    pt_check(!window->pointer_inside);
+    pt_check(app->platform->touch_focus == NULL);
+
+    /* Cancel mid-pinch reaches the still-focused window and clears all state. */
+    gesture_base = gestures.count;
+    pt_check(fake_compositor_touch_down(&fc, 9601u, 700u, surface, 4, 120.0, 120.0));
+    pt_check(fake_compositor_touch_down(&fc, 9602u, 701u, surface, 5, 220.0, 120.0));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 2);
+    pt_check(window->touch_pinch);
+    pt_check(fake_compositor_touch_cancel(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 0);
+    pt_check(!window->touch_pinch);
+    pt_check(!window->touch_active);
+    pt_check(!window->touch_gesture);
+    pt_check(window->touch_id == -1);
+    pt_check(!window->pointer_inside);
+    pt_check(app->platform->touch_focus == NULL);
+    pt_check(gestures.count == gesture_base + 2);
+    if (gestures.count > gesture_base + 1) {
+        pt_check(gestures.events[gesture_base + 1].phase == pt_gesture_phase_cancel);
+    }
 
     pt_check(!fake_compositor_request_overflowed(&fc));
     pt_check(fake_compositor_pending_fd_count(&fc) == 0);
     pt_check(fake_compositor_error(&fc) == NULL);
 
-    /* Clear the stale internal contact state that Pt left behind. */
-    pt_window_input_touch_cancel(window);
     if (canvas) {
         pt_canvas_destroy(canvas);
     }

@@ -1134,12 +1134,14 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
     (void)serial;
     pt_platform *platform = data;
     pt_window *window = platform->touch_focus;
-    if (window) {
-        pt_window_input_touch_up(window, id, time);
+    uint32_t remaining = window ? pt_window_input_touch_up(window, id, time) : 0;
+    /* Keep focus and surface offsets while contacts remain: motion, up and
+     * cancel for the other fingers still have to reach the same window. */
+    if (remaining == 0) {
+        platform->touch_focus = NULL;
+        platform->touch_offset_x = 0.0f;
+        platform->touch_offset_y = 0.0f;
     }
-    platform->touch_focus = NULL;
-    platform->touch_offset_x = 0.0f;
-    platform->touch_offset_y = 0.0f;
 }
 
 static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int32_t id,

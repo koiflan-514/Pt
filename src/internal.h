@@ -1532,7 +1532,9 @@ void pt_window_input_touch_down(pt_window *window, int32_t id, float x, float y,
                                 uint32_t serial);
 void pt_window_input_touch_motion(pt_window *window, int32_t id, float x, float y,
                                   uint32_t time);
-void pt_window_input_touch_up(pt_window *window, int32_t id, uint32_t time);
+/* Removes one contact and returns how many contacts are still active, so the
+ * platform layer can keep touch focus until the last contact lifts. */
+uint32_t pt_window_input_touch_up(pt_window *window, int32_t id, uint32_t time);
 void pt_window_input_touch_cancel(pt_window *window);
 void pt_window_stylus_input(pt_window *window, pt_stylus_phase phase, pt_stylus_tool tool,
                             float x, float y, float pressure, float distance, float tilt_x,
