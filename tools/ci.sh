@@ -48,6 +48,10 @@ say "installed consumers and ABI"
 if [ "$quick" -eq 0 ]; then
     makeit -j"$jobs" BUILD="$sanitized" werror=1 sanitize=1 check-sanitize
     makeit BUILD="$sanitized" werror=1 sanitize=1 lib
+    # The Java suite loads the wire driver from the library's sibling tests/
+    # directory; check-sanitize builds only the object, so link the shared
+    # driver into the sanitize build before running the binding suites.
+    makeit BUILD="$sanitized" werror=1 sanitize=1 wire-driver
 
     asan_lib=$(cc -print-file-name=libasan.so)
     say "sanitized Python binding suite"

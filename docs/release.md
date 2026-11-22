@@ -1153,19 +1153,17 @@ archive.
 
 ## 1.3.0 validation record (2026-11-22)
 
-Environment: the integrated `m20/integration` tree at `c9f7385` on the
+Environment: the final gate tree `fafbcae` on `m20/integration` on the
 reference machine (CachyOS, Wayland, niri 26.04) with the 1.0 toolchain
 (GCC 16.2.1, Python 3.14.8, OpenJDK 25.0.2). The four wave-1 workstreams, the
-wave-2 wire consumers, the C++ hardening branch and the integration baseline
-refresh are merged; the version bump, generated reference and bilingual guides
-land on top in this documentation branch.
+wave-2 wire consumers, the C++ hardening branch, the bind-final wrappers and
+the integration baseline refresh are merged; the version bump, generated
+reference and bilingual guides land on top in this documentation branch.
 
-This is a release-record **draft**. The source, tests and documentation are
-complete on the integration tree, but the final gate has not been run on the
-tree that also carries the bind-final wrappers. Every figure marked `pending
-final gate run` must be re-measured there before the tag; the per-suite counts
-below were measured on this documentation tree and are evidence for the
-workstreams, not a substitute for the final gate.
+This is the **final gate record**. Every figure below was measured on
+`fafbcae`, including the sanitizer pass, the staged install, the reproducible
+tarball and the live suites. The only step left before the tag is the owner's
+freeze confirmation.
 
 ### Scope
 
@@ -1243,16 +1241,16 @@ must read:
 | Version agreement | pass: `include/pt/base.h`, `Makefile` `VERSION`, README and the generated reference all say 1.3.0; SONAME `libpt.so.1` |
 | API baseline | pass: `api/pt.api` 556 functions / 910 entries; the reference names all 556 baseline functions |
 | Since audit | pass: 556/556 declarations carry Since 1.0/1.1/1.2/1.3 (412/36/106/2); generated entries expose them |
-| C suites (headless) | pass on this tree: 35 executables, 7,701 checks plus the 454,380-check property suite; `test_fake_compositor` 275, `test_ime` 314, `test_popup` 466, `test_icon` 330, `test_picker` 553; the live AT-SPI bridge reports 11 and skips without a bus |
+| C suites (headless) | pass: 36 executables (35 suites plus the property sweep), 7,702 checks plus the 454,380-check property suite; `test_fake_compositor` 275, `test_ime` 314, `test_popup` 466, `test_icon` 330, `test_picker` 553, `test_abi` 13; the AT-SPI bridge reports 11 |
 | ABI pins | pass: `tests/test_abi.c` 13 checks, including `pt_a11y_role_spin_button` = 36 and the count sentinel = 37 |
 | Bilingual documentation | pass: 9 public guides, no structural drift; code blocks byte-identical |
-| Binding parity | **pending final gate run**: this tree measures 554/556 in C++, Python and Java (the two IME functions are owned by the in-flight bind-final branch); the target is 556/556 with 0 missing and an empty allowlist |
-| `make check` / `make check-bindings` | C/C++/Python/Java suites pass on this tree (C++ 837 checks, Python 66 tests, Java 676 checks, 0 failures); the full combined gate is **pending final gate run** because `api-check` is red on the two unwrapped names |
-| `make perf-check` | **pending final gate run** |
-| Live Wayland / live typing | **pending final gate run** (environment-dependent; the M19 live suites passed, this round did not rerun them) |
-| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | **pending final gate run** |
-| ABI diff against 1.2.0 | **pending final gate run** at the symbol level; the additive 554 → 556 expectation and the single enum addition are recorded here, but the tag build was not compared in this pass. `abidiff` remains unavailable on the reference machine |
-| `tools/release-check.sh --full` | **pending final gate run** |
+| Binding parity | pass: 556/556 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted |
+| `make check` / `make check-bindings` | pass: 35 C suites at 7,702 checks plus the property sweep; C++ 844 checks, Python 67 tests, Java 685 checks, 0 failures; `api-check` clean |
+| `make perf-check` | pass: every ceiling holds; dense full paint 5.262 ms, 4K full paint 8.469 ms, first frame 14.512 ms, idle 300 ms CPU 0.598 ms |
+| Live Wayland / live typing | pass: `make check-wayland` 48 checks under niri (focused-entry idle 25.1 ms over 5000 ms after one external-input retry); `make check-typing` PASS (ptdirect, text-input-v3) |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | pass: `tools/ci.sh` exit 0 (`CI verification passed for Pt 1.3.0`); ASan+UBSan clean rebuild of all 36 C test binaries plus `test_cpp`, the Python suite (67 tests) and the Java suite (685 checks); staged install with C/C++/Python/Java consumers and `uninstall`; two `dist` runs reproduce one digest and the extracted tarball rebuilds and passes `make check` |
+| ABI diff against 1.2.0 | pass at the symbol level: 554 → 556 exported `pt_*` symbols, 0 removed, 2 added, no type changes among the 554 common symbols, SONAME `libpt.so.1` unchanged; `abidiff` remains unavailable on the reference machine |
+| `tools/release-check.sh --full` | pass: every automated gate is green; only the two human items remain open (freeze commit/tag and live-suite sign-off, both recorded above) |
 
 ### ABI statement
 
@@ -1261,20 +1259,62 @@ appended enum constant. No existing enum value, struct field order, callback
 typedef or signature changed. `tests/test_abi.c` pins the spin-button value and
 the moved count sentinel. `abidiff` (libabigail) is still not installed on the
 reference machine (no package and no elevated privileges to add one), so the
-release-time comparison remains symbol-level: the 1.2 build exported 554
-`pt_*` symbols and the expected 1.3 build exports 556, with 0 removed. The
-symbol-level run on the tagged tree is part of the `pending final gate run`.
+release-time comparison was run at the symbol level: a fresh `make lib` build of
+the `1.2.0` tag (`fc7df8d`, in a temporary worktree) and the gate build of
+`fafbcae` were compared with `nm -D --defined-only`. The 1.2 build exported 554
+`pt_*` symbols and the 1.3 build exports 556: **0 removed, 2 added**
+(`pt_window_show_input_panel` and `pt_window_hide_input_panel`), all 554 common
+symbols keep the same `T` type, and `readelf -d` reports `libpt.so.1` on both.
+The enum count sentinel (36 → 37) and the appended `pt_a11y_role_spin_button`
+are baseline entries, not exported symbols, so they do not appear in the `nm`
+comparison; `tests/test_abi.c` and the baseline/reference audits cover them. A
+type-level `abidiff` run is still recommended on a machine that has libabigail
+before publishing.
 
 ### Final integration surface
 
-The two IME wrappers are the only functions absent from this branch: C++,
-Python and Java each measure 554/556 here, and the bind-final branch owns the
+All 556 functions are wrapped in C++, Python and Java, with full parity
+(556/556, 0 missing, empty allowlist): C++ 844 checks, Python 67 tests and Java
+685 checks. The bind-final wrappers landed as
 `window::show_input_panel`/`hide_input_panel`, `Window.show_input_panel`/
 `hide_input_panel` and `Pt.window_show_input_panel`/`window_hide_input_panel`
-helpers plus their tests. Those helper names are the expected set in
-[bindings.md](bindings.md) and must be reconciled with the landed wrappers
-before the tag. The fake-compositor facility and its three-language driver are
-test infrastructure and add no installable artifact.
+with their wire dispatch tests, matching the names in [bindings.md](bindings.md).
+The fake-compositor facility and its three-language driver are test
+infrastructure and add no installable artifact.
+
+### Gate transcripts
+
+`tools/ci.sh` on `fafbcae` exited 0 (`CI verification passed for Pt 1.3.0`):
+
+- werror build, `make check` and `make perf-check` in `build/ci/normal`; the
+  staged install exercised the C, C++, Python and Java consumers, the
+  pkg-config file, the SONAME and the baseline, then `uninstall` removed the
+  installed paths (`install check passed`).
+- Sanitizer pass in a separate `build/ci/sanitize` tree. The script begins with
+  `rm -rf build/ci`, so the ASan+UBSan objects are compiled from empty; the log
+  shows the fresh `-fsanitize=address,undefined -fno-omit-frame-pointer`
+  compiles, all 36 sanitized test binaries pass, and `test_cpp` (844 checks),
+  the Python suite (67 tests) and the Java suite (685 checks) run against the
+  sanitized library. `ldd` on `build/ci/sanitize/tests/test_core`,
+  `build/ci/sanitize/libpt.so.1.3.0` and
+  `build/ci/sanitize/tests/libwire_driver.so` lists `libasan.so.8` and
+  `libubsan.so.1`. One gate-script gap was fixed in this pass (not a library
+  defect): the script now builds `wire-driver` in the sanitize tree before the
+  Java suite, which loads `libwire_driver.so` from the library's sibling
+  `tests/` directory.
+- Reproducible tarball: two `dist` runs produce
+  `e989e6a4c837145f2bc92247cdad27ded9ffa500331518bf904693260ea36a62` (the
+  sidecar matches); the extracted archive builds with `werror=1` and passes
+  `make check`.
+- Live suites (because `WAYLAND_DISPLAY` was set): `check-wayland` 48 checks
+  under niri and `check-typing` PASS (ptdirect).
+
+Because this record ships inside the archive, the digest above is the gate-time
+archive of `fafbcae`; editing this file necessarily changes the digest.
+`tools/ci.sh` proves the archive is reproducible by building `dist` twice and
+comparing the two digests, so the tagged tree reproduces its own digest exactly
+— re-measure there rather than trusting a digest quoted from inside the
+archive.
 
 ### Known issues
 
@@ -1297,9 +1337,9 @@ test infrastructure and add no installable artifact.
   application's responsibility.
 
 The annotated tag is created from the final gate tree once the owner confirms
-the freeze. Because this record ships inside the release archive and the final
-gate figures are not measured yet, no digest or final gate number is quoted
-here; `make dist` on the tagged tree reproduces its own digest exactly.
+the freeze. `tools/release-check.sh --full` reports every automated gate green;
+the two open items it always reports are the human ones (freeze commit/tag and
+live-suite sign-off), and the live suites above were run on this tree.
 
 ## Packaging notes
 
