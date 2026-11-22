@@ -496,3 +496,8 @@ run-java-input-panel: java-example
 
 .PHONY: run-svg-icon run-input-panel \
 	run-cpp-input-panel run-python-input-panel run-java-input-panel
+
+.PHONY: check-ime-live
+
+check-ime-live: $(TEST_BIN)/ime_live_probe $(TEST_BIN)/vkbd_type
+	BUILD=$(abspath $(BUILD)) tools/live-ime.sh
