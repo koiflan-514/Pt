@@ -6,13 +6,13 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **1.2.0**. The common-surface release: application-owned popups on
-`xdg_popup`, per-run font fallback chains, clipboard `image/png` and
-`text/uri-list` writes, persisted table column layouts, reference-counted icon
-images with best-effort toplevel icons, and searchable select, date, number and
-colour pickers — an append-only extension surface on a 554-function C ABI
-wrapped in C++/Python/Java with binding parity enforced. The release record is
-written and the annotated tag is created after the final gate run; see
+Status: **1.3.0**. The wire-verification and contract-completion release: an
+in-process fake compositor that replays protocol sequences headlessly, the IME
+visual completion (`preedit_hint` underlines and the input-panel requests), SVG
+icon sources through a vendored decoder, a dedicated spin-button accessibility
+role, and C++ owned-getter hardening — an append-only surface on a 556-function
+C ABI wrapped in C++/Python/Java with binding parity enforced. The release
+record is written and the annotated tag is created after the final gate run; see
 [docs/release.md](docs/release.md). The API is tracked by a reviewed baseline, a
 generated function reference and a compatibility policy; see
 [docs/api-reference.md](docs/api-reference.md),
@@ -59,6 +59,45 @@ generated function reference and a compatibility policy; see
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 1.3.0
+
+1.3.0 closes the appendable items carried past 1.2 without touching the 2.0
+structural horizon. It keeps every 1.2 signature, adds two functions and one
+accessibility enum value, and adds a protocol-level test facility that changes
+no public ABI. The annotated tag is created after the final gate run recorded in
+[release.md](docs/release.md).
+
+- **Fake-compositor wire verification.** `tests/fake_compositor.h` is an
+  in-process Wayland server on a private socket: Pt connects to it as an
+  ordinary client, so the shipped connection path runs unchanged. It decodes and
+  records every request (object, interface, opcode, typed arguments) and injects
+  server events, letting headless tests assert popup placement wire parameters,
+  record the toplevel-icon submission, replay decoration modes, exchanges and
+  drive text-input IME traffic including the v1 suppression path. A small C
+  bridge, `tests/wire_driver.c`, exposes the facility to the C++, Python and Java
+  suites, so raw key and pointer events now reach wrapped callbacks end to end in
+  all three bindings instead of only being registration-tested.
+- **IME visual completion.** The seven `preedit_hint` kinds render as graded
+  second underlines (composition, selection, prefix/suffix, prediction, spelling
+  and compose errors), and a preedit without hints is pixel-identical to 1.2.
+  `pt_window_show_input_panel` and `pt_window_hide_input_panel` forward the
+  text-input-v3 v2 requests, remember the desired state while IME is inactive or
+  v1-only, replay it on reactivation, and report whether the state changed.
+- **SVG icon sources.** `pt_icon_image` accepts SVG content alongside PNG through
+  a vendored nanosvg decoder (zlib licensed, recorded in `THIRD_PARTY.md`), and
+  hicolor lookup resolves `scalable/` directories. Rasterisation feeds the same
+  per-size/scale cache; the supported SVG subset and the rejection rule for
+  unsupported features are documented rather than implied. No public function
+  was added: content is sniffed and the existing loaders are unchanged.
+- **Spin-button accessibility role.** `pt_a11y_role_spin_button` is appended as
+  value 36, moving the `pt_a11y_role_count` sentinel to 37. The number picker
+  reports the spin-button role with no expandable state and the AT-SPI bridge
+  maps it, which is the correction the 1.2 record anticipated.
+- **C++ hardening.** The five owned getters free their C buffers through an RAII
+  guard so a `std::bad_alloc` during a string or buffer copy cannot leak, and the
+  `pt::popup` wrapper documents that it must be destroyed before its parent
+  window.
 
 ## What is new in 1.2.0
 
@@ -481,7 +520,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` runs headless and needs no compositor. It includes the C test
 suites, the C++/Python/Java binding suites, the exported-symbol and API
-baseline audit, the hard 554/554 binding-parity gate, the per-round 0.6–0.10
+baseline audit, the hard 556/556 binding-parity gate, the per-round 0.6–0.10
 surface audits, a check that `docs/api-reference.md` matches the headers, and
 the randomized property suite for text editing, URI parsing, data-view indices
 and damage rectangles.
