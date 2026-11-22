@@ -62,9 +62,9 @@ extern "C" {
 #endif
 
 #define pt_version_major 1
-#define pt_version_minor 3
+#define pt_version_minor 4
 #define pt_version_patch 0
-#define pt_version_string "1.3.0"
+#define pt_version_string "1.4.0"
 
 /* Public colors are packed as 0xRRGGBBAA. The renderer converts them to
  * premultiplied ARGB8888 internally. */
