@@ -16,6 +16,7 @@ Each vendored file retains its upstream license header.
 | `protocols/pointer-gestures-unstable-v1.xml` | wayland-protocols (unstable) | MIT |
 | `src/nanosvg.h`, `src/nanosvgrast.h` | nanosvg (master) | zlib |
 | `third_party/sheenbidi/` | SheenBidi v3.0.0 | Apache-2.0 |
+| `tests/data/bidi/` | Unicode BidiTest / BidiCharacterTest 18.0.0 | Unicode License v3 |
 
 ## nanosvg
 
@@ -69,6 +70,25 @@ misrepresented as being the original software.
   (`-DSB_CONFIG_UNITY`) with third-party warnings isolated in the Makefile.
   UCD tables are from Unicode 17.0.0.
 - Upgrade policy: see `third_party/sheenbidi/PROVENANCE.md`.
+
+## Unicode bidi conformance data
+
+- Upstream: Unicode Character Database 18.0.0,
+  <https://www.unicode.org/Public/18.0.0/ucd/>
+- Fetched: 2026-11-22
+- Vendored at: `tests/data/bidi/`
+- `BidiTest.txt.gz` — decompresses to
+  `9af2f882a4ab50912e388f069a673b94eacd82fa6d07d20a3ff7f3c759e905aa`
+  (source: <https://www.unicode.org/Public/18.0.0/ucd/BidiTest.txt>)
+- `BidiCharacterTest.txt.gz` — decompresses to
+  `045b24d2c8ab066951bd32fe8c6b4de34647f72b5b1c7df0265f24ab53573e01`
+  (source: <https://www.unicode.org/Public/18.0.0/ucd/BidiCharacterTest.txt>)
+- `LICENSE.unicode.txt` — Unicode License v3,
+  <https://www.unicode.org/license.txt>,
+  SHA-256 `e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96`
+- The gzip streams are produced with `gzip -9n` so the compressed bytes are
+  reproducible. The test data is versioned independently of the engine's
+  17.0.0 UCD tables; the 18.0.0 files differ only in their header comments.
 
 ## System libraries
 

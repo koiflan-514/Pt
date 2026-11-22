@@ -203,6 +203,23 @@ $(TEST_BIN)/%: tests/%.c $(wildcard tests/*.h) $(BUILD)/libpt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) -I tests $< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
 
+# Unicode bidi conformance fixtures ship gzipped (-9n, reproducible) and are
+# expanded into the build tree. PT_BIDI_TEST_DIR still wins when set; the
+# compiled default points at the expanded copy so plain `make check` works.
+BIDI_DATA_DIR := $(BUILD)/bidi-test
+BIDI_TEST_DATA := $(BIDI_DATA_DIR)/BidiTest.txt $(BIDI_DATA_DIR)/BidiCharacterTest.txt
+
+$(BIDI_DATA_DIR)/%.txt: tests/data/bidi/%.txt.gz
+	@mkdir -p $(dir $@)
+	gzip -dc $< > $@
+
+$(TEST_BIN)/test_bidi_conformance: tests/test_bidi_conformance.c tests/harness.h \
+		$(BUILD)/libpt.a $(BIDI_TEST_DATA)
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) -I tests \
+		-DPT_BIDI_TEST_DIR_DEFAULT='"$(abspath $(BIDI_DATA_DIR))"' \
+		$< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+
 check-core: $(CORE_TEST_BINS)
 	@mkdir -p $(TEST_BIN)
 	@for test in $(CORE_TEST_BINS); do \

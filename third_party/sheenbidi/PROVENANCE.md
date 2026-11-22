@@ -44,8 +44,10 @@ Unicode Character Database **17.0.0** (the upstream `Tools/Unicode/` inputs are
 list in `Headers/SheenBidi/SBScript.h` ends with the Unicode 17.0 additions).
 `pt_bidi_unicode_version()` reports `17.0.0` for test output.
 
-The conformance fixtures under `tests/data/bidi/` are versioned separately;
-see `THIRD_PARTY.md` for their URLs and hashes.
+The conformance data vendored under `tests/data/bidi/` is
+BidiTest/BidiCharacterTest 18.0.0. Apart from the header comments, the 18.0.0
+test data is byte-identical to 17.0.0, so it exercises the same expectations;
+the engine passes all cases. See `THIRD_PARTY.md` for the data URLs and hashes.
 
 ## Upgrade policy
 
