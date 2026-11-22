@@ -260,6 +260,20 @@ pt_api void pt_widget_set_text_direction(pt_widget *widget, pt_text_direction di
 /* Since 2.0. */
 pt_api pt_text_direction pt_widget_get_text_direction(const pt_widget *widget);
 
+/* Editing follows visual order (2.0). Left and Right move the caret to the
+ * visually adjacent cluster boundary, which can raise or lower the logical
+ * byte offset inside an RTL run; Home and End go to the visual start and end of
+ * the line. Shift+Left/Right extend the selection from the fixed logical
+ * anchor, so the reported selection is always a logical byte range. Up, Down,
+ * Page Up and Page Down keep a visual goal x across lines. Backspace and Delete
+ * stay logical: they remove the preceding or following character in the stored
+ * string, never the visually adjacent one. Caret rectangles reported through
+ * IME and accessibility are visual rectangles. An application that needs
+ * logical editing semantics can intercept keys in a window key callback, which
+ * runs before the focused widget, and consume Left/Right/Home/End there. A
+ * password entry derives its displayed bullets' direction from the stored text,
+ * so the bullets never leak it in input purpose or accessibility text. */
+
 /* Since 1.0. */
 pt_api void pt_widget_set_visible(pt_widget *widget, bool visible);
 /* Since 1.0. */

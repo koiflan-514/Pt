@@ -587,6 +587,28 @@ static bool visual_caret_step(const pt_text_visual_map *map, size_t position,
         }
     }
     if (!found) {
+        /* A line made only of zero-width (removed/X9) clusters still has its
+         * two edges; the map start and end remain caret stops. Only the edge
+         * in the requested direction qualifies, judged by its visual x so an
+         * RTL map end (visually left) never acts as a right-hand stop. */
+        if (right && position < map->end && current_x >= map->width - 0.01f) {
+            float end_x = pt_text_visual_map_x_for_position(map, map->end,
+                                                            pt_text_bias_leading);
+            if (end_x >= map->width - 0.01f) {
+                *out_position = map->end;
+                *out_bias = pt_text_bias_leading;
+                return true;
+            }
+        }
+        if (!right && position > map->start && current_x <= 0.01f) {
+            float start_x = pt_text_visual_map_x_for_position(map, map->start,
+                                                              pt_text_bias_leading);
+            if (start_x <= 0.01f) {
+                *out_position = map->start;
+                *out_bias = pt_text_bias_leading;
+                return true;
+            }
+        }
         return false;
     }
     *out_position = best_position;
