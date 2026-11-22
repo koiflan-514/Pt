@@ -600,6 +600,137 @@ static void test_table_rtl(pt_app *app) {
     pt_window_free(window);
 }
 
+/* RTL table chrome with an icon: the body icon mirrors to the right edge, so
+ * the text slot must give way from that same side. Painting the long row has
+ * to leave the icon pixels byte-identical to the short row, and asymmetric
+ * padding must keep the physical insets on their physical sides. */
+#define TABLE_RTL_HE "\xD7\x90\xD7\x91\xD7\x92\xD7\x93\xD7\x94\xD7\x95\xD7\x96\xD7\x97\xD7\x98\xD7\x99\xD7\x9A\xD7\x9B\xD7\x9C\xD7\x9D\xD7\x9E\xD7\x9F\xD7\xA0\xD7\xA1\xD7\xA2\xD7\xA3\xD7\xA4\xD7\xA5\xD7\xA6\xD7\xA7\xD7\xA8\xD7\xA9\xD7\xAA"
+
+static void bind_rtl_icon_cell(pt_widget *table, pt_widget *cell, uint32_t row,
+                               uint32_t column, void *data) {
+    (void)table;
+    (void)column;
+    (void)data;
+    pt_widget_set_icon(cell, pt_icon_document);
+    pt_widget_set_text(cell, row == 0 ? "\xD7\x90" : TABLE_RTL_HE);
+}
+
+static int distinct_pixels(pt_canvas *canvas, int x0, int x1, int y0, int y1,
+                           pt_color background) {
+    int count = 0;
+    for (int y = y0; y <= y1; ++y) {
+        for (int x = x0; x <= x1; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+static void test_table_rtl_icon_padding(pt_app *app) {
+    pt_window *window = pt_window_create(app, "table-rtl-icon", 560, 340);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_size(table, 320.0f, 320.0f);
+    pt_table_set_column_count(table, 1);
+    pt_table_set_column_title(table, 0, TABLE_RTL_HE);
+    pt_table_set_column_width(table, 0, 320.0f);
+    pt_table_set_row_height(table, 40.0f);
+    pt_table_set_header_height(table, 34.0f);
+    pt_table_set_on_bind_cell(table, bind_rtl_icon_cell, NULL);
+    pt_table_set_row_count(table, 3);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(560, 340, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+
+    pt_widget *row0 = visible_row(table, 0);
+    pt_widget *row2 = visible_row(table, 2);
+    pt_check(row0 && row2);
+    if (!row0 || !row2) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    pt_widget *cell0 = row_cell(row0, 0);
+    pt_widget *cell2 = row_cell(row2, 0);
+    pt_check(cell0 && cell2);
+    if (!cell0 || !cell2) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    pt_rect c0 = bounds_of(cell0);
+    pt_rect c2 = bounds_of(cell2);
+    int cy0 = (int)(c0.y + c0.h * 0.5f);
+    int cy2 = (int)(c2.y + c2.h * 0.5f);
+    pt_color row_bg = pt_canvas_get_pixel(canvas, (int)c0.x + 2, cy0);
+
+    /* Default symmetric padding: the mirrored icon sits at width - pr - 8. */
+    float icon_x = c0.x + c0.w - cell0->padding_right - 8.0f;
+    int ix0 = (int)floorf(icon_x - 7.0f);
+    int ix1 = (int)ceilf(icon_x + 7.0f);
+    int icon_ink = 0;
+    int icon_diff = 0;
+    for (int y = -7; y <= 7; ++y) {
+        for (int x = ix0; x <= ix1; ++x) {
+            pt_color short_pixel = pt_canvas_get_pixel(canvas, x, cy0 + y);
+            pt_color long_pixel = pt_canvas_get_pixel(canvas, x, cy2 + y);
+            if (short_pixel != long_pixel) {
+                ++icon_diff;
+            }
+            if (long_pixel != row_bg) {
+                ++icon_ink;
+            }
+        }
+    }
+    pt_check(icon_ink > 0);
+    /* The long row cannot paint over the icon: the icon region is identical
+     * to the short row's. */
+    pt_check(icon_diff == 0);
+
+    /* The text slot ends at width - pr - 22, leaving a clear 6px gap before
+     * the icon box instead of running underneath it. */
+    float text_right = c0.x + c0.w - cell0->padding_right - 22.0f;
+    int gap_x0 = (int)ceilf(text_right) + 1;
+    int gap_x1 = ix0 - 1;
+    pt_check(gap_x1 >= gap_x0);
+    pt_check(distinct_pixels(canvas, gap_x0, gap_x1, cy2 - 6, cy2 + 6, row_bg) == 0);
+
+    /* LTR keeps the icon on the left and the lead slot on the text's side. */
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    pt_check(pt_window_paint(window, canvas));
+    c0 = bounds_of(cell0);
+    cy0 = (int)(c0.y + c0.h * 0.5f);
+    row_bg = pt_canvas_get_pixel(canvas, (int)c0.x + 2, cy0);
+    float ltr_icon = c0.x + cell0->padding_left + 8.0f;
+    pt_check(distinct_pixels(canvas, (int)floorf(ltr_icon - 7.0f),
+                             (int)ceilf(ltr_icon + 7.0f), cy0 - 7, cy0 + 7,
+                             row_bg) > 0);
+    int ltr_gap0 = (int)ceilf(ltr_icon + 7.0f) + 1;
+    int ltr_gap1 = (int)ceilf(c0.x + cell0->padding_left + 22.0f) - 1;
+    if (ltr_gap1 >= ltr_gap0) {
+        pt_check(distinct_pixels(canvas, ltr_gap0, ltr_gap1, cy0 - 6, cy0 + 6,
+                                 row_bg) == 0);
+    }
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.table");
@@ -609,6 +740,7 @@ int main(void) {
     }
     test_table(app);
     test_table_rtl(app);
+    test_table_rtl_icon_padding(app);
     pt_app_destroy(app);
     return pt_test_finish("table");
 }

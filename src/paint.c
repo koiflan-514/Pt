@@ -1897,7 +1897,10 @@ static void paint_table_cell(pt_canvas *canvas, pt_widget *cell) {
         pt_paint_icon_glyph(canvas, cell->icon, icon_x,
                             cell->y + cell->height * 0.5f, 16.0f, icon_color);
     }
-    float area_x = rtl ? cell->x + cell->padding_right + icon_space
+    /* The body text starts on the far side of the icon: right-edge inset in
+     * LTR, mirrored to the left in RTL, so the slot always gives way from the
+     * icon's side and never runs underneath it. */
+    float area_x = rtl ? cell->x + cell->padding_right
                        : cell->x + cell->padding_left + icon_space;
     pt_rect area = {area_x, cell->y,
                     pt_max_float(0.0f, cell->width - cell->padding_left -
