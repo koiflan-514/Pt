@@ -1930,6 +1930,15 @@ int main() {
     check(ime_state.preedits == 2);
     window.set_ime_enabled(false);
 
+    /* ---- input panel requests: state transitions and invalid wrapper ---- */
+    check(window.show_input_panel());
+    check(!window.show_input_panel()); // desired state already shown
+    check(window.hide_input_panel());
+    check(!window.hide_input_panel()); // desired state already hidden
+    pt::window invalid_window;
+    check(!invalid_window.show_input_panel());
+    check(!invalid_window.hide_input_panel());
+
     /* ---- fd watches: real pipe readiness, hangup, self-unwatch ---- */
     int pipe_fds[2] = {-1, -1};
     check(pipe(pipe_fds) == 0);

@@ -1605,6 +1605,14 @@ _pt_window_set_ime_cursor_rect = _proto(
     _c_int,
     _c_int,
 )
+# Input panel requests (since 1.3): bool results report whether the desired
+# state changed; headless windows record the intent without a protocol request.
+_pt_window_show_input_panel = _proto(
+    "pt_window_show_input_panel", _c_bool, _c_void_p
+)
+_pt_window_hide_input_panel = _proto(
+    "pt_window_hide_input_panel", _c_bool, _c_void_p
+)
 
 # Primary selection (pt/window.h). The getter returns malloc'd UTF-8 memory
 # owned by the caller; release it with pt_free.
@@ -5561,6 +5569,22 @@ class Window:
         _pt_window_set_ime_cursor_rect(self._ptr, int(x), int(y), int(width),
                                        int(height))
         return self
+
+    def show_input_panel(self) -> bool:
+        """Asks the compositor to show the on-screen input panel.
+
+        Returns True when this call changed the recorded desired state. A
+        repeated request returns False. Headless windows record the intent
+        without sending a protocol request; the compositor may ignore the hint.
+        """
+        return bool(_pt_window_show_input_panel(self._ptr))
+
+    def hide_input_panel(self) -> bool:
+        """The hide counterpart of :meth:`show_input_panel`.
+
+        Returns True when the desired state changed from shown to hidden.
+        """
+        return bool(_pt_window_hide_input_panel(self._ptr))
 
     @property
     def primary(self) -> str:

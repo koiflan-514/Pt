@@ -1142,6 +1142,8 @@ class ExtensionApiTests(unittest.TestCase):
                                                    pt._IME_PREEDIT, v]),
             "pt_window_set_ime_enabled": (None, [v, b]),
             "pt_window_set_ime_cursor_rect": (None, [v, i, i, i, i]),
+            "pt_window_show_input_panel": (b, [v]),
+            "pt_window_hide_input_panel": (b, [v]),
             "pt_window_primary_set": (b, [v, ctypes.c_char_p]),
             "pt_window_primary_set_serial": (b, [v, ctypes.c_char_p, u32]),
             "pt_window_primary_get": (v, [v]),
@@ -1155,7 +1157,7 @@ class ExtensionApiTests(unittest.TestCase):
                 return getattr(actual, "_type_", None) is expected[1]
             return actual is expected
 
-        self.assertEqual(len(signatures), 36)
+        self.assertEqual(len(signatures), 38)
         for name, (restype, argtypes) in signatures.items():
             function = getattr(pt, f"_{name}")
             self.assertIs(function.restype, restype, name)
@@ -1584,6 +1586,16 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertIs(registered[0][1], pt._NULL_IME_PREEDIT)
         self.assertIsNot(registered[1][0], pt._NULL_IME_COMMIT)
         self.assertIs(registered[1][1], pt._NULL_IME_PREEDIT)
+
+    def test_input_panel_requests(self) -> None:
+        """Show/hide report desired-state changes and pin the mirrored enum."""
+        self.assertTrue(self.window.show_input_panel())
+        self.assertFalse(self.window.show_input_panel())  # already requested
+        self.assertTrue(self.window.hide_input_panel())
+        self.assertFalse(self.window.hide_input_panel())  # already hidden
+        # A NULL window has no recorded state and cannot change it.
+        self.assertFalse(pt._pt_window_show_input_panel(None))
+        self.assertFalse(pt._pt_window_hide_input_panel(None))
 
     def test_raw_input_callbacks_dispatch_and_payloads(self) -> None:
         focus_events: list[tuple[pt.Window, bool]] = []

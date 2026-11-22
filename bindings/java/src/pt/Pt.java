@@ -896,6 +896,11 @@ public final class Pt {
             "pt_window_set_ime_enabled", FunctionDescriptor.ofVoid(ptr, bool));
     private static final MethodHandle window_set_ime_cursor_rect = bind(
             "pt_window_set_ime_cursor_rect", FunctionDescriptor.ofVoid(ptr, i32, i32, i32, i32));
+    /* Input panel requests (since 1.3); the boolean reports a state change. */
+    private static final MethodHandle window_show_input_panel = bind(
+            "pt_window_show_input_panel", FunctionDescriptor.of(bool, ptr));
+    private static final MethodHandle window_hide_input_panel = bind(
+            "pt_window_hide_input_panel", FunctionDescriptor.of(bool, ptr));
     private static final MethodHandle window_set_gesture_callback = bind(
             "pt_window_set_gesture_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_long_press_delay = bind(
@@ -3047,6 +3052,20 @@ public final class Pt {
     public static void window_set_ime_cursor_rect(MemorySegment window, int x, int y, int width,
             int height) {
         invoke(window_set_ime_cursor_rect, window, x, y, width, height);
+    }
+
+    /**
+     * Asks the compositor to show the on-screen input panel. Returns true when
+     * this call changed the recorded desired state; a repeated request and a
+     * NULL window return false. Headless windows only record the intent.
+     */
+    public static boolean window_show_input_panel(MemorySegment window) {
+        return (boolean) invoke(window_show_input_panel, window);
+    }
+
+    /** Hides the on-screen input panel; true when the desired state changed. */
+    public static boolean window_hide_input_panel(MemorySegment window) {
+        return (boolean) invoke(window_hide_input_panel, window);
     }
 
     /**

@@ -2051,6 +2051,17 @@ class window {
         pt_window_set_ime_cursor_rect(handle_, x, y, width, height);
         return *this;
     }
+    /* Asks the compositor to show the on-screen input panel. Returns true when
+     * this call changed the recorded desired state; a repeated request and an
+     * invalid wrapper return false. Headless windows record the intent without
+     * sending a protocol request. The compositor may still ignore the hint. */
+    [[nodiscard]] bool show_input_panel() const {
+        return pt_window_show_input_panel(handle_);
+    }
+    /* Hides the on-screen input panel; true when the desired state changed. */
+    [[nodiscard]] bool hide_input_panel() const {
+        return pt_window_hide_input_panel(handle_);
+    }
     /* The C getter returns malloc'd memory owned by the caller; copy it and
      * release it here so callers never have to pair it with pt_free(). */
     [[nodiscard]] std::string primary() const {

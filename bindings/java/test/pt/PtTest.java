@@ -402,6 +402,23 @@ public final class PtTest {
         }
     }
 
+    /**
+     * Pins a private Pt MethodHandle's FFM signature: boolean result and one
+     * MemorySegment (pointer) argument.
+     */
+    private static boolean descriptorPinned(String fieldName) {
+        try {
+            java.lang.reflect.Field field = Pt.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            MethodHandle handle = (MethodHandle) field.get(null);
+            return handle.type().returnType() == boolean.class
+                    && handle.type().parameterCount() == 1
+                    && handle.type().parameterType(0) == MemorySegment.class;
+        } catch (ReflectiveOperationException error) {
+            return false;
+        }
+    }
+
     public static void main(String[] args) throws Throwable {
         try (Arena arena = Arena.ofConfined()) {
             wireDispatchTest(arena);
@@ -1393,6 +1410,20 @@ public final class PtTest {
             Pt.window_set_ime_callbacks(window, null, null, arena);
             check(Pt.pointer_phase_enter == 0 && Pt.pointer_phase_down == 3
                     && Pt.pointer_phase_cancel == 6, "pointer phase constants");
+
+            /* Input panel requests report desired-state changes; a NULL window
+             * has no recorded state. The handles themselves pin the FFM
+             * descriptor (boolean result, one pointer). */
+            check(Pt.window_show_input_panel(window), "show input panel first");
+            check(!Pt.window_show_input_panel(window), "show input panel repeat");
+            check(Pt.window_hide_input_panel(window), "hide input panel first");
+            check(!Pt.window_hide_input_panel(window), "hide input panel repeat");
+            check(!Pt.window_show_input_panel(MemorySegment.NULL), "show input panel null");
+            check(!Pt.window_hide_input_panel(MemorySegment.NULL), "hide input panel null");
+            check(descriptorPinned("window_show_input_panel"),
+                    "show input panel descriptor");
+            check(descriptorPinned("window_hide_input_panel"),
+                    "hide input panel descriptor");
 
             /* A real pipe proves the fd watch dispatches through the poll loop. */
             check(Pt.fd_event_read == 1 && Pt.fd_event_write == 2
