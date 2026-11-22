@@ -755,7 +755,7 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
                             pt_max_float(6.0f, (float)caret_h - 2.0f), accent);
     }
     pt_canvas_pop_clip(canvas);
-    free(combined_map);
+    pt_text_visual_map_free(combined_map);
     free(combined);
     paint_focus_ring(canvas, entry);
 }
