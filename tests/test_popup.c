@@ -5,6 +5,7 @@
  */
 
 #include "../src/internal.h"
+#include "fake_compositor.h"
 #include "harness.h"
 
 #include <math.h>
@@ -595,7 +596,191 @@ static void test_invalid(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Native popup placement over the fake compositor wire: the positioner
+ * setters, xdg_popup.grab, compositor configure and repositioned/popup_done
+ * events all travel through the real protocol path. */
+static void wait_popup_native(fake_compositor *fc, pt_app *app, pt_popup *popup) {
+    for (int i = 0; i < 300; ++i) {
+        if (popup->overlay.popup && popup->native_placed) {
+            return;
+        }
+        fake_compositor_dispatch(fc, app, 5);
+    }
+}
+
+static void test_native_wire(void) {
+    fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "%s\n", fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.popup.wire");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_window *window = pt_window_create(app, "popup-wire", 400, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_window_show(window);
+    for (int i = 0; i < 300 && !window->configured; ++i) {
+        fake_compositor_dispatch(&fc, app, 5);
+    }
+    pt_check(window->configured);
+    pt_canvas *canvas = pt_canvas_create(400, 300, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    fake_compositor_pump(&fc, app, 80);
+    pt_check(fake_compositor_sync(&fc, app));
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+
+    /* A pointer button serial is what xdg_popup.grab carries. */
+    fake_compositor_pointer_enter(&fc, 1001u, surface, 200.0, 150.0);
+    /* A press (release would overwrite the cached serial) is the event a real
+     * client answers with xdg_popup.grab. */
+    fake_compositor_pointer_button(&fc, 1002u, 10u, 0x110u, true);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->pointer_serial == 1002u);
+
+    popup_state state = {0};
+    pt_popup *popup = pt_popup_create(window, fixed_box(100.0f, 60.0f));
+    pt_check(popup != NULL);
+    if (!popup) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    state.popup = popup;
+    pt_popup_set_on_dismiss(popup, on_dismiss, &state);
+    const pt_popup_anchor anchor = {30.0f, 120.0f, 80.0f, 24.0f};
+    static const struct {
+        pt_popup_placement placement;
+        uint32_t anchor;
+        uint32_t gravity;
+        bool reposition;
+    } cases[] = {
+        {pt_popup_placement_below, 6u, 8u, false}, /* bottom_left / bottom_right */
+        {pt_popup_placement_above, 5u, 7u, true},  /* top_left / top_right */
+        {pt_popup_placement_right, 7u, 8u, true},  /* top_right / bottom_right */
+        {pt_popup_placement_left, 5u, 6u, true},   /* top_left / bottom_left */
+    };
+    for (size_t i = 0; i < pt_len(cases); ++i) {
+        fake_compositor_clear(&fc);
+        pt_popup_set_placement(popup, cases[i].placement);
+        pt_check(pt_popup_show(popup, anchor));
+        pt_check(pt_window_paint(window, canvas));
+        wait_popup_native(&fc, app, popup);
+        pt_check(fake_compositor_sync(&fc, app));
+        pt_check(popup->overlay.popup != NULL);
+        pt_check(popup->overlay.native);
+        pt_check(popup->native_placed);
+
+        fc_popup_record record;
+        memset(&record, 0, sizeof(record));
+        pt_check(fake_compositor_popup_record_count(&fc) == 1);
+        pt_check(fake_compositor_popup_record_at(&fc, 0, &record));
+        pt_check(record.from_reposition == cases[i].reposition);
+        pt_check(record.popup_id != 0 && record.surface_id != 0);
+        pt_check(record.pos.size_set);
+        pt_check(record.pos.anchor_rect_set);
+        pt_check(record.pos.width >= 100 && record.pos.height >= 60);
+        pt_check(record.pos.anchor_x == 30);
+        pt_check(record.pos.anchor_y == 120);
+        pt_check(record.pos.anchor_width == 80);
+        pt_check(record.pos.anchor_height == 24);
+        pt_check(record.pos.anchor == cases[i].anchor);
+        pt_check(record.pos.gravity == cases[i].gravity);
+        pt_check(record.pos.constraint == fc_constraint_all);
+        pt_check(record.pos.offset_x == 0 && record.pos.offset_y == 0);
+
+        int32_t expected_x = 0;
+        int32_t expected_y = 0;
+        int32_t expected_w = 0;
+        int32_t expected_h = 0;
+        fake_compositor_popup_geometry(&record.pos, &expected_x, &expected_y, &expected_w,
+                                       &expected_h);
+        pt_check(record.width == expected_w && record.height == expected_h);
+        pt_check(record.x == expected_x && record.y == expected_y);
+        pt_check_near(popup->overlay.rect.x, (float)expected_x, 0.01);
+        pt_check_near(popup->overlay.rect.y, (float)expected_y, 0.01);
+        pt_check_near(popup->overlay.rect.w, (float)expected_w, 0.01);
+        pt_check_near(popup->overlay.rect.h, (float)expected_h, 0.01);
+
+        /* Hit-testing uses the compositor-placed rectangle. */
+        pt_widget *hit = pt_window_overlay_hit_test(
+            window, (float)expected_x + 2.0f, (float)expected_y + 2.0f);
+        pt_check(hit != NULL);
+        if (hit) {
+            pt_check(hit == popup->overlay.panel ||
+                     pt_widget_is_descendant(hit, popup->overlay.panel));
+        }
+        if (i == 0) {
+            /* The first creation carried an explicit grab with the freshly
+             * recorded pointer serial. */
+            fc_request grab = {0};
+            pt_check(fake_compositor_last_request(&fc, FC_K_POPUP, 1, &grab));
+            pt_check(grab.nargs == 2);
+            pt_check(grab.args[0].u == fake_compositor_live_id(&fc, FC_K_SEAT));
+            pt_check(grab.args[1].u == 1002u);
+        }
+    }
+
+    /* Reposition requests toggled by placement carry the positioner and a
+     * token the server answers with repositioned + configure. */
+    size_t reposition_count = fake_compositor_count_requests(&fc, FC_K_POPUP, 2);
+    pt_check(reposition_count >= 1);
+    fc_request reposition = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_POPUP, 2, &reposition));
+    pt_check(reposition.nargs == 2);
+    pt_check(reposition.args[1].u == 3u);
+
+    /* A compositor flip wins over the requested placement: the injected
+     * configure moves the surface and hit-testing follows it. */
+    fc_popup_record last;
+    memset(&last, 0, sizeof(last));
+    pt_check(fake_compositor_popup_record_at(&fc, 0, &last));
+    int32_t flip_x = 12;
+    int32_t flip_y = 34;
+    pt_check(popup->overlay.popup != NULL);
+    pt_check(fake_compositor_popup_configure(&fc, flip_x, flip_y, last.width, last.height));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(popup->native_placed);
+    pt_check_near(popup->overlay.rect.x, (float)flip_x, 0.01);
+    pt_check_near(popup->overlay.rect.y, (float)flip_y, 0.01);
+    pt_widget *flipped = pt_window_overlay_hit_test(window, (float)flip_x + 2.0f,
+                                                    (float)flip_y + 2.0f);
+    pt_check(flipped != NULL);
+
+    /* popup_done from the compositor follows the same dismissal path. */
+    pt_check(fake_compositor_popup_done(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(state.dismissals == 1);
+    pt_check(!state.open_at_dismiss);
+    pt_check(!pt_popup_is_open(popup));
+    pt_check(popup->overlay.popup == NULL);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+    pt_check(fake_compositor_error(&fc) == NULL);
+
+    pt_popup_destroy(popup);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
+    test_native_wire();
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.popup");
     pt_check(app != NULL);
