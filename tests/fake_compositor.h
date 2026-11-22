@@ -299,6 +299,19 @@ typedef struct fake_compositor {
 
     char *selection_text;
 
+    /* Drag-and-drop: the offer injected by data_device.data_offer and the
+     * payload served on wl_data_offer.receive. drag_offer_id distinguishes the
+     * drag payload from the clipboard selection_text. */
+    char *drag_text;
+    uint32_t drag_offer_id;
+    /* Primary selection offer and payload served on
+     * zwp_primary_selection_offer_v1.receive. */
+    char *primary_text;
+    uint32_t primary_offer_id;
+    /* Source-side send: the read end of the pipe whose write end travelled to
+     * the client inside wl_data_source.send. -1 when idle. */
+    int source_read_fd;
+
     pthread_mutex_t write_lock;
     bool verbose;
 } fake_compositor;
@@ -1958,6 +1971,292 @@ static inline bool fake_compositor_selection_offer(fake_compositor *fc,
     return fc_send(fc, device, 5, &builder);
 }
 
+/* ---------- drag-and-drop ---------- */
+
+/* Injects wl_data_device.data_offer plus the wl_data_offer.offer events and
+ * source_actions for a drag. The offer id comes from the server range. The
+ * payload is served when the client requests wl_data_offer.receive. Event
+ * opcodes: data_offer(0); offer.offer(0), offer.source_actions(1),
+ * offer.action(2). */
+static inline bool fake_compositor_drag_offer(fake_compositor *fc,
+                                              const char *const *mimes, size_t mime_count,
+                                              const char *text, uint32_t source_actions) {
+    uint32_t device = 0;
+    uint32_t offer = 0;
+    pthread_mutex_lock(&fc->state_lock);
+    device = fc_find_live_locked(fc, FC_K_DATA_DEVICE);
+    if (device) {
+        offer = fc->next_server_id++;
+        if (fc_object_new_locked(fc, offer, FC_K_DATA_OFFER, 0)) {
+            free(fc->drag_text);
+            fc->drag_text = text ? strdup(text) : NULL;
+            fc->drag_offer_id = offer;
+        } else {
+            offer = 0;
+        }
+    }
+    pthread_mutex_unlock(&fc->state_lock);
+    if (!device || !offer) {
+        return false;
+    }
+    if (!fc_send_u32(fc, device, 0, offer)) {
+        return false;
+    }
+    for (size_t i = 0; i < mime_count; ++i) {
+        fc_builder builder;
+        fc_b_reset(&builder);
+        fc_b_string(&builder, mimes[i]);
+        if (!fc_send(fc, offer, 0, &builder)) {
+            return false;
+        }
+    }
+    return fc_send_u32(fc, offer, 1, source_actions);
+}
+
+static inline uint32_t fake_compositor_drag_offer_id(fake_compositor *fc) {
+    pthread_mutex_lock(&fc->state_lock);
+    uint32_t offer = fc->drag_offer_id;
+    pthread_mutex_unlock(&fc->state_lock);
+    return offer;
+}
+
+static inline bool fake_compositor_drag_enter(fake_compositor *fc, uint32_t serial,
+                                              uint32_t surface, double x, double y) {
+    uint32_t device = 0;
+    uint32_t offer = 0;
+    pthread_mutex_lock(&fc->state_lock);
+    device = fc_find_live_locked(fc, FC_K_DATA_DEVICE);
+    offer = fc->drag_offer_id;
+    pthread_mutex_unlock(&fc->state_lock);
+    if (!device || !offer) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, serial);
+    fc_b_u32(&builder, surface);
+    fc_b_fixed(&builder, x);
+    fc_b_fixed(&builder, y);
+    fc_b_u32(&builder, offer);
+    return fc_send(fc, device, 1, &builder);
+}
+
+static inline bool fake_compositor_drag_motion(fake_compositor *fc, uint32_t time, double x,
+                                               double y) {
+    uint32_t device = fc_live_id(fc, FC_K_DATA_DEVICE);
+    if (!device) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, time);
+    fc_b_fixed(&builder, x);
+    fc_b_fixed(&builder, y);
+    return fc_send(fc, device, 3, &builder);
+}
+
+static inline bool fake_compositor_drag_drop(fake_compositor *fc) {
+    uint32_t device = fc_live_id(fc, FC_K_DATA_DEVICE);
+    if (!device) {
+        return false;
+    }
+    return fc_send_empty(fc, device, 4);
+}
+
+static inline bool fake_compositor_drag_leave(fake_compositor *fc) {
+    uint32_t device = fc_live_id(fc, FC_K_DATA_DEVICE);
+    if (!device) {
+        return false;
+    }
+    return fc_send_empty(fc, device, 2);
+}
+
+/* Source-side events on wl_data_source: target(0), send(1), cancelled(2),
+ * dnd_drop_performed(3), dnd_finished(4), action(5). */
+static inline bool fake_compositor_drag_source_target(fake_compositor *fc,
+                                                      const char *mime_type) {
+    uint32_t source = fc_live_id(fc, FC_K_DATA_SOURCE);
+    if (!source) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, mime_type);
+    return fc_send(fc, source, 0, &builder);
+}
+
+static inline bool fake_compositor_drag_source_action(fake_compositor *fc, uint32_t action) {
+    uint32_t source = fc_live_id(fc, FC_K_DATA_SOURCE);
+    if (!source) {
+        return false;
+    }
+    return fc_send_u32(fc, source, 5, action);
+}
+
+static inline bool fake_compositor_drag_source_drop_performed(fake_compositor *fc) {
+    uint32_t source = fc_live_id(fc, FC_K_DATA_SOURCE);
+    if (!source) {
+        return false;
+    }
+    return fc_send_empty(fc, source, 3);
+}
+
+static inline bool fake_compositor_drag_source_finished(fake_compositor *fc) {
+    uint32_t source = fc_live_id(fc, FC_K_DATA_SOURCE);
+    if (!source) {
+        return false;
+    }
+    return fc_send_empty(fc, source, 4);
+}
+
+static inline bool fake_compositor_drag_source_cancelled(fake_compositor *fc) {
+    uint32_t source = fc_live_id(fc, FC_K_DATA_SOURCE);
+    if (!source) {
+        return false;
+    }
+    return fc_send_empty(fc, source, 2);
+}
+
+/* Asks the client's drag source for its payload with wl_data_source.send. The
+ * write end travels via SCM_RIGHTS; the read end stays here for
+ * fake_compositor_drag_source_payload(). */
+static inline bool fake_compositor_drag_source_send(fake_compositor *fc,
+                                                    const char *mime_type) {
+    uint32_t source = fc_live_id(fc, FC_K_DATA_SOURCE);
+    if (!source) {
+        return false;
+    }
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) < 0) {
+        return false;
+    }
+    pthread_mutex_lock(&fc->state_lock);
+    if (fc->source_read_fd >= 0) {
+        close(fc->source_read_fd);
+    }
+    fc->source_read_fd = fds[0];
+    pthread_mutex_unlock(&fc->state_lock);
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, mime_type);
+    bool ok = fc_send_with_fd(fc, source, 1, &builder, fds[1]);
+    close(fds[1]);
+    if (!ok) {
+        pthread_mutex_lock(&fc->state_lock);
+        if (fc->source_read_fd == fds[0]) {
+            close(fc->source_read_fd);
+            fc->source_read_fd = -1;
+        }
+        pthread_mutex_unlock(&fc->state_lock);
+    }
+    return ok;
+}
+
+/* Reads and closes the source pipe filled by the client. Returns the byte count
+ * (0 on timeout or when no send is pending). Call after a sync/dispatch so the
+ * client has run its wl_data_source.send handler. */
+static inline ssize_t fake_compositor_drag_source_payload(fake_compositor *fc, char *buffer,
+                                                          size_t capacity) {
+    pthread_mutex_lock(&fc->state_lock);
+    int fd = fc->source_read_fd;
+    fc->source_read_fd = -1;
+    pthread_mutex_unlock(&fc->state_lock);
+    if (fd < 0 || !buffer || capacity == 0) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        return 0;
+    }
+    size_t length = 0;
+    for (;;) {
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int ready = poll(&pfd, 1, 2000);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (ready == 0) {
+            break;
+        }
+        if (length == capacity) {
+            break;
+        }
+        ssize_t got = read(fd, buffer + length, capacity - length);
+        if (got > 0) {
+            length += (size_t)got;
+            continue;
+        }
+        if (got == 0) {
+            break;
+        }
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+            continue;
+        }
+        break;
+    }
+    close(fd);
+    return (ssize_t)length;
+}
+
+/* ---------- primary selection ---------- */
+
+/* Injects zwp_primary_selection_device_v1.data_offer, the offer's mime list and
+ * the selection event. Event opcodes: device data_offer(0) selection(1); offer
+ * offer(0). The payload is served on zwp_primary_selection_offer_v1.receive. */
+static inline bool fake_compositor_primary_offer(fake_compositor *fc,
+                                                 const char *const *mimes,
+                                                 size_t mime_count, const char *text) {
+    uint32_t device = 0;
+    uint32_t offer = 0;
+    pthread_mutex_lock(&fc->state_lock);
+    device = fc_find_live_locked(fc, FC_K_PRIMARY_DEVICE);
+    if (device) {
+        offer = fc->next_server_id++;
+        if (fc_object_new_locked(fc, offer, FC_K_PRIMARY_OFFER, 0)) {
+            free(fc->primary_text);
+            fc->primary_text = text ? strdup(text) : NULL;
+            fc->primary_offer_id = offer;
+        } else {
+            offer = 0;
+        }
+    }
+    pthread_mutex_unlock(&fc->state_lock);
+    if (!device || !offer) {
+        return false;
+    }
+    if (!fc_send_u32(fc, device, 0, offer)) {
+        return false;
+    }
+    for (size_t i = 0; i < mime_count; ++i) {
+        fc_builder builder;
+        fc_b_reset(&builder);
+        fc_b_string(&builder, mimes[i]);
+        if (!fc_send(fc, offer, 0, &builder)) {
+            return false;
+        }
+    }
+    return fc_send_u32(fc, device, 1, offer);
+}
+
+static inline uint32_t fake_compositor_primary_offer_id(fake_compositor *fc) {
+    pthread_mutex_lock(&fc->state_lock);
+    uint32_t offer = fc->primary_offer_id;
+    pthread_mutex_unlock(&fc->state_lock);
+    return offer;
+}
+
+/* zwp_primary_selection_source_v1.cancelled (event opcode 1) tells the owner
+ * its selection was replaced; the client destroys the source. */
+static inline bool fake_compositor_primary_source_cancelled(fake_compositor *fc) {
+    uint32_t source = fc_live_id(fc, FC_K_PRIMARY_SOURCE);
+    if (!source) {
+        return false;
+    }
+    return fc_send_empty(fc, source, 1);
+}
+
 /* ---------- receive path ---------- */
 
 static inline void fc_fd_push_locked(fake_compositor *fc, int fd) {
@@ -2478,9 +2777,29 @@ static inline fc_request fc_decode_locked(fake_compositor *fc, uint32_t object_i
     }
     if (request.kind == (uint16_t)FC_K_DATA_OFFER && opcode == 1) {
         int fd = request.nargs >= 2 ? request.args[1].i : -1;
-        if (fd >= 0 && fc->selection_text) {
-            size_t length = strlen(fc->selection_text);
-            const char *data = fc->selection_text;
+        const char *offer_text = (object_id == fc->drag_offer_id) ? fc->drag_text
+                                                               : fc->selection_text;
+        if (fd >= 0 && offer_text) {
+            size_t length = strlen(offer_text);
+            const char *data = offer_text;
+            while (length > 0) {
+                ssize_t written = write(fd, data, length);
+                if (written <= 0) {
+                    break;
+                }
+                data += (size_t)written;
+                length -= (size_t)written;
+            }
+        }
+        if (fd >= 0) {
+            close(fd);
+        }
+    }
+    if (request.kind == (uint16_t)FC_K_PRIMARY_OFFER && opcode == 0) {
+        int fd = request.nargs >= 2 ? request.args[1].i : -1;
+        if (fd >= 0 && fc->primary_text) {
+            size_t length = strlen(fc->primary_text);
+            const char *data = fc->primary_text;
             while (length > 0) {
                 ssize_t written = write(fd, data, length);
                 if (written <= 0) {
@@ -2798,6 +3117,14 @@ static inline void fc_cleanup_start(fake_compositor *fc) {
     fc->keymap_text = NULL;
     free(fc->selection_text);
     fc->selection_text = NULL;
+    free(fc->drag_text);
+    fc->drag_text = NULL;
+    free(fc->primary_text);
+    fc->primary_text = NULL;
+    if (fc->source_read_fd >= 0) {
+        close(fc->source_read_fd);
+        fc->source_read_fd = -1;
+    }
     if (fc->had_display) {
         setenv("WAYLAND_DISPLAY", fc->saved_display, 1);
     } else {
@@ -2824,6 +3151,7 @@ static inline bool fake_compositor_start(fake_compositor *fc, unsigned int optio
     memset(fc, 0, sizeof(*fc));
     fc->listen_fd = -1;
     fc->client_fd = -1;
+    fc->source_read_fd = -1;
     fc->options = options;
     fc->next_server_id = 0xff000000u;
     pthread_mutex_init(&fc->state_lock, NULL);
@@ -2937,9 +3265,17 @@ static inline void fake_compositor_stop(fake_compositor *fc) {
     free(fc->inbox);
     free(fc->keymap_text);
     free(fc->selection_text);
+    free(fc->drag_text);
+    free(fc->primary_text);
+    if (fc->source_read_fd >= 0) {
+        close(fc->source_read_fd);
+        fc->source_read_fd = -1;
+    }
     fc->inbox = NULL;
     fc->keymap_text = NULL;
     fc->selection_text = NULL;
+    fc->drag_text = NULL;
+    fc->primary_text = NULL;
     pthread_mutex_destroy(&fc->state_lock);
     pthread_mutex_destroy(&fc->write_lock);
 }

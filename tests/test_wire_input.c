@@ -127,9 +127,23 @@ static void test_facility_tables(void) {
 
     /* wayland.xml wl_data_offer: accept(0), receive(1), destroy(2), finish(3),
      * set_actions(4). wl_data_source: offer(0), destroy(1), set_actions(2). */
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_OFFER].reqs[0].name, "accept") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_OFFER].reqs[1].name, "receive") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_OFFER].reqs[3].name, "finish") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_OFFER].reqs[4].name, "set_actions") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_SOURCE].reqs[0].name, "offer") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_SOURCE].reqs[1].name, "destroy") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_DATA_SOURCE].reqs[2].name, "set_actions") == 0);
 
     /* primary-selection-unstable-v1: manager create_source(0)/get_device(1),
      * source offer(0)/destroy(1), offer receive(0)/destroy(1). */
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_MANAGER].reqs[0].name, "create_source") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_MANAGER].reqs[1].name, "get_device") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_SOURCE].reqs[0].name, "offer") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_OFFER].reqs[0].name, "receive") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_OFFER].reqs[0].sig, "sh") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_DEVICE].reqs[0].name, "set_selection") == 0);
+    pt_check(strcmp(fc_ifaces[FC_K_PRIMARY_DEVICE].reqs[0].sig, "ou") == 0);
 }
 
 /* ---------- touch ---------- */
@@ -488,9 +502,445 @@ static void test_tablet_wire(void) {
     fake_compositor_stop(&fc);
 }
 
+/* ---------- drag and drop ---------- */
+
+typedef struct wire_drop {
+    int enters;
+    int motions;
+    int leaves;
+    int drops;
+    uint32_t mime_count;
+    uint32_t actions;
+    char selected[64];
+    char mime[64];
+    char text[128];
+    size_t size;
+    int chunks;
+    int done;
+    int cancelled;
+    float x;
+    float y;
+} wire_drop;
+
+static const char *wire_drop_enter(pt_widget *widget, pt_drop_offer *offer, void *user_data) {
+    (void)widget;
+    wire_drop *drop = user_data;
+    ++drop->enters;
+    drop->mime_count = pt_drop_offer_mime_count(offer);
+    drop->actions = pt_drop_offer_actions(offer);
+
+    if (pt_drop_offer_has_mime(offer, "text/plain;charset=utf-8")) {
+        return "text/plain;charset=utf-8";
+    }
+    return pt_drop_offer_mime(offer, 0);
+}
+
+static void wire_drop_motion(pt_widget *widget, float x, float y, void *user_data) {
+    (void)widget;
+    wire_drop *drop = user_data;
+    ++drop->motions;
+    drop->x = x;
+    drop->y = y;
+}
+
+static void wire_drop_leave(pt_widget *widget, void *user_data) {
+    (void)widget;
+    wire_drop *drop = user_data;
+    ++drop->leaves;
+}
+
+static void wire_drop_stream(pt_widget *widget, pt_drop_stream *stream,
+                             pt_drop_stream_state state, const char *data, size_t size,
+                             void *user_data) {
+    (void)widget;
+    (void)stream;
+    wire_drop *drop = user_data;
+    if (state == pt_drop_stream_data) {
+        ++drop->chunks;
+        if (drop->size + size < sizeof(drop->text)) {
+            memcpy(drop->text + drop->size, data, size);
+            drop->size += size;
+            drop->text[drop->size] = '\0';
+        }
+    } else if (state == pt_drop_stream_done) {
+        ++drop->done;
+    } else if (state == pt_drop_stream_cancelled) {
+        ++drop->cancelled;
+    }
+}
+
+static void wire_drop_offer_drop(pt_widget *widget, pt_drop_offer *offer,
+                                 const char *mime_type, float x, float y,
+                                 void *user_data) {
+    (void)widget;
+    wire_drop *drop = user_data;
+    ++drop->drops;
+    snprintf(drop->mime, sizeof(drop->mime), "%s", mime_type ? mime_type : "");
+    snprintf(drop->selected, sizeof(drop->selected), "%s",
+             pt_drop_offer_selected_mime(offer) ? pt_drop_offer_selected_mime(offer) : "");
+    drop->x = x;
+    drop->y = y;
+    (void)pt_drop_offer_read(offer, mime_type, 0, wire_drop_stream, drop);
+}
+
+typedef struct wire_drag_result {
+    int count;
+    bool dropped;
+    pt_drag_action action;
+} wire_drag_result;
+
+static void wire_drag_finished(pt_window *window, bool dropped, pt_drag_action action,
+                               void *user_data) {
+    (void)window;
+    wire_drag_result *result = user_data;
+    ++result->count;
+    result->dropped = dropped;
+    result->action = action;
+}
+
+static void wire_pump_dnd(fake_compositor *fc, pt_app *app, wire_drop *drop) {
+    for (int i = 0; i < 200 && drop->done == 0 && drop->cancelled == 0; ++i) {
+        fake_compositor_dispatch(fc, app, 5);
+        pt_dnd_pump(app);
+    }
+}
+
+static void test_dnd_wire(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.wire.dnd");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+
+    pt_window *window = wire_open_window(&fc, app, "dnd-wire", 400, 300);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_widget *zone = pt_box_create(pt_window_root(window), pt_direction_row);
+    pt_widget_set_size(zone, 240.0f, 140.0f);
+    pt_widget_set_align_self(zone, pt_align_start);
+    wire_drop drop = {0};
+    pt_drop_target target = {
+        .motion = wire_drop_motion,
+        .leave = wire_drop_leave,
+        .enter_offer = wire_drop_enter,
+        .drop_offer = wire_drop_offer_drop,
+        .user_data = &drop,
+    };
+    pt_widget_set_drop_target(zone, &target);
+    wire_drag_result result = {0};
+    pt_window_set_drag_finished_callback(window, wire_drag_finished, &result);
+    pt_canvas *canvas = wire_paint(window, 400, 300);
+    float cx = zone->x + 50.0f;
+    float cy = zone->y + 40.0f;
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+
+    /* Implicit grab: a pointer press supplies the serial start_drag needs. */
+    fake_compositor_pointer_enter(&fc, 8000u, surface, cx, cy);
+    fake_compositor_pointer_button(&fc, 8001u, 10u, 0x110u, true);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->pointer_serial == 8001u);
+    pt_check(window->pointer_inside);
+
+    const pt_drag_data drag_data = {
+        .mime_type = "text/plain;charset=utf-8",
+        .data = "wire drag payload",
+        .size = 0,
+    };
+    fake_compositor_clear(&fc);
+    pt_check(pt_window_begin_drag(window, &drag_data, 1));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(pt_window_get_drag_active(window));
+
+    /* Source setup requests: one data source, the offer list including every
+     * text alias, a copy-only action mask and start_drag with the grab serial. */
+    pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_MANAGER, 0) >= 1);
+    fc_request create_source = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_DATA_MANAGER, 0, &create_source));
+    pt_check(create_source.new_id != 0);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 0) >= 5);
+    bool offered_plain = false;
+    size_t offer_count = fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 0);
+    for (size_t i = 0; i < offer_count; ++i) {
+        fc_request offer_request;
+        if (fake_compositor_nth_request(&fc, FC_K_DATA_SOURCE, 0, i, &offer_request) >= 0 &&
+            offer_request.nargs >= 1 && offer_request.args[0].has_text &&
+            strcmp(offer_request.args[0].text, "text/plain;charset=utf-8") == 0) {
+            offered_plain = true;
+        }
+    }
+    pt_check(offered_plain);
+    fc_request set_actions = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_DATA_SOURCE, 2, &set_actions));
+    pt_check(set_actions.args[0].u == 1u); /* COPY */
+    fc_request start_drag = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_DATA_DEVICE, 0, &start_drag));
+    pt_check(start_drag.nargs == 4);
+    pt_check(start_drag.args[0].u == create_source.new_id);
+    pt_check(start_drag.args[1].u == surface);
+    pt_check(start_drag.args[3].u == 8001u);
+
+    /* Source send: the compositor asks for a MIME type with an fd; the client
+     * writes its payload through SCM_RIGHTS and we read it back. */
+    pt_check(fake_compositor_drag_source_send(&fc, "text/plain;charset=utf-8"));
+    pt_check(fake_compositor_sync(&fc, app));
+    char source_payload[128] = {0};
+    ssize_t source_size =
+        fake_compositor_drag_source_payload(&fc, source_payload, sizeof(source_payload));
+    pt_check(source_size == (ssize_t)strlen("wire drag payload"));
+    pt_check(strcmp(source_payload, "wire drag payload") == 0);
+
+    /* target/action arrive before the drop. */
+    pt_check(fake_compositor_drag_source_target(&fc, "text/plain;charset=utf-8"));
+    pt_check(fake_compositor_drag_source_action(&fc, 1u)); /* COPY */
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->drag_action == 1u);
+
+    /* Destination side: a compositor offer with two MIME types. */
+    static const char *const drag_mimes[] = {"text/plain;charset=utf-8", "text/html"};
+    pt_check(fake_compositor_drag_offer(&fc, drag_mimes, 2, "wire drop text", 3u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_drag_offer_id(&fc) != 0);
+    pt_check(app->platform->offers != NULL);
+    pt_check(app->platform->drag_offer == NULL);
+
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_drag_enter(&fc, 8101u, surface, cx, cy));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(drop.enters == 1);
+    pt_check(drop.mime_count == 2);
+    pt_check(drop.actions == 3u); /* COPY | MOVE advertised by the source */
+    pt_check(app->platform->drag_mime != NULL);
+    if (app->platform->drag_mime) {
+        pt_check(strcmp(app->platform->drag_mime, "text/plain;charset=utf-8") == 0);
+    }
+    fc_request accept = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_OFFER, 0, 1, 8));
+    pt_check(fake_compositor_last_request(&fc, FC_K_DATA_OFFER, 0, &accept));
+    pt_check(accept.nargs == 2);
+    pt_check(accept.args[0].u == 8101u);
+    pt_check(accept.args[1].has_text);
+    pt_check(app->platform->drag_mime != NULL);
+    if (app->platform->drag_mime) {
+        pt_check(strcmp(accept.args[1].text, app->platform->drag_mime) == 0);
+    }
+    fc_request negotiated = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_OFFER, 4, 1, 8));
+    pt_check(fake_compositor_last_request(&fc, FC_K_DATA_OFFER, 4, &negotiated));
+    pt_check(negotiated.args[0].u == 3u);
+    pt_check(negotiated.args[1].u == 1u);
+
+    /* Motion routes to the target widget in widget-local coordinates. */
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_drag_motion(&fc, 8102u, cx + 12.0, cy + 7.0));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(drop.motions == 1);
+    pt_check_near(drop.x, 62.0, 0.5);
+    pt_check_near(drop.y, 47.0, 0.5);
+
+    /* Drop: the client accepts the selected MIME, reads the payload over the
+     * SCM_RIGHTS fd and finishes the transfer (v3). */
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_drag_drop(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    wire_pump_dnd(&fc, app, &drop);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(drop.drops == 1);
+    pt_check(drop.done == 1);
+    pt_check(drop.cancelled == 0);
+    pt_check(strcmp(drop.text, "wire drop text") == 0);
+    pt_check(strcmp(drop.mime, "text/plain;charset=utf-8") == 0);
+    pt_check_near(drop.x, 62.0, 0.5);
+    pt_check_near(drop.y, 47.0, 0.5);
+    fc_request receive = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_DATA_OFFER, 1, &receive));
+    pt_check(receive.nargs == 2);
+    pt_check(receive.args[0].has_text);
+    pt_check(strcmp(receive.args[0].text, "text/plain;charset=utf-8") == 0);
+    pt_check((receive.flags & FC_FLAG_FD) != 0u);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_OFFER, 3) >= 1);
+
+    /* Source completion: dnd_drop_performed then dnd_finished with the
+     * negotiated action. The client destroys its source. */
+    pt_check(fake_compositor_drag_source_drop_performed(&fc));
+    pt_check(fake_compositor_drag_source_finished(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(result.count == 1);
+    pt_check(result.dropped);
+    pt_check(result.action == pt_drag_action_copy);
+    pt_check(!pt_window_get_drag_active(window));
+    pt_check(pt_window_get_drag_result(window) == pt_drag_action_copy);
+    pt_check(app->platform->drag_source == NULL);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 1) >= 1);
+    pt_check(app->platform->drag_icon_surface != NULL);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+
+    /* Cancellation path: a new grab, a new source, then wl_data_source.cancelled
+     * reports dropped=false and leaves the destination untouched. */
+    fake_compositor_pointer_button(&fc, 8201u, 11u, 0x110u, false);
+    fake_compositor_pointer_button(&fc, 8202u, 12u, 0x110u, true);
+    pt_check(fake_compositor_sync(&fc, app));
+    const pt_drag_data cancel_data = {
+        .mime_type = "text/plain;charset=utf-8",
+        .data = "cancel payload",
+        .size = 0,
+    };
+    pt_check(pt_window_begin_drag(window, &cancel_data, 1));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(pt_window_get_drag_active(window));
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_drag_source_cancelled(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(result.count == 2);
+    pt_check(!result.dropped);
+    pt_check(result.action == pt_drag_action_none);
+    pt_check(!pt_window_get_drag_active(window));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_SOURCE, 1, 1, 8));
+
+    pt_check(!fake_compositor_request_overflowed(&fc));
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+    pt_check(fake_compositor_error(&fc) == NULL);
+
+    if (canvas) {
+        pt_canvas_destroy(canvas);
+    }
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
+/* ---------- primary selection ---------- */
+
+static void test_primary_wire(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.wire.primary");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_check(fake_compositor_global_bound(&fc, FC_K_PRIMARY_MANAGER));
+
+    pt_window *window = wire_open_window(&fc, app, "primary-wire", 360, 260);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_canvas *canvas = wire_paint(window, 360, 260);
+
+    /* Publishing sends create_source, the four text aliases and set_selection
+     * with the caller-supplied trigger serial. */
+    fake_compositor_clear(&fc);
+    pt_check(pt_window_primary_set_serial(window, "wire primary text", 9001u));
+    pt_check(fake_compositor_sync(&fc, app));
+    fc_request create_source = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_MANAGER, 0, &create_source));
+    pt_check(create_source.new_id != 0);
+    pt_check(app->platform->primary_source != NULL);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_PRIMARY_SOURCE, 0) >= 4);
+    fc_request selection = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_DEVICE, 0, &selection));
+    pt_check(selection.nargs == 2);
+    pt_check(selection.args[0].u == create_source.new_id);
+    pt_check(selection.args[1].u == 9001u);
+
+    /* Clearing the owner sends set_selection(NULL) and destroys the source. */
+    pt_check(pt_window_primary_set_serial(window, NULL, 9002u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_DEVICE, 0, &selection));
+    pt_check(selection.args[0].u == 0u);
+    pt_check(selection.args[1].u == 9002u);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_PRIMARY_SOURCE, 1) >= 1);
+    pt_check(app->platform->primary_source == NULL);
+
+    /* Incoming offer: data_offer + mime list + selection, then the getter
+     * pulls the text through zwp_primary_selection_offer_v1.receive. */
+    static const char *const primary_mimes[] = {"text/plain", "text/plain;charset=utf-8"};
+    fake_compositor_clear(&fc);
+    pt_check(fake_compositor_primary_offer(&fc, primary_mimes, 2, "wire primary payload"));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_primary_offer_id(&fc) != 0);
+    pt_check(app->platform->primary_offer != NULL);
+    pt_check(app->platform->primary_mime != NULL);
+    if (app->platform->primary_mime) {
+        pt_check(strcmp(app->platform->primary_mime, "text/plain;charset=utf-8") == 0);
+    }
+    char *text = pt_window_primary_get(window);
+    pt_check(text != NULL);
+    if (text) {
+        pt_check(strcmp(text, "wire primary payload") == 0);
+        free(text);
+    }
+    fc_request receive = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_OFFER, 0, &receive));
+    pt_check(receive.nargs == 2);
+    pt_check(receive.args[0].has_text);
+    pt_check(strcmp(receive.args[0].text, "text/plain;charset=utf-8") == 0);
+    pt_check((receive.flags & FC_FLAG_FD) != 0u);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+
+    /* Ownership cancelled: the client destroys the source and drops its text. */
+    fake_compositor_clear(&fc);
+    pt_check(pt_window_primary_set_serial(window, "owned again", 9003u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->primary_source != NULL);
+    pt_check(fake_compositor_primary_source_cancelled(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(app->platform->primary_source == NULL);
+    pt_check(fake_compositor_count_requests(&fc, FC_K_PRIMARY_SOURCE, 1) >= 1);
+
+    /* Repeated offer/read cycles keep the descriptor count stable. */
+    int fds_before = fake_compositor_fd_count();
+    for (int i = 0; i < 12; ++i) {
+        pt_check(fake_compositor_primary_offer(&fc, primary_mimes, 2, "loop payload"));
+        pt_check(fake_compositor_sync(&fc, app));
+        char *loop_text = pt_window_primary_get(window);
+        pt_check(loop_text != NULL && strcmp(loop_text, "loop payload") == 0);
+        free(loop_text);
+    }
+    int fds_after = fake_compositor_fd_count();
+    pt_check(fds_before > 0 && fds_after > 0);
+    pt_check(fds_after <= fds_before);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+
+    pt_check(!fake_compositor_request_overflowed(&fc));
+    pt_check(fake_compositor_error(&fc) == NULL);
+
+    if (canvas) {
+        pt_canvas_destroy(canvas);
+    }
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
     test_facility_tables();
     test_touch_wire();
     test_tablet_wire();
+    test_dnd_wire();
+    test_primary_wire();
     return pt_test_finish("wire_input");
 }
