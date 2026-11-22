@@ -223,6 +223,21 @@ pt_api bool pt_paint_font_metrics(pt_paint_context *context, const char *family,
  *   callback ABI. They never affect `commit` text or the local composition
  *   buffer.
  *
+ * Input panel requests (since 1.3):
+ * - `pt_window_show_input_panel`/`pt_window_hide_input_panel` forward the
+ *   text-input-v3 v2 `show_input_panel`/`hide_input_panel` requests for the
+ *   window's active text-input surface. These protocol requests are hints
+ *   only: the compositor may ignore them, and Pt never reports whether an
+ *   on-screen keyboard actually appeared.
+ * - When the window has no active text-input object the desired state is
+ *   remembered and forwarded when IME next activates for that window. Headless
+ *   windows, windows with no editable/custom IME focus and compositors with a
+ *   v1 text-input never send a request.
+ * - The functions return true when the call changed the recorded desired
+ *   state, false when it was already in that state or the window is NULL.
+ *   Repeated calls are therefore idempotent and never duplicate the request.
+ *   Call these on the UI thread only; they are safe while IME is disabled.
+ *
  * `pt_window_set_ime_cursor_rect` sets the logical-pixel caret rectangle used
  * by candidate windows. It is remembered while IME is disabled and pushed when
  * IME becomes active. Coordinates are relative to the window content area.
@@ -241,6 +256,14 @@ pt_api void pt_window_set_ime_enabled(pt_window *window, bool enabled);
 /* Since 1.1. */
 pt_api void pt_window_set_ime_cursor_rect(pt_window *window, int x, int y, int width,
                                           int height);
+/* Since 1.3. Records the intent to show the on-screen input panel and forwards
+ * zwp_text_input_v3.show_input_panel when the window owns the active text-input
+ * surface. Returns true when the desired state changed. The compositor decides
+ * whether a panel appears; see the IME section above. */
+pt_api bool pt_window_show_input_panel(pt_window *window);
+/* Since 1.3. The hide counterpart; forwards hide_input_panel when possible and
+ * returns true when the desired state changed. */
+pt_api bool pt_window_hide_input_panel(pt_window *window);
 
 #ifdef __cplusplus
 }

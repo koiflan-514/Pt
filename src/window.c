@@ -2125,3 +2125,23 @@ void pt_window_set_ime_cursor_rect(pt_window *window, int x, int y, int width, i
         pt_platform_ime_set_cursor_rect(window, x, y, width, height);
     }
 }
+
+bool pt_window_show_input_panel(pt_window *window) {
+    if (!window || window->input_panel_requested) {
+        return false;
+    }
+    window->input_panel_requested = true;
+    /* Best-effort: only an active text-input surface can carry the v2 request.
+     * Otherwise the intent is applied when IME next activates for this window. */
+    (void)pt_platform_ime_input_panel(window, true);
+    return true;
+}
+
+bool pt_window_hide_input_panel(pt_window *window) {
+    if (!window || !window->input_panel_requested) {
+        return false;
+    }
+    window->input_panel_requested = false;
+    (void)pt_platform_ime_input_panel(window, false);
+    return true;
+}

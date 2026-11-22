@@ -448,6 +448,35 @@ static void test_text_area_hints(pt_app *app) {
     pt_window_free(window);
 }
 
+static void test_input_panel(pt_app *app, pt_window *window) {
+    pt_check(!pt_window_show_input_panel(NULL));
+    pt_check(!pt_window_hide_input_panel(NULL));
+    pt_check(!window->input_panel_requested);
+
+    /* Headless has no text-input object: the desired state is recorded but no
+     * protocol request can be forwarded. */
+    pt_check(!pt_platform_ime_input_panel(window, true));
+    pt_check(pt_window_show_input_panel(window));
+    pt_check(window->input_panel_requested);
+    pt_check(!pt_window_show_input_panel(window));
+    pt_check(!pt_platform_ime_input_panel(window, true));
+
+    pt_check(pt_window_hide_input_panel(window));
+    pt_check(!window->input_panel_requested);
+    pt_check(!pt_window_hide_input_panel(window));
+
+    /* A window with no focused widget follows the same state machine. */
+    pt_window *idle = pt_window_create(app, "ime-panel-idle", 240, 160);
+    pt_check(idle != NULL);
+    pt_check(!pt_window_wants_ime(idle));
+    pt_check(pt_window_show_input_panel(idle));
+    pt_check(idle->input_panel_requested);
+    pt_check(!pt_window_show_input_panel(idle));
+    pt_check(pt_window_hide_input_panel(idle));
+    pt_check(!idle->input_panel_requested);
+    pt_window_free(idle);
+}
+
 static void test_custom_surface(pt_app *app) {
     pt_window *window = pt_window_create(app, "custom-ime", 320, 220);
     pt_check(window != NULL);
@@ -534,6 +563,7 @@ int main(void) {
     test_preedit_hint_ranges(window);
     test_preedit_hint_pixels(app);
     test_text_area_hints(app);
+    test_input_panel(app, window);
     test_custom_surface(app);
 
     pt_window_free(window);

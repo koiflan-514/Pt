@@ -1389,6 +1389,10 @@ struct pt_window {
     int custom_ime_width;
     int custom_ime_height;
     bool custom_ime_rect_valid;
+    /* Desired text-input-v3 v2 input-panel (on-screen keyboard) state. It is
+     * forwarded on the next activation when the window has no active
+     * text-input object yet; the compositor remains free to ignore it. */
+    bool input_panel_requested;
 
     pt_popup_policy popup_policy;
 
@@ -1763,6 +1767,10 @@ void pt_platform_popup_destroy(pt_overlay *overlay);
 void pt_platform_popup_destroy_all(pt_window *window);
 void pt_platform_ime_set_enabled(pt_window *window, bool enabled);
 void pt_platform_ime_set_cursor_rect(pt_window *window, int x, int y, int width, int height);
+/* Forwards a text-input-v3 v2 show/hide_input_panel request when this window
+ * owns the active text-input object. Returns true when the request reached the
+ * protocol object; false for headless, no focus or a v1 text-input. */
+bool pt_platform_ime_input_panel(pt_window *window, bool show);
 int pt_platform_dispatch(pt_app *app, int timeout_ms);
 int pt_platform_dispatch_once(pt_app *app);
 void pt_platform_flush(pt_app *app);

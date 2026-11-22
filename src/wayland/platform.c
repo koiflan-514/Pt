@@ -1504,6 +1504,12 @@ void pt_platform_ime_set_enabled(pt_window *window, bool enabled) {
         zwp_text_input_v3_enable(platform->text_input);
         ime_request_state(platform, window);
         zwp_text_input_v3_commit(platform->text_input);
+        /* A show request recorded while the window had no active text-input
+         * object is forwarded now that it owns one. Still best-effort. */
+        if (window->input_panel_requested &&
+            wl_proxy_get_version((struct wl_proxy *)platform->text_input) >= 2) {
+            zwp_text_input_v3_show_input_panel(platform->text_input);
+        }
     } else if (platform->text_input_enabled) {
         if (window && platform->text_input_window != window) {
             return;
@@ -1526,6 +1532,25 @@ void pt_platform_ime_set_cursor_rect(pt_window *window, int x, int y, int width,
     ime_request_state(platform, window);
     zwp_text_input_v3_set_cursor_rectangle(platform->text_input, x, y, width, height);
     zwp_text_input_v3_commit(platform->text_input);
+}
+
+bool pt_platform_ime_input_panel(pt_window *window, bool show) {
+    pt_platform *platform = pt_platform_for(window);
+    if (!platform || platform->headless || !platform->text_input ||
+        !platform->text_input_enabled || platform->text_input_window != window) {
+        return false;
+    }
+    if (wl_proxy_get_version((struct wl_proxy *)platform->text_input) < 2) {
+        return false;
+    }
+    /* v2 show/hide_input_panel are hints: the compositor may ignore them and
+     * there is no event reporting actual panel visibility. */
+    if (show) {
+        zwp_text_input_v3_show_input_panel(platform->text_input);
+    } else {
+        zwp_text_input_v3_hide_input_panel(platform->text_input);
+    }
+    return true;
 }
 
 /* ---------- clipboard ---------- */
