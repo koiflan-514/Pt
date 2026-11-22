@@ -316,6 +316,138 @@ static void custom_preedit(pt_window *window, const char *text, int32_t cursor_b
     state->preedits++;
 }
 
+static void test_preedit_hint_ranges(pt_window *window) {
+    pt_widget *entry = make_entry(window, "");
+
+    /* Clamp, zero-length drop, overlap preservation and unknown-hint storage. */
+    pt_ime_hint hints[] = {
+        {0, 0, pt_ime_hint_whole},
+        {2, 99, pt_ime_hint_selection},
+        {1, 2, pt_ime_hint_prediction},
+        {2, 3, pt_ime_hint_spelling_error},
+        {0, 1, 99},
+    };
+    pt_check(pt_widget_preedit_hints_ex(entry, "xyz", 3, 3, hints, 5));
+    pt_check(entry->preedit_hint_count == 4);
+    pt_check(entry->preedit_hints[0].start == 2 && entry->preedit_hints[0].end == 3);
+    pt_check(entry->preedit_hints[0].hint == pt_ime_hint_selection);
+    pt_check(entry->preedit_hints[1].start == 1 && entry->preedit_hints[1].end == 2);
+    pt_check(entry->preedit_hints[2].start == 2 && entry->preedit_hints[2].end == 3);
+    pt_check(entry->preedit_hints[3].start == 0 && entry->preedit_hints[3].end == 1);
+    pt_check(entry->preedit_hints[3].hint == 99);
+
+    /* Offsets inside a multibyte sequence snap outward; start==end is dropped. */
+    pt_ime_hint multibyte[] = {
+        {2, 4, pt_ime_hint_whole},
+        {1, 4, pt_ime_hint_selection},
+    };
+    pt_check(pt_widget_preedit_hints_ex(entry, "a\xC3\xA9\xE4\xB8\xAD", 6, 6, multibyte, 2));
+    pt_check(entry->preedit_hint_count == 1);
+    pt_check(entry->preedit_hints[0].start == 1 && entry->preedit_hints[0].end == 3);
+
+    /* A control byte removed by sanitization still maps the raw byte offsets. */
+    pt_ime_hint sanitized[] = {{1, 3, pt_ime_hint_whole}};
+    pt_check(pt_widget_preedit_hints_ex(entry, "a\nb", 3, 3, sanitized, 1));
+    pt_check(strcmp(entry->preedit, "ab") == 0);
+    pt_check(entry->preedit_hint_count == 1);
+    pt_check(entry->preedit_hints[0].start == 1 && entry->preedit_hints[0].end == 2);
+
+    /* Ending the composition drops the hints with the preedit. */
+    pt_check(pt_widget_preedit_hints_ex(entry, "", -1, -1, hints, 5));
+    pt_check(entry->preedit == NULL);
+    pt_check(entry->preedit_hint_count == 0);
+
+    /* Hints never touch text or commit handling. */
+    pt_widget_set_text(entry, "base");
+    pt_ime_hint commit_hint[] = {{0, 3, pt_ime_hint_selection}};
+    pt_window_input_ime_compose_ex(window, NULL, "xyz", 3, 3, 0, 0, commit_hint, 1);
+    pt_check(strcmp(pt_widget_get_text(entry), "base") == 0);
+    pt_check(entry->preedit_hint_count == 1);
+    pt_window_input_ime_compose_ex(window, "Q", "", -1, -1, 0, 0, NULL, 0);
+    pt_check(strcmp(pt_widget_get_text(entry), "baseQ") == 0);
+    pt_check(entry->preedit == NULL);
+    pt_check(entry->preedit_hint_count == 0);
+
+    /* A programmatic text replacement drops the composition and its hints. */
+    pt_check(pt_widget_preedit_hints_ex(entry, "xyz", 3, 3, commit_hint, 1));
+    pt_check(entry->preedit_hint_count == 1);
+    pt_widget_set_text(entry, "reset");
+    pt_check(entry->preedit == NULL);
+    pt_check(entry->preedit_hint_count == 0);
+}
+
+static bool pixel_buffers_equal(const uint32_t *a, const uint32_t *b, size_t count) {
+    return memcmp(a, b, count * sizeof(*a)) == 0;
+}
+
+static void test_preedit_hint_pixels(pt_app *app) {
+    pt_window *window = pt_window_create(app, "ime-hints", 260, 120);
+    pt_check(window != NULL);
+    pt_widget *entry = make_entry(window, "ab");
+    pt_window_input_ime_compose(window, NULL, "xyz", 3, 3, 0, 0);
+    pt_check(entry->preedit_hint_count == 0);
+
+    /* Keep caret painting out of the comparison so the only delta is the hint. */
+    window->caret_visible = false;
+    int width = pt_window_get_width(window);
+    int height = pt_window_get_height(window);
+    size_t count = (size_t)width * (size_t)height;
+    uint32_t *plain = pt_alloc(count * sizeof(*plain));
+    uint32_t *hinted = pt_alloc(count * sizeof(*hinted));
+    uint32_t *cleared = pt_alloc(count * sizeof(*cleared));
+    pt_check(pt_window_paint_pixels(window, plain, width, height));
+
+    pt_ime_hint hints[] = {
+        {0, 1, pt_ime_hint_selection},
+        {2, 3, pt_ime_hint_spelling_error},
+    };
+    pt_check(pt_widget_preedit_hints_ex(entry, "xyz", 3, 3, hints, 2));
+    window->caret_visible = false;
+    pt_check(pt_window_paint_pixels(window, hinted, width, height));
+    pt_check(!pixel_buffers_equal(plain, hinted, count));
+
+    /* Clearing the hints restores the exact 1.2 presentation. */
+    pt_check(pt_widget_preedit_hints_ex(entry, "xyz", 3, 3, NULL, 0));
+    window->caret_visible = false;
+    pt_check(pt_window_paint_pixels(window, cleared, width, height));
+    pt_check(pixel_buffers_equal(plain, cleared, count));
+
+    free(plain);
+    free(hinted);
+    free(cleared);
+    pt_window_input_ime_compose(window, "", "", -1, -1, 0, 0);
+    pt_window_free(window);
+}
+
+static void test_text_area_hints(pt_app *app) {
+    pt_window *window = pt_window_create(app, "ime-area-hints", 260, 160);
+    pt_check(window != NULL);
+    pt_widget *area = pt_text_area_create(pt_window_root(window), "area");
+    pt_check(area != NULL);
+    pt_widget_set_text(area, "line");
+    pt_check(pt_widget_focus(area));
+    pt_window_input_ime_compose(window, NULL, "xy", 2, 2, 0, 0);
+    window->caret_visible = false;
+
+    int width = pt_window_get_width(window);
+    int height = pt_window_get_height(window);
+    size_t count = (size_t)width * (size_t)height;
+    uint32_t *plain = pt_alloc(count * sizeof(*plain));
+    uint32_t *hinted = pt_alloc(count * sizeof(*hinted));
+    pt_check(pt_window_paint_pixels(window, plain, width, height));
+    pt_ime_hint hints[] = {{0, 1, pt_ime_hint_prediction}};
+    pt_check(pt_widget_preedit_hints_ex(area, "xy", 2, 2, hints, 1));
+    window->caret_visible = false;
+    pt_check(pt_window_paint_pixels(window, hinted, width, height));
+    pt_check(!pixel_buffers_equal(plain, hinted, count));
+
+    free(plain);
+    free(hinted);
+    /* Free the window with the hinted composition still live: the widget tree
+     * owns and releases the hint array. */
+    pt_window_free(window);
+}
+
 static void test_custom_surface(pt_app *app) {
     pt_window *window = pt_window_create(app, "custom-ime", 320, 220);
     pt_check(window != NULL);
@@ -335,6 +467,17 @@ static void test_custom_surface(pt_app *app) {
     pt_check(state.cursor_begin == 1 && state.cursor_end == 1);
     pt_check(state.commits == 0);
     pt_check(window->needs_draw);
+
+    /* Hints are presentation metadata for Pt-drawn preedits; a custom surface
+     * keeps the same callback payload and commit semantics. */
+    pt_ime_hint custom_hints[] = {{0, 1, pt_ime_hint_selection}};
+    window->needs_draw = false;
+    pt_window_input_ime_compose_ex(window, NULL, "nih", 2, 2, 0, 0, custom_hints, 1);
+    pt_check(strcmp(state.preedit, "nih") == 0);
+    pt_check(state.cursor_begin == 2 && state.cursor_end == 2);
+    pt_check(state.commits == 0);
+    pt_check(window->needs_draw);
+    pt_window_input_ime_compose(window, "", "", -1, -1, 0, 0);
 
     /* Empty done is only an acknowledgement; don't schedule a repaint. */
     window->needs_draw = false;
@@ -388,6 +531,9 @@ int main(void) {
     test_v2_action_is_not_enter(window);
     test_scripted_sequence(window);
     test_empty_done_is_noop(window);
+    test_preedit_hint_ranges(window);
+    test_preedit_hint_pixels(app);
+    test_text_area_hints(app);
     test_custom_surface(app);
 
     pt_window_free(window);

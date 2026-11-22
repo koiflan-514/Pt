@@ -773,6 +773,28 @@ bool pt_picker_a11y_has_value(const pt_widget *widget);
 
 /* ---------- widgets ---------- */
 
+/* text-input-v3 v2 preedit style hints. The values match the protocol enum and
+ * are presentation only: they never change the composition buffer, the commit
+ * text or the widget's text. Unknown values are accepted (stored) but have no
+ * visual rule, so a future protocol value degrades to the plain preedit. */
+typedef enum pt_ime_hint_kind {
+    pt_ime_hint_whole = 1,
+    pt_ime_hint_selection = 2,
+    pt_ime_hint_prediction = 3,
+    pt_ime_hint_prefix = 4,
+    pt_ime_hint_suffix = 5,
+    pt_ime_hint_spelling_error = 6,
+    pt_ime_hint_compose_error = 7,
+} pt_ime_hint_kind;
+
+typedef struct pt_ime_hint {
+    uint32_t start;
+    uint32_t end;
+    uint32_t hint;
+} pt_ime_hint;
+
+#define pt_ime_hint_max 256u
+
 typedef struct pt_widget {
     pt_widget *parent;
     pt_widget *first_child;
@@ -788,6 +810,8 @@ typedef struct pt_widget {
     uint32_t span_count;
     int32_t preedit_cursor_begin;
     int32_t preedit_cursor_end;
+    pt_ime_hint *preedit_hints;
+    uint32_t preedit_hint_count;
     bool ime_composing;
     bool ime_history_pushed;
     pt_input_purpose input_purpose;
@@ -1026,6 +1050,13 @@ bool pt_widget_text_input(pt_widget *widget, const char *text);
 bool pt_widget_preedit(pt_widget *widget, const char *text);
 bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_begin,
                           int32_t cursor_end);
+/* Same composition update plus presentation-only hints. Offsets are UTF-8 byte
+ * offsets into `text` (the unsanitized preedit); they are clamped, snapped to
+ * codepoint boundaries and mapped onto the sanitized buffer. A drop of a
+ * zero-length or fully-out-of-range range is not an error. */
+bool pt_widget_preedit_hints_ex(pt_widget *widget, const char *text, int32_t cursor_begin,
+                                int32_t cursor_end, const pt_ime_hint *hints,
+                                uint32_t hint_count);
 bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_before,
                          uint32_t delete_after, bool finalize);
 bool pt_widget_ime_surrounding_text(const pt_widget *widget, char **text, uint32_t *cursor,
@@ -1495,6 +1526,13 @@ void pt_window_input_ime_preedit(pt_window *window, const char *text);
 void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
                                  int32_t cursor_begin, int32_t cursor_end,
                                  uint32_t delete_before, uint32_t delete_after);
+/* Compose variant carrying text-input-v3 v2 preedit hints. The hints are
+ * presentation only; the commit/preedit/done rules are identical. */
+void pt_window_input_ime_compose_ex(pt_window *window, const char *commit,
+                                    const char *preedit, int32_t cursor_begin,
+                                    int32_t cursor_end, uint32_t delete_before,
+                                    uint32_t delete_after, const pt_ime_hint *hints,
+                                    uint32_t hint_count);
 /* Applies a text-input-v3 v2 action. Submit activates the focused entry through
  * its submit callback; it never synthesizes an Enter key or inserts "\n". */
 void pt_window_input_ime_action(pt_window *window, uint32_t action);

@@ -196,11 +196,32 @@ pt_api bool pt_paint_font_metrics(pt_paint_context *context, const char *family,
  *   on a commit (or an explicit empty preedit), never on each preedit update.
  * - text-input-v3 v2 `action` (submit) activates the focused entry through its
  *   submit callback. It is not turned into a synthetic Enter key and inserts
- *   no newline. `preedit_hint` ranges are accepted but not rendered; they never
- *   change the composition buffer or synthesize input.
+ *   no newline. `preedit_hint` ranges never change the composition buffer or
+ *   synthesize input; they are presentation only (see the visual rules below).
  * - `delete_surrounding_text` lengths are UTF-8 byte counts measured from the
  *   caret in each direction. Pt snaps them to codepoint boundaries so a
  *   multibyte sequence is never split.
+ *
+ * `preedit_hint` presentation (text-input-v3 v2, since 1.3):
+ * - Pt-drawn entries and text areas render the hint ranges as a second
+ *   underline below the plain composition underline. The plain 1.5 px accent
+ *   underline still spans the whole preedit, so an unhinted preedit is
+ *   pixel-identical to 1.2. Hinted sections add:
+ *     `whole`      1.5 px accent, fully opaque;
+ *     `selection`  2.5 px accent (the strongest underline);
+ *     `prefix`/`suffix`  1.0 px muted text colour (not currently edited);
+ *     `prediction` 1.0 px muted text colour;
+ *     `spelling_error`/`compose_error`  2.0 px danger colour.
+ *   Unknown hint values are accepted and stored but add no visual, so a future
+ *   protocol value degrades to the plain preedit. Ranges are byte offsets into
+ *   the submitted preedit, clamped to it and snapped to UTF-8 boundaries; a
+ *   zero-length or fully out-of-range range is ignored. At most 256 ranges are
+ *   retained for one preedit (further ranges are ignored). Overlapping ranges
+ *   are painted in arrival order (the later underline wins where they overlap).
+ * - Custom surfaces that own their painting still receive the preedit text and
+ *   cursor through the callback only; the hint ranges are not added to the
+ *   callback ABI. They never affect `commit` text or the local composition
+ *   buffer.
  *
  * `pt_window_set_ime_cursor_rect` sets the logical-pixel caret rectangle used
  * by candidate windows. It is remembered while IME is disabled and pushed when

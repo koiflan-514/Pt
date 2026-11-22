@@ -1182,6 +1182,13 @@ static const struct wl_touch_listener touch_listener = {
 
 /* ---------- text input ---------- */
 
+static void text_input_clear_hints(pt_platform *platform) {
+    free(platform->pending_hints);
+    platform->pending_hints = NULL;
+    platform->pending_hint_count = 0;
+    platform->pending_hint_capacity = 0;
+}
+
 static void text_input_enter(void *data, struct zwp_text_input_v3 *text_input,
                              struct wl_surface *surface) {
     (void)text_input;
@@ -1212,6 +1219,7 @@ static void text_input_leave(void *data, struct zwp_text_input_v3 *text_input,
     platform->pending_delete_after = 0;
     platform->pending_action = 0;
     platform->pending_action_serial = 0;
+    text_input_clear_hints(platform);
     if (window) {
         pt_window_input_ime_preedit(window, "");
     }
@@ -1258,15 +1266,36 @@ static void text_input_action(void *data, struct zwp_text_input_v3 *text_input,
     }
 }
 
-/* Preedit hints describe presentation, not text. Pt keeps its composition
+/* Preedit hints describe presentation, not text. They are double-buffered like
+ * the text events and applied on the next done. Pt keeps its composition
  * buffer unchanged and never turns a hint into a key or commit. */
 static void text_input_preedit_hint(void *data, struct zwp_text_input_v3 *text_input,
                                     uint32_t start, uint32_t end, uint32_t hint) {
-    (void)data;
     (void)text_input;
-    (void)start;
-    (void)end;
-    (void)hint;
+    pt_platform *platform = data;
+    if (!platform || platform->pending_hint_count >= pt_ime_hint_max) {
+        return;
+    }
+    if (platform->pending_hint_count == platform->pending_hint_capacity) {
+        uint32_t capacity = platform->pending_hint_capacity
+                                ? platform->pending_hint_capacity * 2u
+                                : 8u;
+        if (capacity > pt_ime_hint_max) {
+            capacity = pt_ime_hint_max;
+        }
+        pt_ime_hint *next = pt_alloc((size_t)capacity * sizeof(*next));
+        if (platform->pending_hint_count > 0) {
+            memcpy(next, platform->pending_hints,
+                   (size_t)platform->pending_hint_count * sizeof(*next));
+        }
+        free(platform->pending_hints);
+        platform->pending_hints = next;
+        platform->pending_hint_capacity = capacity;
+    }
+    pt_ime_hint *slot = &platform->pending_hints[platform->pending_hint_count++];
+    slot->start = start;
+    slot->end = end;
+    slot->hint = hint;
 }
 
 static void text_input_language(void *data, struct zwp_text_input_v3 *text_input,
@@ -1289,6 +1318,8 @@ static void text_input_done(void *data, struct zwp_text_input_v3 *text_input,
     uint32_t delete_before = platform->pending_delete_before;
     uint32_t delete_after = platform->pending_delete_after;
     uint32_t action = platform->pending_action;
+    pt_ime_hint *hints = platform->pending_hints;
+    uint32_t hint_count = platform->pending_hint_count;
     platform->pending_preedit = NULL;
     platform->pending_commit = NULL;
     platform->pending_preedit_begin = -1;
@@ -1297,15 +1328,20 @@ static void text_input_done(void *data, struct zwp_text_input_v3 *text_input,
     platform->pending_delete_after = 0;
     platform->pending_action = 0;
     platform->pending_action_serial = 0;
+    platform->pending_hints = NULL;
+    platform->pending_hint_count = 0;
+    platform->pending_hint_capacity = 0;
     if (window) {
-        pt_window_input_ime_compose(window, commit, preedit ? preedit : "", preedit_begin,
-                                    preedit_end, delete_before, delete_after);
+        pt_window_input_ime_compose_ex(window, commit, preedit ? preedit : "", preedit_begin,
+                                       preedit_end, delete_before, delete_after, hints,
+                                       hint_count);
         if (action) {
             pt_window_input_ime_action(window, action);
         }
     }
     free(preedit);
     free(commit);
+    free(hints);
 }
 
 static const struct zwp_text_input_v3_listener text_input_listener = {
@@ -3052,6 +3088,7 @@ void pt_platform_stop(pt_app *app) {
     free(platform->primary_mime);
     free(platform->pending_preedit);
     free(platform->pending_commit);
+    free(platform->pending_hints);
     if (platform->drag_types) {
         drag_types_free(platform->drag_types, platform->drag_type_count);
         platform->drag_types = NULL;

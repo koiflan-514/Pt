@@ -1986,12 +1986,25 @@ void pt_window_input_ime_preedit(pt_window *window, const char *text) {
 void pt_window_input_ime_compose(pt_window *window, const char *commit, const char *preedit,
                                  int32_t cursor_begin, int32_t cursor_end,
                                  uint32_t delete_before, uint32_t delete_after) {
+    pt_window_input_ime_compose_ex(window, commit, preedit, cursor_begin, cursor_end,
+                                   delete_before, delete_after, NULL, 0);
+}
+
+void pt_window_input_ime_compose_ex(pt_window *window, const char *commit, const char *preedit,
+                                    int32_t cursor_begin, int32_t cursor_end,
+                                    uint32_t delete_before, uint32_t delete_after,
+                                    const pt_ime_hint *hints, uint32_t hint_count) {
     if (!window) {
         return;
     }
     if (window->custom_ime_enabled && !pt_window_has_editable_focus(window)) {
         /* Custom text input owns insertion. Delete requests carry no meaning for
-         * a terminal, but they are still acknowledged by clearing preedit. */
+         * a terminal, but they are still acknowledged by clearing preedit. The
+         * hint ranges are presentation metadata for a Pt-drawn preedit; custom
+         * surfaces keep receiving only text and cursor, and commit is never
+         * affected by them. */
+        (void)hints;
+        (void)hint_count;
         bool changed = (commit && *commit) || (preedit && *preedit);
         if (commit && *commit && window->custom_ime_commit) {
             window->custom_ime_commit(window, commit, window->custom_ime_data);
@@ -2029,7 +2042,8 @@ void pt_window_input_ime_compose(pt_window *window, const char *commit, const ch
         }
     }
     if (preedit_present) {
-        pt_widget_preedit_ex(focused, preedit, cursor_begin, cursor_end);
+        pt_widget_preedit_hints_ex(focused, preedit, cursor_begin, cursor_end, hints,
+                                   hint_count);
     } else if (!has_edit) {
         /* A done carrying no text is the input method acknowledging the state we just
          * pushed. Replying to it pushes another state update and another done, so an

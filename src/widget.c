@@ -33,6 +33,7 @@ typedef struct pt_edit_history {
 #define pt_grid_max_columns 1024u
 
 static void entry_after_edit(pt_widget *entry);
+static void entry_ime_clear_hints(pt_widget *widget);
 static bool kind_is_checked_control(pt_widget_kind kind);
 static void checked_control_set(pt_widget *widget, bool checked, bool notify);
 static void segmented_select(pt_widget *segmented, uint32_t index, bool notify);
@@ -346,6 +347,7 @@ static bool entry_history_step(pt_widget *entry, bool redo) {
     entry->preedit = NULL;
     entry->preedit_cursor_begin = -1;
     entry->preedit_cursor_end = -1;
+    entry_ime_clear_hints(entry);
     entry->ime_composing = false;
     entry->ime_history_pushed = false;
     entry->selecting = false;
@@ -621,16 +623,18 @@ static char *entry_sanitize_insert(const pt_widget *entry, const char *text, siz
     return sanitized;
 }
 
-static char *entry_sanitize_preedit(const pt_widget *entry, const char *text, size_t *out_len) {
+static bool entry_preedit_byte_kept(const pt_widget *entry, unsigned char byte) {
     bool multiline = entry->kind == pt_widget_text_area;
+    return (byte == '\n' && multiline) || (byte >= 0x20u && byte != 0x7Fu);
+}
+
+static char *entry_sanitize_preedit(const pt_widget *entry, const char *text, size_t *out_len) {
     size_t len = text ? strlen(text) : 0;
     char *clean = pt_alloc(len + 1);
     size_t out = 0;
     for (size_t i = 0; i < len; ++i) {
         unsigned char byte = (unsigned char)text[i];
-        if (byte == '\n' && multiline) {
-            clean[out++] = '\n';
-        } else if (byte >= 0x20u && byte != 0x7Fu) {
+        if (entry_preedit_byte_kept(entry, byte)) {
             clean[out++] = (char)byte;
         }
     }
@@ -720,11 +724,66 @@ static void entry_ime_end_composition(pt_widget *widget) {
     widget->ime_history_pushed = false;
 }
 
+static void entry_ime_clear_hints(pt_widget *widget) {
+    free(widget->preedit_hints);
+    widget->preedit_hints = NULL;
+    widget->preedit_hint_count = 0;
+}
+
 static void entry_ime_clear_preedit(pt_widget *widget) {
     free(widget->preedit);
     widget->preedit = NULL;
     widget->preedit_cursor_begin = -1;
     widget->preedit_cursor_end = -1;
+    entry_ime_clear_hints(widget);
+}
+
+/* Maps a raw-preedit byte offset to the sanitized buffer: count only the bytes
+ * entry_sanitize_preedit kept. The caller snaps the result to a codepoint edge. */
+static size_t entry_preedit_clean_offset(const pt_widget *widget, const char *raw,
+                                         size_t raw_len, uint32_t offset) {
+    size_t stop = offset > raw_len ? raw_len : (size_t)offset;
+    size_t clean = 0;
+    for (size_t i = 0; i < stop; ++i) {
+        if (entry_preedit_byte_kept(widget, (unsigned char)raw[i])) {
+            ++clean;
+        }
+    }
+    return clean;
+}
+
+/* Replaces the presentation hints stored for the current sanitized preedit.
+ * The raw text is the one submitted by the compositor; offsets are relative to
+ * it, because sanitization may have removed control bytes. */
+static void entry_ime_replace_hints(pt_widget *widget, const char *raw, size_t raw_len,
+                                    const pt_ime_hint *hints, uint32_t hint_count) {
+    entry_ime_clear_hints(widget);
+    if (!hints || hint_count == 0 || !widget->preedit || !*widget->preedit) {
+        return;
+    }
+    size_t length = strlen(widget->preedit);
+    uint32_t cap = hint_count < pt_ime_hint_max ? hint_count : pt_ime_hint_max;
+    pt_ime_hint *clean = pt_alloc(cap * sizeof(*clean));
+    uint32_t used = 0;
+    for (uint32_t i = 0; i < cap; ++i) {
+        size_t begin = entry_preedit_clean_offset(widget, raw, raw_len, hints[i].start);
+        size_t end = entry_preedit_clean_offset(widget, raw, raw_len, hints[i].end);
+        begin = entry_snap_forward(widget->preedit, length, begin);
+        end = entry_snap_backward(widget->preedit, end);
+        if (begin >= end) {
+            continue;
+        }
+        clean[used].start = (uint32_t)begin;
+        clean[used].end = (uint32_t)end;
+        clean[used].hint = hints[i].hint;
+        ++used;
+    }
+    if (used == 0) {
+        free(clean);
+        return;
+    }
+    widget->preedit_hints = clean;
+    widget->preedit_hint_count = used;
 }
 
 static bool entry_ime_delete_selection(pt_widget *widget) {
@@ -747,11 +806,13 @@ static bool entry_ime_delete_selection(pt_widget *widget) {
     return true;
 }
 
-bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_begin,
-                          int32_t cursor_end) {
+static bool entry_preedit_apply(pt_widget *widget, const char *text, int32_t cursor_begin,
+                                int32_t cursor_end, const pt_ime_hint *hints,
+                                uint32_t hint_count) {
     if (!widget_is_text_input(widget) || !widget->enabled) {
         return false;
     }
+    size_t raw_length = text ? strlen(text) : 0;
     size_t length = 0;
     char *clean = entry_sanitize_preedit(widget, text, &length);
     bool deleted_selection = false;
@@ -766,6 +827,7 @@ bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_be
     if (length == 0) {
         free(clean);
     }
+    entry_ime_replace_hints(widget, text, raw_length, hints, hint_count);
     if (length > 0 && cursor_begin >= 0 && cursor_end >= 0) {
         size_t begin = (size_t)cursor_begin;
         size_t end = (size_t)cursor_end;
@@ -794,6 +856,17 @@ bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_be
         entry_notify_text(widget);
     }
     return true;
+}
+
+bool pt_widget_preedit_ex(pt_widget *widget, const char *text, int32_t cursor_begin,
+                          int32_t cursor_end) {
+    return entry_preedit_apply(widget, text, cursor_begin, cursor_end, NULL, 0);
+}
+
+bool pt_widget_preedit_hints_ex(pt_widget *widget, const char *text, int32_t cursor_begin,
+                                int32_t cursor_end, const pt_ime_hint *hints,
+                                uint32_t hint_count) {
+    return entry_preedit_apply(widget, text, cursor_begin, cursor_end, hints, hint_count);
 }
 
 bool pt_widget_ime_has_state(const pt_widget *widget) {
@@ -1364,6 +1437,7 @@ void pt_widget_free_tree(pt_widget *widget) {
     free(widget->spans);
     free(widget->placeholder);
     free(widget->preedit);
+    free(widget->preedit_hints);
     free(widget->shortcut);
     free(widget->tooltip);
     free(widget->a11y_name);
@@ -1889,6 +1963,7 @@ void pt_widget_set_text(pt_widget *widget, const char *text) {
         widget->preedit = NULL;
         widget->preedit_cursor_begin = -1;
         widget->preedit_cursor_end = -1;
+        entry_ime_clear_hints(widget);
         widget->ime_composing = false;
         widget->ime_history_pushed = false;
         edit_history_free(widget->edit_history);
@@ -3959,6 +4034,7 @@ bool pt_widget_text_input(pt_widget *widget, const char *text) {
     widget->preedit = NULL;
     widget->preedit_cursor_begin = -1;
     widget->preedit_cursor_end = -1;
+    entry_ime_clear_hints(widget);
     bool single_line = widget->kind == pt_widget_entry;
     bool submit = single_line && strchr(text, '\n') != NULL;
     pt_window *window = pt_widget_window(widget);
