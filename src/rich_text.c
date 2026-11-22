@@ -223,22 +223,112 @@ static const pt_text_span *rich_span_for(const pt_widget *widget, size_t positio
     return winner;
 }
 
+static void rich_run_reserve(pt_text_runs *runs) {
+    if (runs->count < runs->capacity) {
+        return;
+    }
+    size_t capacity = runs->capacity ? runs->capacity * 2 : 8;
+    runs->items = pt_realloc_mem(runs->items, capacity * sizeof(*runs->items));
+    runs->capacity = capacity;
+}
+
 static void rich_run_append(pt_text_runs *runs, size_t start, size_t end, pt_font *font,
-                            pt_color color, uint32_t flags) {
+                            pt_color color, uint32_t flags, uint8_t level,
+                            hb_direction_t direction) {
     if (runs->count > 0) {
         pt_text_run *last = &runs->items[runs->count - 1];
         if (last->end == start && last->font == font && last->color == color &&
-            last->flags == flags) {
+            last->flags == flags && last->level == level && last->direction == direction) {
             last->end = end;
             return;
         }
     }
+    rich_run_reserve(runs);
     pt_text_run *run = &runs->items[runs->count++];
     run->start = start;
     run->end = end;
     run->font = font;
     run->color = color;
     run->flags = flags;
+    run->level = level;
+    run->direction = direction;
+}
+
+/* Resolves the span style covering `start` and appends the [start, end) piece.
+ * Used by both the logical LTR builder and the visual bidi builder so the two
+ * paths agree on font, colour, flags and metrics. */
+static void rich_append_piece(const pt_widget *widget, const pt_layout_ctx *ctx,
+                              pt_text_runs *out, pt_font *base, pt_font_weight base_weight,
+                              size_t start, size_t end, uint8_t level,
+                              hb_direction_t direction) {
+    const char *text = out->text;
+    float scale = out->scale;
+    const pt_text_span *span = rich_span_for(widget, start);
+    pt_font_weight weight = base_weight;
+    pt_font_slant slant = pt_font_slant_upright;
+    pt_color color = 0;
+    uint32_t flags = 0;
+    float logical_size = pt_widget_font_size(widget);
+    const char *family = NULL;
+    if (span) {
+        flags = span->flags & (pt_run_underline | pt_run_has_color);
+        if (span->flags & pt_text_span_has_weight) {
+            weight = span->weight;
+        }
+        if (span->flags & pt_text_span_has_slant) {
+            slant = span->slant;
+        }
+        if (span->flags & pt_run_has_color) {
+            color = span->color;
+        }
+        if ((span->flags & pt_text_span_has_family) && span->family[0]) {
+            family = span->family;
+        }
+        if ((span->flags & pt_text_span_has_size) && span->size > 0.0f) {
+            logical_size = span->size;
+        }
+    }
+    pt_font *font = NULL;
+    if (family) {
+        font = pt_font_acquire(family, (int)weight, slant, logical_size * scale);
+    }
+    if (!font) {
+        font = pt_widget_font_styled(widget, logical_size, weight, slant, ctx);
+    }
+    if (!font) {
+        font = base;
+    }
+    float run_ascent = 0.0f;
+    float run_descent = 0.0f;
+    pt_font_metrics_for_text(font, text + start, end - start, &run_ascent, &run_descent);
+    float ascent = run_ascent / scale;
+    float descent = run_descent / scale;
+    if (ascent > out->ascent) {
+        out->ascent = ascent;
+    }
+    if (descent > out->descent) {
+        out->descent = descent;
+    }
+    if (ascent + descent > out->line_height) {
+        out->line_height = ascent + descent;
+    }
+    rich_run_append(out, start, end, font, color, flags, level, direction);
+}
+
+pt_bidi_base pt_widget_text_base(const pt_widget *widget, const char *text, size_t len) {
+    for (const pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
+        if (cursor->text_direction != pt_text_direction_auto) {
+            return (pt_text_direction)cursor->text_direction == pt_text_direction_rtl
+                       ? pt_bidi_base_rtl
+                       : pt_bidi_base_ltr;
+        }
+    }
+    pt_bidi_base strong = pt_bidi_first_strong_direction(text, len);
+    if (strong != pt_bidi_base_auto) {
+        return strong;
+    }
+    return pt_widget_resolved_ui_direction(widget) == pt_ui_direction_rtl ? pt_bidi_base_rtl
+                                                                          : pt_bidi_base_ltr;
 }
 
 bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_text_runs *out) {
@@ -258,6 +348,7 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
     float scale = ctx && ctx->scale > 0.0f ? ctx->scale : 1.0f;
     size_t max_runs = (size_t)widget->span_count * 2 + 2;
     out->items = pt_alloc_zeroed(max_runs, sizeof(*out->items));
+    out->capacity = max_runs;
     out->text = text;
     out->length = len;
     out->scale = scale;
@@ -291,69 +382,74 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
     }
 
     pt_font_weight base_weight = (pt_font_weight)pt_widget_font_weight(widget);
-    for (size_t i = 0; i + 1 < unique; ++i) {
-        size_t start = boundaries[i];
-        size_t end = boundaries[i + 1];
-        if (start >= end) {
-            continue;
-        }
-        const pt_text_span *span = rich_span_for(widget, start);
-        pt_font_weight weight = base_weight;
-        pt_font_slant slant = pt_font_slant_upright;
-        pt_color color = 0;
-        uint32_t flags = 0;
-        float logical_size = pt_widget_font_size(widget);
-        const char *family = NULL;
-        if (span) {
-            flags = span->flags & (pt_run_underline | pt_run_has_color);
-            if (span->flags & pt_text_span_has_weight) {
-                weight = span->weight;
+    pt_bidi_base base_direction = pt_widget_text_base(widget, text, len);
+    out->bidi = base_direction == pt_bidi_base_rtl || pt_bidi_text_may_reorder(text, len);
+    out->base_level = base_direction == pt_bidi_base_rtl ? 1 : 0;
+
+    if (!out->bidi) {
+        /* LTR fast path: the pre-2.0 logical segmentation, verbatim. */
+        for (size_t i = 0; i + 1 < unique; ++i) {
+            size_t start = boundaries[i];
+            size_t end = boundaries[i + 1];
+            if (start >= end) {
+                continue;
             }
-            if (span->flags & pt_text_span_has_slant) {
-                slant = span->slant;
+            rich_append_piece(widget, ctx, out, base, base_weight, start, end, 0,
+                              HB_DIRECTION_INVALID);
+        }
+    } else {
+        /* Split by UBA level first, then by span/font inside each visual run. */
+        pt_bidi_paragraph *paragraph = NULL;
+        pt_bidi_line line = {0};
+        bool reordered = false;
+        pt_bidi_base analysis_base = base_direction;
+        if (pt_bidi_paragraph_analyze(text, len, analysis_base, &paragraph) &&
+            pt_bidi_line_create(paragraph, 0, len, &line)) {
+            out->base_level = line.base_level;
+            for (size_t r = 0; r < line.run_count; ++r) {
+                const pt_bidi_run *run = &line.runs[r];
+                hb_direction_t direction =
+                    (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+                size_t run_start = run->offset;
+                size_t run_end = run->offset + run->length;
+                for (size_t i = 0; i + 1 < unique; ++i) {
+                    size_t start = boundaries[i];
+                    size_t end = boundaries[i + 1];
+                    size_t a = start > run_start ? start : run_start;
+                    size_t b = end < run_end ? end : run_end;
+                    if (a >= b) {
+                        continue;
+                    }
+                    rich_append_piece(widget, ctx, out, base, base_weight, a, b, run->level,
+                                      direction);
+                }
             }
-            if (span->flags & pt_run_has_color) {
-                color = span->color;
+            reordered = true;
+        }
+        if (!reordered) {
+            for (size_t i = 0; i + 1 < unique; ++i) {
+                size_t start = boundaries[i];
+                size_t end = boundaries[i + 1];
+                if (start >= end) {
+                    continue;
+                }
+                rich_append_piece(widget, ctx, out, base, base_weight, start, end,
+                                  out->base_level,
+                                  out->base_level ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
             }
-            if ((span->flags & pt_text_span_has_family) && span->family[0]) {
-                family = span->family;
-            }
-            if ((span->flags & pt_text_span_has_size) && span->size > 0.0f) {
-                logical_size = span->size;
-            }
         }
-        pt_font *font = NULL;
-        if (family) {
-            font = pt_font_acquire(family, (int)weight, slant, logical_size * scale);
-        }
-        if (!font) {
-            font = pt_widget_font_styled(widget, logical_size, weight, slant, ctx);
-        }
-        if (!font) {
-            font = base;
-        }
-        float run_ascent = 0.0f;
-        float run_descent = 0.0f;
-        pt_font_metrics_for_text(font, text + start, end - start, &run_ascent, &run_descent);
-        float ascent = run_ascent / scale;
-        float descent = run_descent / scale;
-        if (ascent > out->ascent) {
-            out->ascent = ascent;
-        }
-        if (descent > out->descent) {
-            out->descent = descent;
-        }
-        if (ascent + descent > out->line_height) {
-            out->line_height = ascent + descent;
-        }
-        rich_run_append(out, start, end, font, color, flags);
+        if (reordered) pt_bidi_line_free(&line);
+        if (paragraph) pt_bidi_paragraph_free(paragraph);
     }
     free(boundaries);
     if (out->count == 0) {
+        rich_run_reserve(out);
         pt_text_run *run = &out->items[out->count++];
         run->start = 0;
         run->end = 0;
         run->font = base;
+        run->level = 0;
+        run->direction = HB_DIRECTION_INVALID;
     }
     return true;
 }
@@ -387,7 +483,12 @@ float pt_text_runs_measure(const pt_text_runs *runs, size_t start, size_t end) {
         if (a >= b) {
             continue;
         }
-        width += pt_font_measure(run->font, runs->text + a, b - a);
+        if (run->direction != HB_DIRECTION_INVALID) {
+            width += pt_font_measure_direction(run->font, runs->text + a, b - a,
+                                               run->direction);
+        } else {
+            width += pt_font_measure(run->font, runs->text + a, b - a);
+        }
     }
     float scale = runs->scale > 0.0f ? runs->scale : 1.0f;
     return width / scale;
@@ -485,6 +586,9 @@ int pt_text_runs_wrap(const pt_text_runs *runs, float max_width, pt_text_line **
 
 size_t pt_text_runs_position_for_x(const pt_text_runs *runs, size_t start, size_t end,
                                    float local_x) {
+    /* Logical-order approximation kept for this wave. The visual x <-> logical
+     * byte map (caret, hit testing, IME) is W3/W4 work; single-line display does
+     * not consume this path. */
     if (!runs) {
         return start;
     }
@@ -522,13 +626,31 @@ size_t pt_text_runs_position_for_x(const pt_text_runs *runs, size_t start, size_
     return best;
 }
 
+static float rich_run_measure(const pt_text_runs *runs, const pt_text_run *run, size_t a,
+                              size_t b) {
+    if (run->direction != HB_DIRECTION_INVALID) {
+        return pt_font_measure_direction(run->font, runs->text + a, b - a, run->direction);
+    }
+    return pt_font_measure(run->font, runs->text + a, b - a);
+}
+
+static const pt_text_run *rich_run_at(const pt_text_runs *runs, size_t position) {
+    for (size_t i = 0; i < runs->count; ++i) {
+        if (position >= runs->items[i].start && position < runs->items[i].end) {
+            return &runs->items[i];
+        }
+    }
+    return runs->count > 0 ? &runs->items[0] : NULL;
+}
+
 static void rich_draw_ellipsis(pt_canvas *canvas, const pt_text_runs *runs, float x,
                                float baseline, pt_color color) {
     static const char ellipsis[] = "\xE2\x80\xA6";
     const pt_font *font = runs->count > 0 ? runs->items[0].font : NULL;
     if (font) {
-        pt_canvas_draw_text_line(canvas, font, ellipsis, sizeof(ellipsis) - 1, x, baseline, 0,
-                                 pt_text_align_start, color, false);
+        pt_canvas_draw_text_line_direction(canvas, font, ellipsis, sizeof(ellipsis) - 1, x,
+                                           baseline, 0, pt_text_align_start, color, false,
+                                           HB_DIRECTION_LTR);
     }
 }
 
@@ -547,14 +669,21 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
     if (start >= end) {
         return;
     }
+    /* Visual start edge: in an RTL paragraph start/end swap sides. Center is
+     * direction-neutral. */
+    bool rtl = runs->bidi && (runs->base_level & 1u) != 0;
     bool truncated = false;
     float line_width = pt_text_runs_measure(runs, start, end);
     if (max_width > 0.0f && line_width > max_width) {
         if (ellipsis) {
             static const char ellipsis_bytes[] = "\xE2\x80\xA6";
-            const pt_font *font = runs->items[0].font;
+            const pt_text_run *ellipsis_run = rich_run_at(runs, start);
+            const pt_font *font = ellipsis_run ? ellipsis_run->font : runs->items[0].font;
+            hb_direction_t ellipsis_direction =
+                ellipsis_run ? ellipsis_run->direction : HB_DIRECTION_LTR;
             float ellipsis_width =
-                pt_font_measure(font, ellipsis_bytes, sizeof(ellipsis_bytes) - 1) /
+                pt_font_measure_direction(font, ellipsis_bytes, sizeof(ellipsis_bytes) - 1,
+                                          ellipsis_direction) /
                 runs->scale;
             size_t fit = start;
             size_t scan = start;
@@ -576,7 +705,8 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
                 float origin = x;
                 if (align == pt_text_align_center) {
                     origin += (max_width - ellipsis_width) * 0.5f;
-                } else if (align == pt_text_align_end) {
+                } else if ((align == pt_text_align_start && rtl) ||
+                           (align == pt_text_align_end && !rtl)) {
                     origin += max_width - ellipsis_width;
                 }
                 rich_draw_ellipsis(canvas, runs, origin, baseline, color);
@@ -595,10 +725,13 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
     if (max_width > 0.0f) {
         if (align == pt_text_align_center) {
             x += (max_width - line_width) * 0.5f;
-        } else if (align == pt_text_align_end) {
+        } else if ((align == pt_text_align_start && rtl) ||
+                   (align == pt_text_align_end && !rtl)) {
             x += max_width - line_width;
         }
     }
+    /* Bidi builds store runs in visual order; the LTR fast path keeps logical
+     * order, which is the same thing when no level split happened. */
     float pen = 0.0f;
     for (size_t i = 0; i < runs->count; ++i) {
         const pt_text_run *run = &runs->items[i];
@@ -607,10 +740,16 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
         if (a >= b) {
             continue;
         }
-        float segment_width = pt_font_measure(run->font, runs->text + a, b - a) / runs->scale;
+        float segment_width = rich_run_measure(runs, run, a, b) / runs->scale;
         pt_color run_color = (run->flags & pt_run_has_color) ? run->color : color;
-        pt_canvas_draw_text_line(canvas, run->font, runs->text + a, b - a, x + pen, baseline, 0,
-                                 pt_text_align_start, run_color, false);
+        if (run->direction != HB_DIRECTION_INVALID) {
+            pt_canvas_draw_text_line_direction(canvas, run->font, runs->text + a, b - a,
+                                               x + pen, baseline, 0, pt_text_align_start,
+                                               run_color, false, run->direction);
+        } else {
+            pt_canvas_draw_text_line(canvas, run->font, runs->text + a, b - a, x + pen,
+                                     baseline, 0, pt_text_align_start, run_color, false);
+        }
         if (run->flags & pt_run_underline) {
             float thickness = pt_max_float(1.0f, run->font->pixel_size / 14.0f) / runs->scale;
             float underline_y = baseline + run->font->descent / runs->scale * 0.5f;
@@ -620,6 +759,7 @@ void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t 
         pen += segment_width;
     }
     if (truncated) {
-        rich_draw_ellipsis(canvas, runs, x + line_width, baseline, color);
+        /* Ellipsis sits on the visual end: left for an RTL base. */
+        rich_draw_ellipsis(canvas, runs, rtl ? x : x + line_width, baseline, color);
     }
 }

@@ -112,6 +112,13 @@ static void paint_marquee(pt_canvas *canvas, const pt_widget *view,
                                   pt_color_alpha(accent, 0xC0u));
 }
 
+/* Resolved paragraph base for a single-line display path (2.0). The widget's
+ * explicit/auto text direction is resolved against this text by the shared
+ * helper; the UI direction is only the neutral fallback. */
+static pt_bidi_base paint_text_base(const pt_widget *widget, const char *text, size_t len) {
+    return pt_widget_text_base(widget, text, len);
+}
+
 static void paint_rich_single_line(pt_canvas *canvas, const pt_widget *widget, pt_color color,
                                    pt_text_align align, bool ellipsis, float offset_x,
                                    pt_rect area) {
@@ -169,15 +176,15 @@ static void paint_single_line(pt_canvas *canvas, const pt_widget *widget, const 
     }
     float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
     size_t text_len = strlen(text);
+    pt_bidi_base base = paint_text_base(widget, text, text_len);
     float ascent_px = 0.0f;
     float descent_px = 0.0f;
-    pt_font_metrics_for_text(font, text, text_len, &ascent_px, &descent_px);
+    pt_font_metrics_for_text_bidi(font, text, text_len, base, &ascent_px, &descent_px);
     float line_height = pt_max_float(ascent_px + descent_px, font->line_height) / scale;
     float baseline = area.y + (area.h - line_height) * 0.5f + ascent_px / scale;
     pt_canvas_push_clip(canvas, area.x, area.y, area.w, area.h);
-    pt_canvas_draw_text_line(canvas, font, text, text_len,
-                             area.x + offset_x, baseline, area.w - offset_x, align, color,
-                             ellipsis);
+    pt_canvas_draw_text_line_bidi(canvas, font, text, text_len, area.x + offset_x, baseline,
+                                  area.w - offset_x, align, color, ellipsis, base);
     pt_canvas_pop_clip(canvas);
 }
 
@@ -580,13 +587,20 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         const char *placeholder = entry->placeholder ? entry->placeholder : "";
         if (*placeholder) {
             pt_color muted = color_from_theme(entry, pt_theme_text_muted);
-            pt_canvas_draw_text_line(canvas, font, placeholder, strlen(placeholder), area.x,
-                                     baseline, area.w, pt_text_align_start, muted, true);
+            size_t placeholder_len = strlen(placeholder);
+            pt_canvas_draw_text_line_bidi(
+                canvas, font, placeholder, placeholder_len, area.x, baseline, area.w,
+                pt_text_align_start, muted, true,
+                paint_text_base(entry, placeholder, placeholder_len));
         }
     } else {
-        pt_canvas_draw_text_line(canvas, font, combined, combined_len,
-                                 area.x - entry->scroll_x, baseline, 0.0f,
-                                 pt_text_align_start, color, false);
+        /* Single-line display follows the paragraph direction; caret,
+         * selection, preedit underline and scroll offsets below stay logical
+         * (W4 continues that work). */
+        pt_canvas_draw_text_line_bidi(canvas, font, combined, combined_len,
+                                      area.x - entry->scroll_x, baseline, 0.0f,
+                                      pt_text_align_start, color, false,
+                                      paint_text_base(entry, combined, combined_len));
     }
     if (preedit_len > 0) {
         float preedit_x = area.x - entry->scroll_x +
