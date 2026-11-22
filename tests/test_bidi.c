@@ -651,6 +651,44 @@ static void test_visual_map(pt_font *font) {
     pt_text_visual_map_free(map);
 }
 
+/* Shaping is idempotent: per-run map assembly and the whole-line measure must
+ * agree for pathological mark/control mixes. W7 found that a combining mark
+ * with its own strong script (a Hebrew point after an Arabic letter) inherited
+ * the preceding run's script inside the whole line but resolved its own script
+ * when re-shaped in isolation, so the map width and measure_bidi disagreed and
+ * an RTL entry's right-anchored origin overhung. The regression input below is
+ * the W7 fuzz reproducer: Arabic lam + Hebrew point + ZWJ + FSI + digit. */
+static void test_shaping_idempotent(pt_font *font) {
+    static const char *const cases[] = {
+        "\xD9\x84\xD6\xB0\xE2\x80\x8D\xE2\x81\xA8" "4",          /* lam + heb point + ZWJ + FSI + 4 */
+        "\xD8\xA7\xD9\x8E\xE2\x80\x8D\xE2\x81\xA8" "4",          /* alef + arab mark + ZWJ + FSI + 4 */
+        "\xD7\x90\xD6\xB0\xE2\x80\x8D\xE2\x81\xA9" "7",          /* alef + heb point + ZWJ + PDI + 7 */
+        "a\xD6\xB0\xE2\x81\xA8" "3",                             /* latin + heb point + FSI + 3 */
+        "\xD7\x90\xD9\x8E\xE2\x80\x8D" "4",                      /* alef + arab mark + ZWJ + 4 */
+        "\xD9\x84\xD6\xB0" "12" "\xD7\x90",                      /* lam + heb point + digits + alef */
+        "\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7",              /* plain Arabic */
+        "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D",                      /* plain Hebrew */
+    };
+    static const pt_bidi_base bases[] = {pt_bidi_base_rtl, pt_bidi_base_auto,
+                                         pt_bidi_base_ltr};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        size_t length = strlen(cases[i]);
+        for (size_t b = 0; b < sizeof(bases) / sizeof(bases[0]); ++b) {
+            pt_text_visual_map *map = NULL;
+            pt_check(pt_text_visual_map_build_bidi(font, cases[i], length, bases[b], &map));
+            pt_check(map != NULL);
+            if (!map) {
+                continue;
+            }
+            float map_width = pt_text_visual_map_width(map);
+            pt_check(map_width > 0.0f);
+            pt_check_near(map_width, pt_font_measure_bidi(font, cases[i], length, bases[b]),
+                          0.01f);
+            pt_text_visual_map_free(map);
+        }
+    }
+}
+
 static uint64_t draw_one(pt_canvas *canvas, pt_font *font, const char *text, pt_bidi_base base,
                          float x) {
     pt_canvas_clear(canvas, 0x000000FFu);
@@ -776,6 +814,7 @@ int main(void) {
         test_font_pipeline(font);
         test_rendering(font);
         test_visual_map(font);
+        test_shaping_idempotent(font);
     }
 
     /* Neutral fallback keeps the API surface honest even without the font. */

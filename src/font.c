@@ -913,7 +913,14 @@ static void build_runs_between(pt_font *base, const char *text, size_t start, si
                      pt_font_has_glyph(previous->font, codepoint))) {
                     fallback_face = previous->font;
                     fallback_covered = previous->covered;
-                    script = previous->script;
+                    /* A mark keeps its own strong script (a Hebrew point after
+                     * an Arabic letter stays Hebrew). Only neutral marks and
+                     * joiners/selectors inherit the preceding run's script, so
+                     * shaping the bytes in isolation resolves the same scripts
+                     * as shaping them inside the whole line. */
+                    if (script_is_neutral(script)) {
+                        script = previous->script;
+                    }
                     attached = true;
                 }
             }

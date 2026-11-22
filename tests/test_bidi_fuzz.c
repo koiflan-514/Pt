@@ -306,14 +306,13 @@ static void check_boundaries(const pt_text_visual_map *map) {
     pt_check(pt_text_visual_map_is_boundary(map, map->end));
 }
 
-/* The map is assembled run by run, so its width must be exactly the sum of the
- * widths of the runs it was built from. The whole-line measurement is not
- * asserted here: re-shaping a run in isolation can resolve its scripts
- * differently than the same bytes did inside the whole line (a combining mark
- * inherited by the neighbouring run, X9 controls, fallback attachment), so the
- * two segmentations can legitimately differ by up to about an em per run. That
- * is a W7 finding about shaping context, not a map assembly error; the map's
- * own contract is the per-run sum checked below. */
+/* The map is assembled run by run, so its width must equal the sum of the
+ * widths of the runs it was built from, and that sum must equal the whole-line
+ * measurement. Shaping is idempotent: a run re-shaped in isolation resolves the
+ * same scripts, faces and advances as the same bytes did inside the whole line
+ * (a mark keeps its own strong script, neutral marks and joiners inherit the
+ * preceding run). Divergence here would put an RTL entry's right-anchored
+ * origin at a different x than its map, and caret/selection would overhang. */
 static void check_visual_width(const pt_text_visual_map *map, pt_font *font,
                                const char *text, size_t length, pt_bidi_base base) {
     float map_width = pt_text_visual_map_width(map);
@@ -327,6 +326,7 @@ static void check_visual_width(const pt_text_visual_map *map, pt_font *font,
     }
     pt_font_runs_free(runs);
     pt_check_near(map_width, run_sum, 0.05f);
+    pt_check_near(map_width, pt_font_measure_bidi(font, text, length, base), 0.05f);
 }
 
 static void check_visual_map(const pt_text_visual_map *map, pt_font *font,
