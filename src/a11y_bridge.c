@@ -53,6 +53,7 @@ enum {
     atspi_role_separator = 50,
     atspi_role_filler = 20,
     atspi_role_slider = 51,
+    atspi_role_spin_button = 52,
     atspi_role_table = 55,
     atspi_role_table_cell = 56,
     atspi_role_table_column_header = 57,
@@ -1042,6 +1043,8 @@ static uint32_t a11y_role_number(const pt_a11y_obj *obj) {
         return atspi_role_toggle_button;
     case pt_a11y_role_slider:
         return atspi_role_slider;
+    case pt_a11y_role_spin_button:
+        return atspi_role_spin_button;
     case pt_a11y_role_scroll_pane:
         return atspi_role_scroll_pane;
     case pt_a11y_role_separator:
@@ -1142,6 +1145,8 @@ static const char *a11y_role_name(uint32_t role) {
         return "separator";
     case atspi_role_slider:
         return "slider";
+    case atspi_role_spin_button:
+        return "spin button";
     case atspi_role_text:
         return "text";
     case atspi_role_toggle_button:

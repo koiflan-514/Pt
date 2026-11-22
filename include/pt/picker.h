@@ -65,8 +65,10 @@
  *
  * Accessibility. Each control carries an accessible name (a sensible default
  * per kind; applications override it with pt_widget_set_a11y_name), the combo
- * box role, the expanded state while its popup is open (number pickers have no
- * popup and report no expandable state) and a numeric value: select exposes the
+ * box role, except the number picker, which reports the spin button role
+ * because it has no popup. A popup control reports the expanded state while
+ * its popup is open; the number picker reports no expandable state. Every
+ * control exposes a numeric value: select exposes the
  * selected item index (-1 for none), date exposes YYYYMMDD (0 when empty),
  * number exposes the value (only while it has one) and colour exposes its RGB
  * part normalised to [0, 1], because the accessibility Value interface carries
@@ -280,7 +282,8 @@ typedef void (*pt_number_callback)(pt_widget *picker, double value, void *user_d
  * Escape restores the committed text. Stepping an empty picker starts from the
  * clamped zero and then applies the step. Values, minimum, maximum and step are
  * finite doubles; setters ignore NaN or infinity. The number picker has no
- * popup, so it reports no expandable state. Since 1.2. */
+ * popup, so it reports the spin button role and no expandable state. Since
+ * 1.2. */
 pt_api pt_widget *pt_number_picker_create(pt_widget *parent);
 
 /* Sets the inclusive range. A non-finite bound or min > max is rejected with

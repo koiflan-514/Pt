@@ -2463,7 +2463,10 @@ pt_widget *pt_number_picker_create(pt_widget *parent) {
     pt_widget_set_a11y_name(picker->down, "Decrement");
     pt_button_set_on_click(picker->down, pt_number_down_click, host);
 
-    pt_widget_set_a11y_role(host, pt_a11y_role_combo_box);
+    /* A spin box has no popup, so it is a spin button rather than a combo box.
+     * The derived role in a11y.c follows the same rule if the override is
+     * cleared. */
+    pt_widget_set_a11y_role(host, pt_a11y_role_spin_button);
     pt_widget_set_a11y_name(host, "Number");
     return host;
 }

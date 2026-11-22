@@ -966,8 +966,13 @@ static void test_number_values(void) {
     pt_check_near(pt_number_picker_get_value(picker), 0.0, 1e-9);
     pt_check(strcmp(pt_number_picker_get_text(picker), "") == 0);
     pt_check(strcmp(pt_number_picker_get_placeholder(picker), "Number") == 0);
-    pt_check(pt_widget_get_a11y_role(picker) == pt_a11y_role_combo_box);
+    pt_check(pt_widget_get_a11y_role(picker) == pt_a11y_role_spin_button);
     pt_check(strcmp(pt_widget_get_a11y_name(picker), "Number") == 0);
+    pt_check(!(pt_widget_get_a11y_state(picker) & pt_a11y_state_expandable));
+    /* The role is also derived for the number picker when the explicit
+     * override is cleared: a no-popup picker is a spin button, not a combo box. */
+    pt_widget_set_a11y_role(picker, pt_a11y_role_none);
+    pt_check(pt_widget_get_a11y_role(picker) == pt_a11y_role_spin_button);
     pt_check(!(pt_widget_get_a11y_state(picker) & pt_a11y_state_expandable));
     float a11y_value = 0.0f;
     pt_check(!pt_widget_get_a11y_value(picker, &a11y_value));
@@ -1000,6 +1005,7 @@ static void test_number_values(void) {
     pt_check_near(pt_number_picker_get_value(picker), 10.0, 1e-9);
     pt_check(pt_widget_get_a11y_value(picker, &a11y_value));
     pt_check_near(a11y_value, 10.0, 1e-6);
+    pt_check(!(pt_widget_get_a11y_state(picker) & pt_a11y_state_expandable));
 
     /* Text parsing: plain, whitespace, comma decimal and clamping. */
     pt_check(pt_number_picker_set_text(picker, "12.5"));

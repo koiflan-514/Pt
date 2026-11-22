@@ -103,7 +103,10 @@ pt_a11y_role pt_widget_get_a11y_role(const pt_widget *widget) {
     case pt_widget_sidebar_item:
         return pt_a11y_role_list_item;
     case pt_widget_combobox:
-        return pt_a11y_role_combo_box;
+        /* A number picker is a spin box with no popup, so it is announced as a
+         * spin button; select, date and colour pickers keep the combo-box role. */
+        return pt_picker_a11y_has_popup(widget) ? pt_a11y_role_combo_box
+                                                : pt_a11y_role_spin_button;
     case pt_widget_box:
     default:
         return pt_a11y_role_generic;
