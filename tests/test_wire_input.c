@@ -425,6 +425,12 @@ static void test_tablet_wire(void) {
     /* Motion carries the barrel button bit; 16384/65535 = 0.25. */
     pt_check(fake_compositor_tablet_tool_motion(&fc, cx + 8.0, cy + 4.0));
     pt_check(fake_compositor_tablet_tool_pressure(&fc, 16384u));
+    pt_check(fake_compositor_tablet_tool_distance(&fc, 32768u));
+    pt_check(fake_compositor_tablet_tool_rotation(&fc, 90.0));
+    /* slider/wheel are decoded but ignored by Pt's listener; sending them here
+     * still proves their wire signatures against tablet-unstable-v2.xml. */
+    pt_check(fake_compositor_tablet_tool_slider(&fc, -2048));
+    pt_check(fake_compositor_tablet_tool_wheel(&fc, 15.0, 1));
     pt_check(fake_compositor_tablet_tool_button(&fc, 9103u, wire_btn_stylus, true));
     pt_check(fake_compositor_tablet_tool_frame(&fc, 3u));
     pt_check(fake_compositor_sync(&fc, app));
@@ -433,6 +439,8 @@ static void test_tablet_wire(void) {
     pt_check_near(stylus.last.x, cx + 8.0, 0.5);
     pt_check_near(stylus.last.y, cy + 4.0, 0.5);
     pt_check_near(stylus.last.pressure, 0.25, 0.0001);
+    pt_check_near(stylus.last.distance, 0.5, 0.0001);
+    pt_check_near(stylus.last.rotation, 1.5707963, 0.01);
     pt_check(stylus.last.buttons == PT_STYLUS_BUTTON_BARREL);
 
     /* A second button adds the secondary bit; the button release clears it. */
