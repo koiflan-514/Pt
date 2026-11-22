@@ -180,6 +180,44 @@ Widgets are appended to their parent in creation order. `pt_widget_destroy`
 removes a subtree. Prefer destroying and recreating a subtree over mutating
 arrays of child pointers while callbacks are active.
 
+## Direction and bidirectional text
+
+Direction is a presentation property, set once and inherited. Two enums and
+eight functions cover it (`pt_ui_direction` and `pt_text_direction`), and both
+zero values mean "inherit/auto", so existing code is unchanged:
+
+```c
+/* An RTL shell: row order, start/end alignment, scrollbars and chrome. */
+pt_app_set_ui_direction(app, pt_ui_direction_rtl);
+
+pt_widget *title = pt_label_create(root, "שלום, Pt");
+pt_widget_set_text_direction(title, pt_text_direction_auto); /* default */
+
+/* A nested LTR island keeps its own layout and text base. */
+pt_widget *editor = pt_text_area_create(root, "Write a note");
+pt_widget_set_ui_direction(editor, pt_ui_direction_ltr);
+pt_widget_set_text_direction(editor, pt_text_direction_ltr);
+```
+
+`pt_ui_direction` resolves widget → nearest explicit ancestor → window → app →
+LTR. `pt_text_direction` resolves widget → nearest ancestor → auto; auto runs
+UBA P2/P3 on each paragraph, so a Hebrew sentence and an English sentence can
+share one text area, and a neutral-only paragraph falls back to the resolved UI
+direction. Getters return the explicit value (`inherit`/`auto` when unset), not
+the resolved one. `pt_window_set_ui_direction` overrides the app for one
+window, and `pt_widget_set_ui_direction` overrides both for a subtree.
+
+Entries and text areas edit visually by default: Left/Right move to the
+visually adjacent cluster boundary (which can raise or lower the logical byte
+offset inside an RTL run), Home/End go to the visual line ends, Shift keeps a
+logical anchor, and Backspace/Delete stay logical. The caret rectangle sent to
+the IME and to accessibility is visual. A `pt_table` and a `pt_tree` keep their
+columns in logical order and mirror only the horizontal start edge; padding and
+margin stay physical. To request logical arrow movement, intercept the key in
+`pt_window_set_key_callback` and consume it. The complete direction model, the
+conformance numbers and the known limits are in the
+[RTL and bidi guide](rtl.md).
+
 ## Widgets and callbacks
 
 Available widgets: box/row/column, label, button, entry, combobox, text area,
@@ -705,10 +743,12 @@ baseline, so a large heading run and a small superscript run sit on the same
 line. Spans survive wrapping, measurement, selection and caret movement, and
 follow the text while the user types. Replacing the whole string with
 `pt_widget_set_text` clears them because the byte offsets no longer describe
-the new text. Spans are styling only: they carry no links or embedded objects,
-and full bidi paragraph layout remains post-1.0. The direction model, proposed
-additive API, logical-to-visual offset mapping and conformance tests are
-specified in the [RTL plan](rtl.md).
+the new text. Spans are styling only: they carry no links or embedded objects
+and no direction field; paragraph direction comes from the widget or window,
+and an opposite-direction phrase inside a paragraph uses Unicode isolate
+controls. Wrapped RTL lines, per-paragraph base directions and the
+logical-to-visual caret map are described in the
+[RTL and bidi guide](rtl.md).
 
 ### Input purpose
 

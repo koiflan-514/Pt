@@ -172,6 +172,40 @@ pt_widget_set_grid_span(wide, 2); /* next cell starts in column 3 */
 控件按创建顺序追加到父控件。`pt_widget_destroy` 移除子树。在回调活动期间，
 优先销毁并重新创建子树，而不是修改子指针数组。
 
+## 方向与双向文本
+
+方向是呈现属性，设置一次并沿树继承。两个枚举和八个函数覆盖它
+（`pt_ui_direction` 和 `pt_text_direction`），且两个零值都表示“继承/自动”，
+因此现有代码保持不变：
+
+```c
+/* An RTL shell: row order, start/end alignment, scrollbars and chrome. */
+pt_app_set_ui_direction(app, pt_ui_direction_rtl);
+
+pt_widget *title = pt_label_create(root, "שלום, Pt");
+pt_widget_set_text_direction(title, pt_text_direction_auto); /* default */
+
+/* A nested LTR island keeps its own layout and text base. */
+pt_widget *editor = pt_text_area_create(root, "Write a note");
+pt_widget_set_ui_direction(editor, pt_ui_direction_ltr);
+pt_widget_set_text_direction(editor, pt_text_direction_ltr);
+```
+
+`pt_ui_direction` 的解析顺序为控件 → 最近显式祖先 → 窗口 → 应用 → LTR。
+`pt_text_direction` 为控件 → 最近祖先 → 自动；自动对每个段落运行 UBA
+P2/P3，因此希伯来语句子和英文句子可以共享一个文本区域，仅含中性字符的段落
+回退到解析后的 UI 方向。getter 返回显式值（未设置时为 `inherit`/`auto`），
+而不是解析后的值。`pt_window_set_ui_direction` 为一个窗口覆盖应用值，
+`pt_widget_set_ui_direction` 为一个子树覆盖两者。
+
+输入框和文本区域默认按视觉编辑：左/右方向键移动到视觉相邻的 cluster 边界
+（在 RTL 文本段内可能增大或减小逻辑字节偏移），Home/End 前往视觉行末，
+Shift 保持逻辑锚点，Backspace/Delete 保持逻辑语义。发送给输入法和无障碍的
+插入符号矩形是视觉的。`pt_table` 和 `pt_tree` 的列保持逻辑顺序，仅镜像水平
+起始边缘；内边距和外边距保持物理方向。如需逻辑方向键移动，在
+`pt_window_set_key_callback` 中拦截并消费按键。完整方向模型、一致性数字和
+已知限制见 [RTL 与双向文本指南](rtl.md)。
+
 ## 控件与回调
 
 可用控件：盒/行/列、标签、按钮、输入框、组合框、文本区域、切换、复选框、
@@ -665,9 +699,10 @@ pt_widget_clear_text_spans(label);
 共享一个基线，因此大标题文本段和小上标文本段会位于同一行。文本段在换行、
 测量、选择和光标移动后仍然存在，并在用户键入时跟随文本。用
 `pt_widget_set_text` 替换整个字符串会清除它们，因为字节偏移不再描述新
-文本。文本段仅用于样式：它们不携带链接或嵌入对象，完整的双向段落布局仍
-留待 1.0 之后。方向模型、提议的追加式 API、逻辑到视觉偏移映射和一致性
-测试在 [RTL 方案](rtl.md) 中说明。
+文本。文本段仅用于样式：它们不携带链接或嵌入对象，也没有方向字段；段落方向
+来自控件或窗口，段落内的反向短语使用 Unicode 隔离控制字符。换行后的 RTL 行、
+逐段落基础方向和逻辑到视觉插入符号映射在
+[RTL 与双向文本指南](rtl.md) 中说明。
 
 ### 输入用途
 

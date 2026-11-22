@@ -38,9 +38,10 @@ The public C ABI is flat and opaque: no structs with platform handles are
 exposed, callbacks carry `void *user_data`, and colors are packed integers.
 This keeps ctypes and the Java Foreign Function & Memory API bindings small.
 The library is built with `-fvisibility=hidden`; only functions marked `pt_api`
-are exported (412 in the frozen 1.0 ABI, 448 in 1.1, 554 in 1.2 and 556 in
-1.3; later minors append to the same SONAME). Internal headers live in `src/`
-and are not installed.
+are exported (412 in the frozen 1.0 ABI, 448 in 1.1, 554 in 1.2, 556 in 1.3 and
+1.4, and 564 in 2.0; later releases append to the same SONAME unless a
+declaration is removed or changed). Internal headers live in `src/` and are not
+installed.
 
 ## Design decisions
 
@@ -109,6 +110,50 @@ and the line height is `max(ascent + descent, primary line height)`. Caret,
 selection and hit-test offsets remain UTF-8 byte offsets in the original string,
 and the accessibility text is unchanged. The override table is bounded by
 `PT_FONT_FALLBACK_MAX_OVERRIDES` and evicts the least recently set family.
+
+### Bidirectional text pipeline
+
+The Unicode Bidirectional Algorithm is supplied by vendored SheenBidi v3.0.0
+(Apache-2.0) under `third_party/sheenbidi`, compiled as one unity translation
+unit with the engine's warnings isolated and every `SB*` symbol hidden by
+`-fvisibility=hidden`. FriBidi was rejected because its LGPL terms would
+constrain static linking and distribution. `src/bidi.c` is the only file that
+sees engine types: it decodes UTF-8 once into code points, keeps a parallel
+byte-offset table, and drives the engine on that UTF-32 path because the
+upstream UTF-8 entry point has an L1 line-end whitespace defect.
+`PROVENANCE.md` records the tag, digest and upgrade policy.
+
+The direction properties resolve in `src/widget.c`: UI direction is the
+widget's explicit value, the nearest explicit ancestor, the window, the
+application, then LTR; text direction is the widget's explicit value, the
+nearest ancestor, then auto. Auto uses UBA P2/P3 per paragraph, skipping
+characters inside isolates, and falls back to the resolved UI direction for a
+neutral-only or empty paragraph. Both `inherit` and `auto` are zero, so the
+1.x path needs no migration.
+
+Per paragraph the pipeline resolves levels, applies rule X9 (bidi controls stay
+in the string and in shaping input but are skipped when painting), reorders
+runs, splits them at level/script/font boundaries, and shapes each with an
+explicit HarfBuzz `direction`, `script` and `language`. HarfBuzz mirrors paired
+brackets from the run direction, so Pt never pre-mirrors bytes. Arabic joining
+and Latin kerning survive a mixed line. Wrapping stays logical: candidate lines
+are built in text order, then each line is reordered and measured, with rule L1
+resetting trailing whitespace at the visual end and a caret-affinity bit
+remembered at the soft-wrap boundary. The rigid map between logical byte
+offsets and visual x positions feeds measurement, ellipsis, caret placement,
+hit testing, selection painting and the rectangle sent to `text-input-v3`.
+Wrapped labels and text areas reorder per line with a per-paragraph base, so
+opposite-direction paragraphs coexist in one logical selection range.
+
+The LTR fast path is data-driven: `pt_bidi_text_may_reorder` walks the code
+points with the engine's bidi classes and needs the full algorithm only for an
+R/AL character or a bidi format control. Text that cannot reorder uses the
+pre-2.0 single-run shaping path with no extra allocation. The shape cache is
+keyed by text, font, direction and level, so the same bytes shaped LTR and RTL
+are distinct bounded entries. Analysis is O(n) per rebuild, and the run and map
+allocations are bounded by line length and released with the text layout; 2.0
+does not claim per-frame allocation freedom, because 1.4 already rebuilt line
+layout on every paint.
 
 ### Multiline editing
 
@@ -361,13 +406,16 @@ margin, gap, explicit/auto sizes, min/max constraints, grow weights, cross-axis
 alignment and six justify modes. Text-bearing widgets measure through
 FreeType/HarfBuzz during layout, including wrapped label height. Scroll
 containers lay out their content at full width minus the scrollbar gutter and
-clip during paint. Direction is logical in 1.0: text is stored and indexed in
-UTF-8 byte order, row children are placed from the first child to the last, and
-`start`/`end` alignment is physical left/right. HarfBuzz guesses the script and
-direction of the single run it shapes, but there is no paragraph reordering or
-bidirectional offset map. [rtl.md](rtl.md) specifies the post-1.0 direction
-model, UBA pipeline, UI mirroring and the logical-to-visual mapping that editing
-will require.
+clip during paint.
+
+Layout geometry and text order are separate since 2.0. A container with RTL UI
+direction mirrors its row, wrap, grid and scroll placement, resolves start/end
+alignment and justify against the same edge, and moves scrollbars to the left;
+padding and margin remain physical. Table and tree columns keep logical order
+through an internal opt-out, because a data table whose columns flip is a
+different table. Text is stored and indexed in UTF-8 byte order, and the bidi
+pipeline below turns each logical line into visual runs at measure and paint
+time.
 
 Wrap and grid are measured in the same pass. Wrap measures each child and
 starts a line when the next child plus the column gap would exceed the inner
@@ -784,6 +832,24 @@ zero failures), and the facility's tablet-manager request table had
 sequence asserts the corrected focus lifetime: the first lift of two contacts
 keeps the window focused, the survivor's motion moves the emulated pointer and
 the final up clears everything, while pinch never clicks.
+
+The 2.0 bidi work adds three headless suites to the same gate.
+`test_bidi_conformance` decompresses the vendored Unicode 18.0.0
+`BidiTest.txt` and `BidiCharacterTest.txt` (Unicode License v3) and runs every
+case — 770,241 and 91,707 — asserting 0 failures in about 0.5 s; it prints the
+Unicode version so a data bump is visible. `test_bidi` covers Pt's adapter and
+paint contract: paragraph bases, byte maps, X9 controls, explicit run
+directions, visual order, bracket mirroring, Arabic joining, the LTR fast-path
+pre-scan and the shape-cache direction key. `test_direction` covers the eight
+public functions, the inheritance chain, explicit getters, zero defaults, auto
+P2/P3 with isolates, neutral fallback and invalid input. `test_rich_text`,
+`test_text_area`, `test_visuals`, `test_table`, `test_tree` and
+`test_navigation` carry the wrapped-line, caret, mirroring and golden cases.
+`test_visuals` keeps the 17 pure-LTR snapshots byte-identical to 1.4, and
+`tools/ltr-compat.sh` builds the 1.4.0 tag and the current tree on one machine
+and compares ten LTR scenes as PPM bytes; the gate requires 10/10 `SAME` and
+checks in no golden hash, because font rasterization legitimately varies
+between machines.
 
 Live IME composition has its own harness. `tools/live-ime.sh` starts a nested
 niri and a private-session-bus fcitx5 with its pinyin engine, and

@@ -2,7 +2,7 @@
 
 [English](../bindings.md) | 简体中文
 
-Pt 对外暴露一个扁平的 C ABI。绑定是建立在该 ABI 之上的轻量级手写封装层，因此控件在每种语言中的行为都完全一致。1.1 表面新增装饰模式、主选区、自定义绘制与离屏快照、自定义输入法回调、描述符监视，以及原始焦点/键盘/指针回调。1.2 表面新增应用自有弹出层、字体回退链、剪贴板图像与 URI 列表、列持久化、图标图像和四个选择器。自 1.1 起，扩展表面在 C、C++、Python 和 Java 中保持一致：封装层覆盖每个声明名称，一致性审计把缺失名称视为 `make check` 失败，而不是报告百分比，1.2 表面以 554/554 交付；1.3 新增两个 IME 输入面板函数和步进按钮角色，达到 556/556。0.10 的组合框和多行选择表面，以及 0.9 的主题、标签片/骨架屏、数据视图编辑和逐段排版表面，仍被完整封装。
+Pt 对外暴露一个扁平的 C ABI。绑定是建立在该 ABI 之上的轻量级手写封装层，因此控件在每种语言中的行为都完全一致。1.1 表面新增装饰模式、主选区、自定义绘制与离屏快照、自定义输入法回调、描述符监视，以及原始焦点/键盘/指针回调。1.2 表面新增应用自有弹出层、字体回退链、剪贴板图像与 URI 列表、列持久化、图标图像和四个选择器。自 1.1 起，扩展表面在 C、C++、Python 和 Java 中保持一致：封装层覆盖每个声明名称，一致性审计把缺失名称视为 `make check` 失败，而不是报告百分比，1.2 表面以 554/554 交付；1.3 新增两个 IME 输入面板函数和步进按钮角色，达到 556/556；2.0 新增八个方向函数，达到 564/564。0.10 的组合框和多行选择表面，以及 0.9 的主题、标签片/骨架屏、数据视图编辑和逐段排版表面，仍被完整封装。
 
 | 绑定 | 技术 | 最低要求 | 所有权 |
 | --- | --- | --- | --- |
@@ -1145,16 +1145,42 @@ Python 以 `pt.Popup`/`pt.IconImage` 类和 `Widget`/`Window` 方法对应；Jav
 `pt.IconImage.load_file`、`pt.IconImage.load_memory`、
 `Pt.icon_image_load_file` 和 `Pt.icon_image_load_memory` 无需签名、参数或所有权
 变更即可接受 gzip 压缩的 SVG；hicolor `.svgz` 查找同样沿用既有的 `from_name`
-封装。上表仍是当前的 1.3 扩展表；线路矩阵与多触点工作是测试/运行时基础设施，
+封装。下表即当前扩展表；线路矩阵与多触点工作是测试/运行时基础设施，
 不会出现在绑定表面中。
+
+## 2.0 方向表面
+
+2.0 新增八个方向函数：应用、窗口和控件的 UI setter/getter，以及控件的文本
+setter/getter。C 枚举为 `pt_ui_direction`（`inherit`/`ltr`/`rtl`）和
+`pt_text_direction`（`auto`/`ltr`/`rtl`）；零值表示继承，因此现有封装调用
+行为不变。每个封装层都是普通的值 setter/getter，getter 返回存储的显式值，
+而不是解析后的值。
+
+| C 函数 | C++23 | Python | Java |
+| --- | --- | --- | --- |
+| `pt_app_set_ui_direction` | `app::set_ui_direction` | `App.ui_direction =` / `set_ui_direction` | `Pt.app_set_ui_direction` |
+| `pt_app_get_ui_direction` | `app::ui_direction` | `App.ui_direction` | `Pt.app_get_ui_direction` |
+| `pt_window_set_ui_direction` | `window::set_ui_direction` | `Window.ui_direction =` / `set_ui_direction` | `Pt.window_set_ui_direction` |
+| `pt_window_get_ui_direction` | `window::ui_direction` | `Window.ui_direction` | `Pt.window_get_ui_direction` |
+| `pt_widget_set_ui_direction` | `widget::set_ui_direction` | `Widget.ui_direction =` / `set_ui_direction` | `Pt.widget_set_ui_direction` |
+| `pt_widget_get_ui_direction` | `widget::ui_direction` | `Widget.ui_direction` | `Pt.widget_get_ui_direction` |
+| `pt_widget_set_text_direction` | `widget::set_text_direction` | `Widget.text_direction =` / `set_text_direction` | `Pt.widget_set_text_direction` |
+| `pt_widget_get_text_direction` | `widget::text_direction` | `Widget.text_direction` | `Pt.widget_get_text_direction` |
+
+Python 既暴露属性也暴露链式 `set_*` 方法，因此
+`widget.ui_direction = pt.ui_direction_rtl` 和
+`widget.set_text_direction(pt.text_direction_auto)` 都可用。Java 以 `int`
+接收枚举值并返回 `int`。C++ setter 返回封装层以便链式调用，getter 标记为
+`[[nodiscard]]`。
 
 <a id="binding-coverage"></a>
 
 ## 绑定覆盖范围
 
-自 1.3 起，公共 C ABI 中的 556 个函数都已在 C++、Python 和 Java 中封装；
-1.4 保持该计数不变：它不新增函数，因此功能对等仍是 556/556。
-1.2 表面以 554/554 交付；1.3 新增两个 IME 输入面板入口。一致性审计是硬性的
+自 1.3 起，公共 C ABI 中的每个函数都已在 C++、Python 和 Java 中封装。
+1.4 不新增函数，保持 556/556。2.0 新增八个方向函数，表面达到
+**564 个函数，每种语言均封装 564/564，允许列表为空**。1.2 表面以 554/554
+交付；1.3 新增两个 IME 输入面板入口。一致性审计是硬性的
 `make check` 门禁：它会扫描去除注释后的绑定源码以查找
 每个声明的函数名，允许零个未经审查的缺口。经审查的允许列表为空。0.6 表面中的 124 个函数（比 0.9 所包含的少一个，因为 `pt_window_begin_uri_drag` 在 1.0 冻结时被移除）、为 0.7 数据视图、拖拽和输入表面引入的 19 个函数、为 0.8 结构化拖拽、流式 offer 和带样式文本表面引入的 19 个函数、为 0.9 主题、标签片/骨架屏、数据视图编辑和重命名表面引入的 44 个函数，以及为 0.10 组合框和多行选择表面引入的 40 个函数，全部存在于三个封装层中。两个在 0.9 中弃用的拖拽辅助函数在其弃用窗口期内，以弃用封装层的形式存在于每个绑定中，而不是被加入允许列表而绕过，因此任何接口在离开 ABI 之前都必须先经过每个绑定；现在它们已在同一变更中从 C ABI 和三个绑定中消失。
 

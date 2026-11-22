@@ -117,15 +117,18 @@ stacks, menus and platform integration. Slint's component set is also growing
 quickly and has a declarative language; Pt uses plain imperative construction
 with fluent bindings.
 
-The 1.0 limitations are listed honestly in the
-[README](../README.md#limitations-in-10): dialogs and toasts stay inside the
+The current limitations are listed honestly in the
+[README](../README.md#limitations-in-20): dialogs and toasts stay inside the
 window, AT-SPI exposure is opt-in, streamed drop data arrives as bytes the
 application decodes and a source drag needs an active pointer press, touch
 pinch/rotate synthesizes from two contacts, table columns keep application-set
 widths and can be hidden but the application still owns row order, multi-column
 sorting reports up to four priorities without reordering the model, tree nodes
-hold plain text, rows are owned by Pt and text areas edit plain text with styled
-runs but no bidi layout. Stylus
+hold plain text, and rows are owned by Pt. Bidi paragraph layout, visual caret
+movement, mirrored UI geometry and the AT-SPI direction attribute are delivered
+in 2.0; its RTL limits are the horizontal table wheel axis, Shift selection
+across a soft wrap, a frozen `pt_text_span`, and bidi controls that are not
+sanitized. Stylus
 tool, eraser and barrel buttons are delivered as input data; drawing and
 gesture semantics remain application-defined. Projects that need more than
 that today should use GTK or Qt.
@@ -155,7 +158,8 @@ Wayland desktop sessions.
 
 Pt's Python and Java layers have no generated glue, no JNI and no GObject
 runtime. They are small enough to audit and debug, and since 0.7 both wrap every
-public C function — 412 at 1.0, 448 at 1.1, 554 at 1.2 and 556 at 1.3 and 1.4 —
+public C function — 412 at 1.0, 448 at 1.1, 554 at 1.2, 556 at 1.3 and 1.4 and
+564 at 2.0 —
 as does the C++ header; see [bindings.md](bindings.md#binding-coverage).
 
 ## Where each toolkit is the better choice
@@ -215,5 +219,5 @@ policy — 0.9 ran the first real deprecation cycle end to end, 1.0 records the
 freeze in the policy and turns the checklist into
 `tools/release-check.sh` — and the
 renderer, layout engine, data views and bindings are separated behind
-interfaces that leave room for bidi paragraph layout, richer text models and
+interfaces that leave room for inline objects, richer text models and
 eventually a GPU backend.

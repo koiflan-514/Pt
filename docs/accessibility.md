@@ -168,6 +168,33 @@ emit a name-changed event.
 (`[0, 1]`), toggles, checkboxes and radios (`0` or `1`), and segmented controls
 (the selected index). Other kinds return `false`.
 
+## Text direction
+
+Direction is presentation metadata, so it never changes a role, a state or an
+offset unit. Since 2.0:
+
+- every accessible object publishes its resolved UI direction as the
+  accessibility attribute `direction` (`ltr` or `rtl`), inherited through
+  widget → ancestor → window → app → LTR;
+- every text object publishes the paragraph direction through
+  `Text.GetAttributes` and `Text.GetDefaultAttributes` as a `direction` entry
+  with a scalar range covering the visible text; the range follows the AT-SPI
+  rule that a text object is one styled run here;
+- `GetText`, `GetCharacterAtOffset`, `GetStringAtOffset`, selection and caret
+  offsets stay logical. Screen readers read the logical string, not the visual
+  reordering.
+
+The offset units are deliberately split. `pt_widget_get_a11y_text` is the
+in-process C getter and returns **UTF-8 byte** offsets together with the text,
+caret and selection. The D-Bus `Text` interface speaks **Unicode scalar**
+character offsets and converts at the bridge boundary. A reader that assumed
+every accessibility getter was scalar was wrong for the C API; the contract is
+byte in process, scalar over D-Bus, and direction changes neither.
+
+A password entry reports the direction and the caret but no character. The
+character count still reflects the real length, and no bidi code path exposes a
+password character through text, attributes or events.
+
 ## Overrides in practice
 
 ```c
@@ -317,7 +344,7 @@ minimum contract is:
   accessibility bus; `tools/release-check.sh` reports the bridge as a live
   check rather than as part of `make check`.
 
-## Limitations in 1.0
+## Limitations in 2.0
 
 - The bridge is opt-in and requires a build with `dbus-1`. Without a reachable
   accessibility bus, `pt_app_enable_a11y` returns `false` and the app runs
@@ -330,11 +357,12 @@ minimum contract is:
 - Password entries hide their text but report their caret and character count.
   An application that treats password length as sensitive should account for
   that in its threat model.
-- Bidi paragraph layout is post-1.0. Text offsets are byte offsets in the
-  stored UTF-8 string and character offsets over D-Bus; a future bidi
-  implementation must keep both logical, with a separate visual map for caret
-  and hit testing. The [RTL plan](rtl.md) makes that requirement explicit,
-  including the AT-SPI direction attribute and password checks.
+- Bidi paragraph layout is delivered in 2.0. Text offsets are byte offsets in
+  the stored UTF-8 string for the C getter and character offsets over D-Bus for
+  the `Text` interface; both stay logical, and the visual map is internal to
+  caret and hit testing. The bridge publishes the object `direction` attribute
+  and the `GetAttributes`/`GetDefaultAttributes` direction entry; password
+  entries report direction without text. See [rtl.md](rtl.md).
 - The bridge publishes `TableCell` for body cells, not for header cells.
   Header cells appear through `Table` header queries and the `column_header`
   role, not as `TableCell` implementations.
