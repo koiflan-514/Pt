@@ -453,15 +453,19 @@ Delete on an empty query clears it. The date field parses the chosen picture
 field clamps into its range and uses `.` as the committed decimal separator.
 The colour field accepts `#RRGGBB` and `#RRGGBBAA` and its palette starts with 24
 common colours. The accessible value is the selected index, `YYYYMMDD`, the
-number or normalised RGB respectively.
+number or normalised RGB respectively. The number picker reports the
+spin-button role (`pt_a11y_role_spin_button`) with no expandable state, unlike
+the three popup-backed pickers, which are combo boxes while closed and list
+boxes while open.
 
 ## Media, icons and persistence
 
 ### Icon images
 
-`pt_icon_image` is a reference-counted raster image loaded from a PNG file,
-memory, or a hicolor theme name. Widgets take their own reference, so the load
-handle can be released immediately.
+`pt_icon_image` is a reference-counted raster image loaded from a PNG or SVG
+file, memory, or a hicolor theme name. Widgets take their own reference, so the
+load handle can be released immediately. The loader sniffs the content: an
+`<svg` or `<?xml` prefix selects the SVG path, everything else stays PNG.
 
 ```c
 pt_icon_image *image = pt_icon_image_from_name("document-open", 18);
@@ -474,9 +478,33 @@ if (image) {
 }
 ```
 
+The same slot takes an SVG source; hicolor lookup prefers `scalable/*.svg`
+when the theme ships only vectors:
+
+```c
+const char *mark = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+                   "<path d=\"M4 12l6 6 10-12\" fill=\"none\" stroke=\"#fff\" "
+                   "stroke-width=\"2\"/></svg>";
+pt_icon_image *vector = pt_icon_image_load_memory(mark, strlen(mark), 24);
+if (vector) {
+    pt_widget *done = pt_icon_button_create(card, pt_icon_none, "Done");
+    pt_button_set_icon_image(done, vector);
+    pt_icon_image_destroy(vector);
+}
+```
+
+SVG support covers paths (including arcs), basic shapes, groups, transforms,
+fill/stroke paints with width, caps, joins and dashes, opacity, fill-rule,
+linear/radial gradients, `defs`, inline `style` and simple class rules. Text,
+images, filters, masks, `clipPath`, `use`/`symbol`, markers, animation and the
+full CSS cascade are not supported: the parser ignores the element and still
+visits its descendants. A document with no drawable shape is rejected with
+`pt_get_last_error`. Rasterisation preserves the intrinsic aspect ratio and
+centres the artwork in the requested box; the result enters the same per-size
+and scale cache as PNG.
+
 The window icon is best-effort through `xdg-toplevel-icon-v1`; a compositor
-without the global ignores it without recording an error. SVG sources are not
-part of 1.2.
+without the global ignores it without recording an error.
 
 ### Clipboard images and URI lists
 
@@ -705,18 +733,32 @@ static void on_ime_preedit(pt_window *window, const char *text, int32_t begin,
 pt_window_set_ime_callbacks(window, on_ime_commit, on_ime_preedit, state);
 pt_window_set_ime_enabled(window, true);
 pt_window_set_ime_cursor_rect(window, caret_x, caret_y, 1, 18);
+
+pt_window_show_input_panel(window);  /* ask for an on-screen keyboard */
+pt_window_hide_input_panel(window);  /* withdraw the request */
 ```
 
 Pt does not insert the text for you: the commit callback owns insertion and the
 preedit callback replaces the current composition. Cursor offsets are UTF-8
-byte offsets into the preedit, or -1 when unspecified. The caret rectangle is
-in window logical pixels; it is remembered while IME is disabled and pushed when
+byte offsets into the preedit, or -1 when unspecified. The caret rectangle is in
+window logical pixels; it is remembered while IME is disabled and pushed when
 it activates. Callbacks run on the UI thread and the text is borrowed for the
 call. Pt re-sends the full surrounding state on every change instead of relying
 on incremental acknowledgement, which is what keeps KWin/fcitx5 and sway focus
 desyncs from dropping a commit. Call `pt_window_set_ime_enabled(window,
 false)` to turn the custom path off again; entry focus then enables text input
 on its own.
+
+`pt_window_show_input_panel` and `pt_window_hide_input_panel` forward the
+text-input-v3 v2 requests for the window's active text-input surface and return
+true when the recorded desired state changed. They are hints: the compositor
+decides whether a panel appears and Pt cannot observe it. While the window has
+no active text-input object, a v1-only compositor is in use or the window is
+headless, the request is not sent immediately; the desired state is remembered
+and forwarded once when IME next activates, including after a focus change. The
+protocol treats a repeated request equal to the current state as harmless, so
+the replay has no side effect. Calling either function on a NULL window returns
+false.
 
 ## Primary selection
 

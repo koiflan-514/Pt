@@ -88,7 +88,10 @@ by the kind switch.
 The combobox popup panel and its scroll wrapper are set to `list_box` by the
 combobox implementation, which AT-SPI publishes as a list box rather than as a
 plain list. Menu items and overlay panels carry explicit roles because they are
-built from ordinary buttons and cards.
+built from ordinary buttons and cards. A number picker is a combobox at the
+widget-kind level but reports `spin_button` (value 36, since 1.3) with no
+expandable state; the searchable select, date and colour pickers keep
+`combo_box` while closed and expose `list_box` while their popup is open.
 
 `pt_widget_set_a11y_role(widget, role)` replaces the derived role for one
 widget. Passing `pt_a11y_role_none` restores derivation. A role change emits a

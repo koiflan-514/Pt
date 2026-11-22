@@ -1616,25 +1616,38 @@ the audit in `a5179a1`.
 - **Fake-compositor replay is still absent.** Popup, font-fallback and clipboard
   paths have headless state tests plus the live suite; the in-process protocol
   replay facility is the same M18 gap, not silently claimed here.
+  **Closed in M20:** `tests/fake_compositor.h` landed in `21a9e32`/`898b43b`
+  and was hardened in `2ef3d67`; see the M20 wave 1 record.
 - **SVG icons are deferred.** `pt_icon_image` accepts PNG only; a scalable-only
   hicolor theme does not resolve. The header and release record say so.
+  **Closed in M20 (`b24c4b1`):** SVG is accepted by content sniffing through
+  vendored nanosvg and `scalable/` resolves. SVGZ and the unsupported part of
+  the SVG subset remain open.
 - **The number picker has no spin role.** It reports the combo-box role and no
   expandable state because the 1.2 accessibility enum has no spin-box role;
   appending one is a later minor addition.
+  **Closed in M20 (`f6331d0`):** `pt_a11y_role_spin_button` is value 36 and the
+  count sentinel is 37.
 - **Pickers are locale-independent by design.** The date format is explicit, the
   committed number decimal separator is `.`, and no localized month or group
-  separator is read from the process locale.
+  separator is read from the process locale. This remains a documented
+  contract, not an open defect.
 - **The toplevel-icon path has no live compositor recording.** The matrix
   records KWin/Labwc/Muffin/Jay/Pila as exposing `xdg-toplevel-icon-v1`, but no
   live recording was made in this pass; the submission path is covered headless
-  and niri/Sway/Weston take the tested no-op path.
+  and niri/Sway/Weston take the tested no-op path. **Still open after M20:**
+  the wire test records the submission, but no live recording was added.
 - **Binding raw-callback dispatch still needs a live seat.** Registration and
   callback-free paths are headless-tested for all three bindings; asserting that
   an actual raw key or pointer event reaches a wrapped callback remains a live
-  suite item.
+  suite item. **Closed at wire level in M20 (`08103d2`):**
+  `tests/wire_driver.c` injects real wire events into the C++, Python and Java
+  callbacks; a physical-seat run remains optional live coverage.
 - **M18's two IME visual items remain deferred.** `preedit_hint` presentation and
   `show_input_panel`/`hide_input_panel` were moved to 1.2 but are not part of
   this wave; the event surface and full-state resend remain implemented.
+  **Closed in M20 (`3a13680`, `2966daa`):** the seven hint kinds render as
+  graded underlines and the two input-panel requests are since 1.3.
 
 ### Completion criteria
 
@@ -1668,58 +1681,131 @@ Same gate set as M18 section 4. Final status on `859233f`:
 - A 1.2.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
 
-## M20 - 1.3.0: wire verification and contract completion (in progress)
+## M20 - 1.3.0: wire verification and contract completion (delivered; gate pending)
 
 Goal: close the appendable items carried past M19 without touching the 2.0
 structural horizon. 1.3.0 stays append-only within `libpt.so.1`; new functions
-are marked since 1.3. The M18/M19 process repeats: parallel C workstreams in
+are marked since 1.3. The M18/M19 process repeated: parallel C workstreams in
 isolated worktrees with pre-registered test slots, an integration phase that
-regenerates the baseline and reference, then wrappers, examples, bilingual docs
-and the full gate before the tag.
+regenerated the baseline and reference, then wire consumers, C++ hardening,
+bilingual docs and the full gate before the tag.
 
-### Wave 1 (parallel C workstreams)
+Status (2026-11-22): delivered on the integration tree `c9f7385`. The tree
+exports **556 functions / 910 baseline entries** (556 `func`, 282 `enum`, 43
+`callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1 `type`); `VERSION` and the
+four macros, README, reference and this milestone say 1.3.0. All 556
+declarations carry a since marker (412 × 1.0, 36 × 1.1, 106 × 1.2, 2 × 1.3) and
+the generated reference exposes it per entry. The 35 headless C suites total
+7,701 checks; the three-language wrappers cover the surface except the two new
+IME entry points, whose wrappers are owned by the in-flight bind-final branch
+(the docs tree measures C++ 837, Python 66, Java 676 checks). The bilingual
+check is green. The final `make check`, `tools/ci.sh` and
+`tools/release-check.sh --full` figures are recorded as `pending final gate run`
+until bind-final lands.
 
-1. **Fake-compositor replay facility** (`m20/fake-compositor`): an in-process
-   test compositor — a server-side `wl_display` on a private socket that the
-   library connects to as an ordinary client — advertising the globals Pt uses
-   (xdg-shell, wl_seat, wl_data_device_manager, text-input, xdg-decoration,
-   xdg-toplevel-icon) and injecting wire events: key/pointer sequences, popup
-   configure/repositioned/popup_done, selection offers. First consumers replay
-   the app-owned popup's native placement path and record the toplevel-icon
-   submission. Test infrastructure only; no public ABI change.
-2. **IME visual completion** (`m20/ime-visuals`): render `preedit_hint` ranges
-   in the preedit presentation and add the input-panel requests deferred from
-   M18 (`show_input_panel`/`hide_input_panel`, since 1.3), completing the M18
-   IME contract's two visual items.
-3. **SVG icons** (`m20/svg-icons`): vendor nanosvg (zlib, header-only) as the
-   research recommended; `pt_icon_image` accepts SVG content alongside PNG,
-   hicolor `scalable/` lookup resolves, rasterization feeds the existing
-   per-size/scale cache. The supported SVG subset is documented honestly;
-   unsupported features follow a documented rejection/ignore rule.
-4. **Spin-button accessibility role** (`m20/a11y-spin`): append
-   `pt_a11y_role_spin_button`, report it from the number picker and map it in
-   the AT-SPI bridge — the minor addition the 1.2 record anticipated.
+### Wave 1 (parallel C workstreams, delivered)
 
-Workstream rules: as M19 — header + implementation + C tests + ABI pins land
-together; `test_fake_compositor` is pre-registered; `src/*.c` is
-wildcard-built; workstreams do not edit bindings, generated artifacts, the
-Makefile or public guides.
+1. **Fake-compositor replay facility — delivered (`21a9e32`, `898b43b`,
+   hardening `2ef3d67`).** `tests/fake_compositor.h` is a header-only Wayland
+   server on a private unix socket running on a helper thread; Pt connects
+   through `WAYLAND_DISPLAY` as an ordinary client, so the shipped connection
+   path runs unchanged and no libwayland-server is linked. It advertises the
+   globals Pt uses plus optional capability bits (`FC_OPT_*`) and
+   `FC_OPT_TEXT_INPUT_V1` for the v2 suppression path, decodes and records every
+   request with typed arguments, injects server events and synchronises with a
+   display roundtrip. First consumers assert the popup positioner's placement
+   wire parameters, record the toplevel-icon submission, replay decoration
+   configure/tiled state, drive IME text-input traffic and inject raw
+   key/pointer/selection events. `test_fake_compositor` passes 275 checks; test
+   infrastructure only, no public ABI change.
+2. **IME visual completion — delivered (`3a13680`, `2966daa`).**
+   `preedit_hint` ranges are stored with the preedit and painted as graded second
+   underlines (whole, selection, prefix/suffix, prediction, spelling/compose
+   errors); a hint-free preedit is pixel-identical to 1.2. The two input-panel
+   requests are appended as `pt_window_show_input_panel`/`hide_input_panel`
+   (since 1.3) with boolean desired-state semantics, v1 suppression and replay
+   on reactivation. `test_ime` passes 314 checks.
+3. **SVG icons — delivered (`b24c4b1`, protocol-free vendoring recorded in
+   `THIRD_PARTY.md`).** The vendored zlib-licensed nanosvg accepts SVG alongside
+   PNG by content sniffing, hicolor `scalable/` lookup resolves `.svg`, and
+   rasterisation feeds the existing per-size/scale cache. The supported subset
+   and the ignore-descendants rule for text/images/filters/masks/clipPath/
+   use/symbol/markers/animation/CSS cascade are documented in `pt/icon.h`;
+   straight-alpha output is premultiplied into Pt's `0xAARRGGBB` layout.
+   `test_icon` passes 330 checks (up from 178).
+4. **Spin-button accessibility role — delivered (`f6331d0`).**
+   `pt_a11y_role_spin_button` is appended as value 36, moving
+   `pt_a11y_role_count` to 37; the number picker reports it with no expandable
+   state and the AT-SPI bridge maps it to `SPIN_BUTTON`. `test_picker` passes 553
+   checks, `test_a11y` 148 and `test_abi` pins the new sentinel.
 
-### Wave 2 (after wave 1 integrates)
+Integration `2c257ce` merged the wave, and `0509883` refreshed the 1.3 baseline
+and generated reference (556 functions / 910 entries).
 
-- Wire consumers on the fake compositor: IME text-input replay, raw key/pointer
-  dispatch into wrapped callbacks in all three bindings (the M19 live-seat
-  item, closed at wire level), and the remaining popup/decoration sequences.
-- C++ binding hardening: close the `bad_alloc` leak windows in the owned-string
-  and owned-buffer getters and document the `pt::popup` parent-window lifetime
-  constraint.
+### Wave 2 (delivered)
+
+- **Wire consumers — delivered (`9535ef0`, `8004446`, `0cb2610`).**
+  Text-input v3 event and input-panel injection, composition replay, and
+  decoration configure/tiled-state replay run on the fake compositor, closing
+  the protocol-sequence gaps M19 recorded.
+- **Binding wire dispatch — delivered (`08103d2`, `968107b`, `97645cd`).**
+  `tests/wire_driver.c` exposes the header-only C facility as a flat C ABI
+  (`libwire_driver.so`), so the C++, Python and Java suites assert that a real
+  wire key or pointer event reaches a wrapped callback in every language; the
+  M19 live-seat item is closed at wire level. The five owned-string/buffer
+  getters release through an RAII guard so `std::bad_alloc` cannot leak, and
+  `pt::popup` documents that it must be destroyed before its parent window.
+  C++ passes 837 checks, Python 66 tests and Java 676 checks on this tree. The
+  integration merge is `c9f7385`.
+
+### Open items (carried past M20)
+
+- **Live IME composition matrix is still unrecorded.** The wire replay covers
+  text-input v3 composition, preedit hints and input panels, but a live
+  niri+fcitx5 and KWin/Mutter composition run is still missing; the environment
+  was not available in this round and the record says so rather than implying
+  it.
+- **The SVG subset is honest, not complete.** SVGZ (gzip-compressed SVG) and
+  text, raster images, filters, masks, clipPath, use/symbol, markers, animation
+  and the full CSS cascade are unsupported; the parser ignores them and visits
+  their descendants. A document with no drawable shape is rejected.
+- **Touch and tablet wire injection are not covered.** The fake compositor
+  injects key, pointer, popup, decoration, selection and IME traffic; the
+  `wl_touch` and tablet paths still rely on headless state tests plus the live
+  suite.
+- **The toplevel-icon submission has no live compositor recording.** Headless
+  submission and the request parameters are asserted on the wire; the
+  matrix's KWin/Labwc/Muffin/Jay/Pila exposure was not run, and niri/Sway/Weston
+  take the tested no-op path.
+- **Binding raw dispatch is closed at wire level, not on a live seat.** The
+  wrapped callbacks now receive injected wire events in all three languages; a
+  physical-seat run remains optional live coverage.
+- **Pickers are locale-independent by design.** The date picture is explicit,
+  the committed number separator is `.`, and the process locale is never read.
+  This is a documented contract, not an unfinished translation path.
 
 ### Completion criteria
 
 Same gate set as M19: `make check`, `make check-bindings`, `make perf-check`,
 live suites, `tools/ci.sh`, `tools/release-check.sh --full`, bilingual sync,
-three-language parity with an empty allowlist, ABI pins and an append-only
-diff against `1.2.0`, and a 1.3.0 release record.
+three-language parity with an empty allowlist, ABI pins and an append-only diff
+against `1.2.0`, and a 1.3.0 release record.
+
+Measured on this documentation tree before the final gate:
+
+- `make check` C suites: 35 executables, 7,701 checks plus the 454,380-check
+  property suite; `test_fake_compositor` 275, `test_ime` 314, `test_popup` 466,
+  `test_icon` 330, `test_picker` 553, `test_abi` 13.
+- Binding suites: C++ 837 checks, Python 66 tests, Java 676 checks, 0 failures.
+  Parity is 554/556 pending the bind-final wrappers for the two IME functions;
+  the target is 556/556 with an empty allowlist.
+- Version/bilingual/reference: 1.3.0 agrees across `Makefile`, `base.h`, the
+  README status line and the reference header; the reference names 556
+  functions; the bilingual check reports 9 clean pairs.
+- `make perf-check`, live suites, `tools/ci.sh`, `tools/release-check.sh
+  --full`, the sanitizer/staged-install/tarball rows and the ABI diff against
+  1.2.0: **pending final gate run**; the 1.3.0 release record carries the same
+  marker until bind-final lands.
 
 ## Post-1.0 horizons
 

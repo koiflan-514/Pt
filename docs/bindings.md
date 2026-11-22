@@ -11,7 +11,8 @@ clipboard images and URI lists, column persistence, icon images and the four
 pickers. From 1.1 the extension surface is consistent across C, C++, Python and
 Java: the wrappers cover every declared name, and the parity audit treats a
 missing name as a `make check` failure rather than reporting a percentage. The
-1.2 surface ships 554/554. The 0.10 combobox and multi-row selection surface, and
+1.2 surface shipped 554/554; 1.3 adds the two IME input-panel functions and the
+spin-button role for 556/556. The 0.10 combobox and multi-row selection surface, and
 the 0.9 theme, chip/skeleton, data-view editing and per-run typography surface,
 remain wrapped in full.
 
@@ -1593,10 +1594,37 @@ Group notes:
   existing `pt_index_callback`, `pt_date_callback`, `pt_number_callback` and
   `pt_color_callback`.
 
+## The 1.3 extension surface
+
+1.3 adds two functions and one accessibility enum value. They follow the same
+hand-written convention as the earlier waves; the helper names below are the
+expected set and are reconciled with the bind-final wrappers before the tag.
+
+| Surface | C++ | Python | Java |
+| --- | --- | --- | --- |
+| IME input panel (2) | `window::show_input_panel`, `window::hide_input_panel` | `Window.show_input_panel`, `Window.hide_input_panel` | `Pt.window_show_input_panel`, `Pt.window_hide_input_panel` |
+| Spin role (1) | `pt_a11y_role_spin_button` | `pt.a11y_role_spin_button` | `Pt.a11y_role_spin_button` |
+
+Group notes:
+
+- **Input panel.** Both functions take the window and return `bool`: true when
+  the recorded desired state changed, false when IME was already in that state
+  or the window is NULL. They forward a hint and never wait for a panel, so the
+  binding call is non-blocking like the C entry point.
+- **Spin role.** The constant is value 36 and moves `pt_a11y_role_count` to 37.
+  The number picker reports it. The bindings do not remap roles, so
+  `widget::a11y_role`, `Widget.a11y_role` and `Pt.widget_get_a11y_role` return the
+  C value unchanged.
+- **C++ hardening.** The five owned-string and owned-buffer getters release
+  their C buffer through an RAII guard, so a `std::bad_alloc` during the copy
+  cannot leak, and `pt::popup` documents that it must be destroyed before its
+  parent window.
+
 ## Binding coverage
 
-From 1.2 every function in the public C ABI (554) is wrapped in C++, Python
-and Java. The parity audit is a hard `make check` gate: it scans the
+From 1.3 every function in the public C ABI (556) is wrapped in C++, Python
+and Java. The 1.2 surface shipped 554/554; 1.3 adds the two IME input-panel
+entry points. The parity audit is a hard `make check` gate: it scans the
 comment-stripped binding sources for every declared function name and allows
 zero unreviewed gaps. The reviewed allowlist is empty. The 124
 functions in the 0.6 surface (one fewer than 0.9 carried, because

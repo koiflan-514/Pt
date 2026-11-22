@@ -38,9 +38,9 @@ The public C ABI is flat and opaque: no structs with platform handles are
 exposed, callbacks carry `void *user_data`, and colors are packed integers.
 This keeps ctypes and the Java Foreign Function & Memory API bindings small.
 The library is built with `-fvisibility=hidden`; only functions marked `pt_api`
-are exported (412 in the frozen 1.0 ABI, 448 in 1.1 and 554 in 1.2; later
-minors append to the same SONAME). Internal headers live in `src/` and are not
-installed.
+are exported (412 in the frozen 1.0 ABI, 448 in 1.1, 554 in 1.2 and 556 in
+1.3; later minors append to the same SONAME). Internal headers live in `src/`
+and are not installed.
 
 ## Design decisions
 
@@ -277,6 +277,22 @@ offsets are UTF-8 byte offsets into the preedit or -1. Pt keeps re-sending full
 state on every change instead of relying on incremental acknowledgement, which
 mitigates the KWin/fcitx5 and sway focus desyncs (Q-IME-001, Q-IME-002), and
 treats an empty `done` as an acknowledgement rather than a request to answer.
+
+The v2 `preedit_hint` ranges are retained with the current preedit rather than
+added to the callback ABI. Ranges are byte offsets into the submitted preedit,
+clamped to it and snapped to UTF-8 boundaries; zero-length or out-of-range
+ranges are dropped and at most 256 ranges are kept per preedit. Painting adds a
+second underline beneath the plain preedit caret underline: `whole` (1.5 px
+accent), `selection` (2.5 px accent), `prefix`/`suffix` (1.0 px muted at alpha
+0xC0), `prediction` (1.0 px muted) and `spelling_error`/`compose_error`
+(2.0 px danger). Overlapping ranges paint in arrival order, unknown values are
+stored but draw nothing, and a preedit without hints is pixel-identical to 1.2.
+`pt_window_show_input_panel` and `pt_window_hide_input_panel` add the v2
+input-panel requests: the desired boolean is recorded even when no text-input
+object is active, the call returns whether it changed, the request is forwarded
+when IME activates, and a v1-only compositor or headless window never sends
+one. The protocol makes a repeated request matching the compositor's state
+harmless, so the reactivation replay needs no extra tracking.
 
 Entry editing is modelled as UTF-8 byte positions with a caret and an
 independent selection anchor. The anchor and cursor are normalized before every
@@ -578,13 +594,28 @@ size and scale in a process-wide LRU bounded by
 `PT_ICON_IMAGE_CACHE_MAX_ENTRIES` per handle; a miss that cannot fit draws the
 untinted fallback instead of growing the cache.
 
+The loader sniffs the payload after an optional UTF-8 BOM and whitespace: an
+`<svg` or `<?xml` prefix takes the SVG path and every other stream stays on the
+byte-for-byte PNG path. SVG is parsed by the vendored zlib-licensed nanosvg and
+rasterised on demand at each requested device size through `src/svg.c`; a
+hicolor `scalable/` directory is searched for `.svg` before fixed-size
+directories for `.png`. The supported subset is paths (including arcs), basic
+shapes, groups, transforms, fill and stroke paints with width/cap/join/dash,
+opacity, fill-rule, linear/radial gradients, `defs`, inline `style` and simple
+class rules; text, images, filters, masks, `clipPath`, `use`/`symbol`, markers,
+animation and the full CSS cascade are ignored by the parser, whose descendants
+are still visited. A document with no complete shape is rejected. Nanosvg
+returns straight RGBA, so `src/svg.c` premultiplies each pixel into Pt's
+`0xAARRGGBB` blend layout instead of repacking; a zero alpha stays transparent.
+Rasterisation preserves the intrinsic aspect ratio and centres the artwork in
+the requested box, and the result enters the same per-size/scale cache as PNG.
+
 `pt_window_set_icon` is best-effort: when the compositor advertises
 `xdg_toplevel_icon_v1`, Pt rasterises the image to a dedicated immutable
 `wl_shm` buffer (never a frame buffer), attaches it with the window scale and
 keeps it alive until the icon or window is replaced, resubmitting on a scale
 change. Without the global the call is a silent no-op that still retains the
-image, so a getter and a later submission see it. SVG is deferred to a later
-minor because it needs a new dependency.
+image, so a getter and a later submission see it.
 
 ### Accessibility
 
@@ -602,7 +633,10 @@ priority-ordered sort columns with directions; trees report tree and tree-item
 roles, the one-based level, position in set, set size and expanded state; tabs
 and sidebars expose their navigation roles and the active item; icons use the
 icon role. A combo box reports combo-box with `expandable`, plus `expanded`
-while its popup is open, and the popup itself is a list box of list items.
+while its popup is open, and the popup itself is a list box of list items. The
+number picker reports the appended `pt_a11y_role_spin_button` role with no
+expandable state, and the bridge maps it to AT-SPI `SPIN_BUTTON`; `spin_button`
+is value 36 and moves the `pt_a11y_role_count` sentinel to 37.
 Labels and buttons report zeroed offsets. Dialog panels and menu items get their
 dialog/menu roles automatically.
 
@@ -707,6 +741,26 @@ client-side decoration hit zones, cursors, fractional paint scaling, resize
 clamping, animations and scroll painting. The Wayland suite maps a real
 window, exercises clipboard text and checks that configure produced a valid
 buffer scale; it skips with a message when no compositor is available.
+
+The 1.3 wire facility makes protocol sequences a headless gate instead of a
+live-only check. `tests/fake_compositor.h` is a header-only Wayland server that
+speaks the wire protocol on a private unix socket from a helper thread; Pt
+connects through `WAYLAND_DISPLAY` as an ordinary client, so the shipped
+connection, registry and request paths run unchanged and libwayland-server is
+not linked into the tests. The server advertises the mandatory globals plus
+optional capability bits (`FC_OPT_*`: icon, decoration, fractional scale,
+viewporter, text input, gestures, data device, primary selection, tablet), so a
+test can omit one and assert its fallback; `FC_OPT_TEXT_INPUT_V1` clamps
+text-input to v1 to exercise the v2 suppression path. Every received request is
+decoded and recorded with object id, interface, opcode and typed arguments, and
+tests inject server events and synchronise with a display roundtrip. First
+consumers assert the popup positioner's placement parameters on the wire, record
+the toplevel-icon submission, replay decoration mode exchanges, drive IME
+text-input traffic and inject raw key and pointer events. `tests/wire_driver.c`
+is a small C-only adapter that exposes the facility as a flat C ABI, so the C++,
+Python and Java binding suites load it (`libwire_driver.so`) and assert that a
+real wire key or pointer event reaches a wrapped callback in each language. The
+facility is test infrastructure: it adds no public header, symbol or ABI.
 
 At 1.0 the headless C suite is 29 executables: 27 regular suites carrying 2,968
 checks, the 454,380-check randomized property fuzzer and the AT-SPI bridge (236

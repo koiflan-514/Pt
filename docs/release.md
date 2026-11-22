@@ -37,7 +37,7 @@ Before tagging a release:
 
 - a clean `werror=1` build of the library, C/C++ examples and every C test;
 - `make check` (C suites, C++/Python/Java binding suites, exported-symbol and
-  API-baseline audit, 554/554 binding parity, the 0.6-0.10 surface audits,
+  API-baseline audit, 556/556 binding parity, the 0.6-0.10 surface audits,
   generated reference check);
 - `make perf-check` (dense, startup, data-view and guard benchmarks);
 - `tools/install-check.sh` (staged install, relocatable pkg-config, SONAME,
@@ -1151,6 +1151,156 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
+## 1.3.0 validation record (2026-11-22)
+
+Environment: the integrated `m20/integration` tree at `c9f7385` on the
+reference machine (CachyOS, Wayland, niri 26.04) with the 1.0 toolchain
+(GCC 16.2.1, Python 3.14.8, OpenJDK 25.0.2). The four wave-1 workstreams, the
+wave-2 wire consumers, the C++ hardening branch and the integration baseline
+refresh are merged; the version bump, generated reference and bilingual guides
+land on top in this documentation branch.
+
+This is a release-record **draft**. The source, tests and documentation are
+complete on the integration tree, but the final gate has not been run on the
+tree that also carries the bind-final wrappers. Every figure marked `pending
+final gate run` must be re-measured there before the tag; the per-suite counts
+below were measured on this documentation tree and are evidence for the
+workstreams, not a substitute for the final gate.
+
+### Scope
+
+1.3.0 keeps every 1.2 signature and adds an append-only surface of two
+functions and one accessibility enum value, plus a protocol-level test facility
+that changes no public ABI:
+
+- IME input panel: `pt_window_show_input_panel` and
+  `pt_window_hide_input_panel` (since 1.3), forwarding the text-input-v3 v2
+  requests with a remembered boolean desired state, false for an unchanged
+  state or a NULL window, v1 suppression and one replay on IME reactivation.
+- IME `preedit_hint` presentation: the seven hint kinds render as a second,
+  graded underline over the plain preedit; a preedit without hints is
+  pixel-identical to 1.2.
+- SVG icon sources: `pt_icon_image` sniffs SVG content through vendored
+  nanosvg, hicolor `scalable/` lookup resolves `.svg`, and rasterisation enters
+  the existing per-size/scale cache. No new public function; the subset and the
+  ignore rule are documented in `pt/icon.h`.
+- Spin-button role: `pt_a11y_role_spin_button` is appended as value 36; the
+  number picker reports it with no expandable state and the AT-SPI bridge maps
+  it to `SPIN_BUTTON`.
+- Fake-compositor wire verification: `tests/fake_compositor.h` is test-only
+  infrastructure (no public header, symbol or ABI), and `tests/wire_driver.c`
+  exposes it to the C++/Python/Java suites for real wire key and pointer
+  dispatch.
+- C++ hardening: the five owned-string/buffer getters use an RAII guard so
+  `std::bad_alloc` cannot leak, and `pt::popup` documents its parent-window
+  lifetime constraint.
+
+The public surface is **556 functions** in **910 baseline entries** (556
+`func`, 282 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1
+`type`). The diff against the 907-entry 1.2 baseline is two functions and one
+enum constant, with no removals, renames or signature changes; SONAME stays
+`libpt.so.1`. Every declaration carries a since marker (412 × 1.0, 36 × 1.1,
+106 × 1.2, 2 × 1.3) and the generated reference shows it per entry.
+
+### Behaviour changes
+
+The C ABI change is additive; no existing signature or enum value moved. These
+observable behaviours changed and are the section an upgrading application
+must read:
+
+- **The number picker now reports the spin-button accessibility role.** 1.2
+  reported `pt_a11y_role_combo_box` with no expandable state; 1.3 reports
+  `pt_a11y_role_spin_button` (value 36) and the AT-SPI bridge exposes
+  `SPIN_BUTTON`. This is an intentional semantic correction, not an accident:
+  a number field is a value plus step buttons, not a collapsible choice list.
+  An application or test that matched the old combo-box role on a number picker
+  must match the spin-button role. `pt_a11y_role_count` moves from 36 to 37, so
+  code that used the sentinel as a bound sees one more value.
+- **SVG bytes that previously failed as PNG now load.** The loader sniffs an
+  optional BOM and whitespace, then treats an `<svg` or `<?xml` prefix as SVG;
+  every other stream stays on the byte-for-byte PNG path. A malformed or
+  shapeless SVG returns NULL with `pt_get_last_error`, like a corrupt PNG.
+  hicolor lookup resolves `scalable/` icons that 1.2 could not find.
+- **IME preedit hints are visual only.** Hint ranges are clamped to the preedit,
+  snapped to UTF-8 boundaries, capped at 256 and painted in arrival order;
+  unknown values draw nothing. They do not change commit text, the local
+  composition buffer or the callback ABI, and a preedit without hints paints
+  exactly as in 1.2.
+- **Input-panel requests are hints with a state machine.** The functions return
+  true only when the recorded desired state changed. With no active text-input
+  object, a v1-only compositor or a headless window, no request is sent and the
+  state is remembered; IME reactivation forwards it once. The protocol makes a
+  repeated matching request harmless, so replay has no side effect. Whether an
+  on-screen keyboard appears is not observable.
+- **C++ owned getters cannot leak on `bad_alloc`,** and `pt::popup` must be
+  destroyed before its parent window. Both are binding-level contracts; the C
+  behaviour is unchanged.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass: `include/pt/base.h`, `Makefile` `VERSION`, README and the generated reference all say 1.3.0; SONAME `libpt.so.1` |
+| API baseline | pass: `api/pt.api` 556 functions / 910 entries; the reference names all 556 baseline functions |
+| Since audit | pass: 556/556 declarations carry Since 1.0/1.1/1.2/1.3 (412/36/106/2); generated entries expose them |
+| C suites (headless) | pass on this tree: 35 executables, 7,701 checks plus the 454,380-check property suite; `test_fake_compositor` 275, `test_ime` 314, `test_popup` 466, `test_icon` 330, `test_picker` 553; the live AT-SPI bridge reports 11 and skips without a bus |
+| ABI pins | pass: `tests/test_abi.c` 13 checks, including `pt_a11y_role_spin_button` = 36 and the count sentinel = 37 |
+| Bilingual documentation | pass: 9 public guides, no structural drift; code blocks byte-identical |
+| Binding parity | **pending final gate run**: this tree measures 554/556 in C++, Python and Java (the two IME functions are owned by the in-flight bind-final branch); the target is 556/556 with 0 missing and an empty allowlist |
+| `make check` / `make check-bindings` | C/C++/Python/Java suites pass on this tree (C++ 837 checks, Python 66 tests, Java 676 checks, 0 failures); the full combined gate is **pending final gate run** because `api-check` is red on the two unwrapped names |
+| `make perf-check` | **pending final gate run** |
+| Live Wayland / live typing | **pending final gate run** (environment-dependent; the M19 live suites passed, this round did not rerun them) |
+| Sanitizer, staged install, reproducible tarball, `tools/ci.sh` | **pending final gate run** |
+| ABI diff against 1.2.0 | **pending final gate run** at the symbol level; the additive 554 → 556 expectation and the single enum addition are recorded here, but the tag build was not compared in this pass. `abidiff` remains unavailable on the reference machine |
+| `tools/release-check.sh --full` | **pending final gate run** |
+
+### ABI statement
+
+The 1.3.0 change is append-only within `libpt.so.1`: two new functions and one
+appended enum constant. No existing enum value, struct field order, callback
+typedef or signature changed. `tests/test_abi.c` pins the spin-button value and
+the moved count sentinel. `abidiff` (libabigail) is still not installed on the
+reference machine (no package and no elevated privileges to add one), so the
+release-time comparison remains symbol-level: the 1.2 build exported 554
+`pt_*` symbols and the expected 1.3 build exports 556, with 0 removed. The
+symbol-level run on the tagged tree is part of the `pending final gate run`.
+
+### Final integration surface
+
+The two IME wrappers are the only functions absent from this branch: C++,
+Python and Java each measure 554/556 here, and the bind-final branch owns the
+`window::show_input_panel`/`hide_input_panel`, `Window.show_input_panel`/
+`hide_input_panel` and `Pt.window_show_input_panel`/`window_hide_input_panel`
+helpers plus their tests. Those helper names are the expected set in
+[bindings.md](bindings.md) and must be reconciled with the landed wrappers
+before the tag. The fake-compositor facility and its three-language driver are
+test infrastructure and add no installable artifact.
+
+### Known issues
+
+- Live IME composition under niri+fcitx5 or KWin/Mutter was not recorded. Wire
+  replay covers text-input v3 composition, hints and input panels; this is not
+  a live environment result.
+- SVGZ and the unsupported part of the SVG subset (text, raster images,
+  filters, masks, `clipPath`, `use`/`symbol`, markers, animation, full CSS
+  cascade) are ignored by the parser, whose descendants are still visited. A
+  document with no drawable shape is rejected.
+- The fake compositor does not inject `wl_touch` or tablet sequences; those
+  paths still rely on headless state tests and the live suite.
+- The toplevel-icon submission has no live compositor recording. The wire test
+  asserts the submitted parameters and niri/Sway/Weston take the tested no-op
+  path, but the matrix's KWin/Labwc/Muffin/Jay/Pila exposures were not run.
+- Binding raw-callback dispatch is closed at wire level for all three languages;
+  a physical-seat run remains optional live coverage.
+- Pickers are locale-independent by design (explicit date picture, `.` decimal
+  separator, hex colour). Localized month and group separators remain the
+  application's responsibility.
+
+The annotated tag is created from the final gate tree once the owner confirms
+the freeze. Because this record ships inside the release archive and the final
+gate figures are not measured yet, no digest or final gate number is quoted
+here; `make dist` on the tagged tree reproduces its own digest exactly.
+
 ## Packaging notes
 
 - Runtime dependencies are wayland-client, wayland-cursor, xkbcommon,
@@ -1159,7 +1309,7 @@ archive.
 - The pkg-config file puts those in `Requires.private` and only `-lm` in
   `Libs.private`; public headers expose no external types.
 - The install layout is:
-  - `$PREFIX/lib/libpt.so.1.1.0`, `libpt.so.1`, `libpt.so`, `libpt.a`
+  - `$PREFIX/lib/libpt.so.1.3.0`, `libpt.so.1`, `libpt.so`, `libpt.a`
   - `$PREFIX/include/pt/*.h`, including `pt.hpp`
   - `$PREFIX/lib/pkgconfig/pt.pc`
   - `$PREFIX/share/pt/bindings/python/pt.py`
