@@ -1735,12 +1735,6 @@ static void a11y_append_empty_dict(DBusMessageIter *iter) {
     dbus_message_iter_close_container(iter, &dict);
 }
 
-static void a11y_append_empty_attribute_dict(DBusMessageIter *iter) {
-    DBusMessageIter dict;
-    dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY, "{ss}", &dict);
-    dbus_message_iter_close_container(iter, &dict);
-}
-
 static void a11y_dict_open(DBusMessageIter *iter, DBusMessageIter *dict) {
     dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY, "{ss}", dict);
 }
@@ -1774,6 +1768,21 @@ static void a11y_dict_add_row_span(DBusMessageIter *dict, const pt_widget *row) 
     a11y_dict_add_string(dict, "selected", row->row_selected ? "true" : "false");
 }
 
+/* Resolved paragraph base direction of a text widget, mirroring the widget.c
+ * auto rules: an explicit text direction wins, auto runs UBA P2/P3 on the
+ * first paragraph and falls back to the resolved UI direction when there is
+ * no strong character. */
+static pt_text_direction a11y_widget_text_direction(const pt_widget *widget, const char *text) {
+    pt_text_direction direction = pt_widget_resolved_text_direction(
+        widget, text ? text : "", text ? strlen(text) : 0);
+    return direction == pt_text_direction_rtl ? pt_text_direction_rtl
+                                              : pt_text_direction_ltr;
+}
+
+static const char *a11y_direction_text(pt_ui_direction direction) {
+    return direction == pt_ui_direction_rtl ? "rtl" : "ltr";
+}
+
 static void a11y_append_attributes(DBusMessageIter *iter, const pt_a11y_obj *obj) {
     DBusMessageIter dict;
     a11y_dict_open(iter, &dict);
@@ -1783,6 +1792,12 @@ static void a11y_append_attributes(DBusMessageIter *iter, const pt_a11y_obj *obj
     }
     pt_widget *widget = obj->widget;
     char buffer[96];
+    /* Every accessible control reports its resolved UI direction (inherited
+     * from ancestors, window or application, defaulting to LTR) so that AT
+     * can mirror placement cues. Never derived from the text contents, so
+     * password entries stay safe to expose. */
+    a11y_dict_add_string(&dict, "direction",
+                         a11y_direction_text(pt_widget_resolved_ui_direction(widget)));
     if (widget->a11y_role == pt_a11y_role_alert) {
         a11y_dict_add_string(&dict, "live", "assertive");
         a11y_dict_add_string(&dict, "atomic", "true");
@@ -3410,25 +3425,50 @@ static DBusHandlerResult a11y_text(DBusConnection *connection, DBusMessage *mess
         return a11y_send(connection, message, reply);
     }
     if (strcmp(member, "GetAttributes") == 0) {
+        /* StartOffset: which run the requested offset falls in. Every text
+         * object here is a single run, so anything outside the text clamps
+         * into it, matching the AT-SPI "always a run" convention. */
+        dbus_int32_t start = 0;
+        if (!dbus_message_get_args(message, NULL, DBUS_TYPE_INT32, &start,
+                                   DBUS_TYPE_INVALID)) {
+            return a11y_error(connection, message, DBUS_ERROR_INVALID_ARGS,
+                              "GetAttributes expects an offset");
+        }
+        (void)start;
+        /* The whole (visible) text is one styled run. Offsets follow the
+         * Text interface contract: Unicode character offsets. */
+        int32_t range_start = 0;
+        int32_t range_end = (int32_t)visible_chars;
+        bool rtl = a11y_widget_text_direction(obj->widget, visible_text) ==
+                   pt_text_direction_rtl;
         DBusMessage *reply = a11y_reply(message);
         if (!reply) {
             return DBUS_HANDLER_RESULT_NEED_MEMORY;
         }
         DBusMessageIter iter;
         dbus_message_iter_init_append(reply, &iter);
-        a11y_append_empty_attribute_dict(&iter);
-        a11y_append_int32(&iter, 0);
-        a11y_append_int32(&iter, 0);
+        DBusMessageIter dict;
+        dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{ss}", &dict);
+        const char *direction = rtl ? "rtl" : "ltr";
+        a11y_dict_add_string(&dict, "direction", direction);
+        dbus_message_iter_close_container(&iter, &dict);
+        a11y_append_int32(&iter, range_start);
+        a11y_append_int32(&iter, range_end);
         return a11y_send(connection, message, reply);
     }
     if (strcmp(member, "GetDefaultAttributes") == 0) {
+        bool rtl = a11y_widget_text_direction(obj->widget, visible_text) ==
+                   pt_text_direction_rtl;
         DBusMessage *reply = a11y_reply(message);
         if (!reply) {
             return DBUS_HANDLER_RESULT_NEED_MEMORY;
         }
         DBusMessageIter iter;
         dbus_message_iter_init_append(reply, &iter);
-        a11y_append_empty_attribute_dict(&iter);
+        DBusMessageIter dict;
+        dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{ss}", &dict);
+        a11y_dict_add_string(&dict, "direction", rtl ? "rtl" : "ltr");
+        dbus_message_iter_close_container(&iter, &dict);
         return a11y_send(connection, message, reply);
     }
     if (strcmp(member, "GetCharacterExtents") == 0 ||

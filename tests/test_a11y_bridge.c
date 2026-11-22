@@ -878,6 +878,89 @@ static bool a11y_attribute(pt_app *app, DBusConnection *client, const char *bus,
     return found;
 }
 
+/* Text.GetAttributes returns an attribute run: a {ss} dict plus the run's
+ * start/end offsets (Unicode character offsets, per the Text contract). */
+static bool reply_attributes(DBusMessage *reply, const char *key, char *out, size_t size,
+                             int32_t *start, int32_t *end) {
+    if (!reply || dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        return false;
+    }
+    DBusMessageIter iter;
+    if (!dbus_message_iter_init(reply, &iter) ||
+        dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
+        return false;
+    }
+    bool found = false;
+    DBusMessageIter array;
+    dbus_message_iter_recurse(&iter, &array);
+    while (dbus_message_iter_get_arg_type(&array) == DBUS_TYPE_DICT_ENTRY) {
+        DBusMessageIter entry;
+        dbus_message_iter_recurse(&array, &entry);
+        const char *name = NULL;
+        const char *value = NULL;
+        if (dbus_message_iter_get_arg_type(&entry) == DBUS_TYPE_STRING) {
+            dbus_message_iter_get_basic(&entry, &name);
+            dbus_message_iter_next(&entry);
+            if (dbus_message_iter_get_arg_type(&entry) == DBUS_TYPE_STRING) {
+                dbus_message_iter_get_basic(&entry, &value);
+            }
+        }
+        if (name && value && strcmp(name, key) == 0) {
+            snprintf(out, size, "%s", value);
+            found = true;
+        }
+        dbus_message_iter_next(&array);
+    }
+    dbus_message_iter_next(&iter);
+    dbus_int32_t first = -1;
+    dbus_int32_t second = -1;
+    if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_INT32) {
+        return false;
+    }
+    dbus_message_iter_get_basic(&iter, &first);
+    dbus_message_iter_next(&iter);
+    if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_INT32) {
+        return false;
+    }
+    dbus_message_iter_get_basic(&iter, &second);
+    *start = (int32_t)first;
+    *end = (int32_t)second;
+    return found;
+}
+
+static bool reply_default_attributes(DBusMessage *reply, const char *key, char *out,
+                                     size_t size) {
+    if (!reply || dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        return false;
+    }
+    DBusMessageIter iter;
+    if (!dbus_message_iter_init(reply, &iter) ||
+        dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
+        return false;
+    }
+    DBusMessageIter array;
+    dbus_message_iter_recurse(&iter, &array);
+    while (dbus_message_iter_get_arg_type(&array) == DBUS_TYPE_DICT_ENTRY) {
+        DBusMessageIter entry;
+        dbus_message_iter_recurse(&array, &entry);
+        const char *name = NULL;
+        const char *value = NULL;
+        if (dbus_message_iter_get_arg_type(&entry) == DBUS_TYPE_STRING) {
+            dbus_message_iter_get_basic(&entry, &name);
+            dbus_message_iter_next(&entry);
+            if (dbus_message_iter_get_arg_type(&entry) == DBUS_TYPE_STRING) {
+                dbus_message_iter_get_basic(&entry, &value);
+            }
+        }
+        if (name && value && strcmp(name, key) == 0) {
+            snprintf(out, size, "%s", value);
+            return true;
+        }
+        dbus_message_iter_next(&array);
+    }
+    return false;
+}
+
 static bool a11y_child_ref(pt_app *app, DBusConnection *client, const char *bus,
                            const char *parent, int index, a11y_ref *out) {
     DBusMessage *message = dbus_message_new_method_call(
@@ -948,6 +1031,7 @@ static void test_bridge_live(pt_app *app, pt_widget *search, pt_widget *password
     signal_watch watch = {0};
     dbus_connection_add_filter(client, watch_signals, &watch, NULL);
 
+    char attribute[128];
     a11y_ref roots[16];
     int root_count = a11y_children(app, client, "org.a11y.atspi.Registry",
                                    "/org/a11y/atspi/accessible/root", roots, 16);
@@ -1341,6 +1425,21 @@ static void test_bridge_live(pt_app *app, pt_widget *search, pt_widget *password
     if (reply) {
         dbus_message_unref(reply);
     }
+    /* The RTL direction stays visible even though the characters do not. */
+    pt_check(a11y_attribute(app, client, password_entry.bus, password_entry.path,
+                            "direction", attribute, sizeof(attribute)) &&
+             strcmp(attribute, "rtl") == 0);
+    reply = a11y_method_int1(app, client, password_entry.bus, password_entry.path,
+                             "org.a11y.atspi.Text", "GetAttributes", 0);
+    int32_t password_run_start = -1;
+    int32_t password_run_end = -1;
+    pt_check(reply_attributes(reply, "direction", attribute, sizeof(attribute),
+                              &password_run_start, &password_run_end) &&
+             strcmp(attribute, "rtl") == 0 && password_run_start == 0 &&
+             password_run_end == 0);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
 
     DBusMessage *set_text = dbus_message_new_method_call(
         entry.bus, entry.path, "org.a11y.atspi.EditableText", "SetTextContents");
@@ -1383,7 +1482,6 @@ static void test_bridge_live(pt_app *app, pt_widget *search, pt_widget *password
     pt_check_near(pt_slider_get_value(volume), 0.6, 0.001);
 
     /* Table and tree metadata travels through GetAttributes. */
-    char attribute[128];
     pt_check(a11y_attribute(app, client, table_ref.bus, table_ref.path, "sort-columns",
                             attribute, sizeof(attribute)));
     pt_check(strcmp(attribute, "2 ascending, 1 descending") == 0);
@@ -2047,6 +2145,170 @@ static void test_bridge_live(pt_app *app, pt_widget *search, pt_widget *password
     dbus_connection_close(client);
     dbus_connection_unref(client);
 }
+/* Direction attributes: object-level UI direction on every control, and the
+ * Text run's base direction with character-offset ranges. */
+static void test_bridge_direction(pt_app *app, pt_widget *rtl_field) {
+    DBusConnection *client = open_a11y_client();
+    pt_check(client != NULL);
+    if (!client) {
+        return;
+    }
+    a11y_ref roots[16];
+    int root_count = a11y_children(app, client, "org.a11y.atspi.Registry",
+                                   "/org/a11y/atspi/accessible/root", roots, 16);
+    pt_check(root_count > 0);
+    a11y_ref app_root = {0};
+    for (int i = 0; i < root_count; ++i) {
+        char name[256];
+        if (a11y_role(app, client, roots[i].bus, roots[i].path) == atspi_role_application &&
+            a11y_name(app, client, roots[i].bus, roots[i].path, name, sizeof(name)) &&
+            strcmp(name, "pt.tests.a11y-bridge") == 0) {
+            app_root = roots[i];
+            break;
+        }
+    }
+    pt_check(app_root.path[0] != '\0');
+    if (app_root.path[0] == '\0') {
+        dbus_connection_close(client);
+        dbus_connection_unref(client);
+        return;
+    }
+    a11y_ref window_ref = {0};
+    pt_check(find_child(app, client, app_root.bus, app_root.path, atspi_role_frame,
+                        NULL, &window_ref));
+    DBusMessage *child_message = dbus_message_new_method_call(
+        window_ref.bus, window_ref.path, "org.a11y.atspi.Accessible", "GetChildAtIndex");
+    dbus_int32_t zero = 0;
+    dbus_message_append_args(child_message, DBUS_TYPE_INT32, &zero, DBUS_TYPE_INVALID);
+    DBusMessage *reply = a11y_call(app, client, child_message);
+    a11y_ref root_widget = {0};
+    pt_check(reply_ref(reply, &root_widget));
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    a11y_ref hebrew_ref = {0};
+    a11y_ref arabic_ref = {0};
+    a11y_ref rtl_field_ref = {0};
+    a11y_ref slider_ref = {0};
+    a11y_ref save_ref = {0};
+    pt_check(find_child(app, client, window_ref.bus, root_widget.path, atspi_role_label,
+                        "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d", &hebrew_ref));
+    pt_check(find_child(app, client, window_ref.bus, root_widget.path, atspi_role_label,
+                        "\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7", &arabic_ref));
+    pt_check(find_child(app, client, window_ref.bus, root_widget.path, atspi_role_entry,
+                        "RTL field", &rtl_field_ref));
+    pt_check(find_child(app, client, window_ref.bus, root_widget.path, atspi_role_slider,
+                        NULL, &slider_ref));
+    pt_check(find_child(app, client, window_ref.bus, root_widget.path,
+                        atspi_role_push_button, "Save", &save_ref));
+    if (hebrew_ref.path[0] == '\0' || arabic_ref.path[0] == '\0' ||
+        rtl_field_ref.path[0] == '\0' ||
+        slider_ref.path[0] == '\0' || save_ref.path[0] == '\0') {
+        pt_check(false);
+        dbus_connection_close(client);
+        dbus_connection_unref(client);
+        return;
+    }
+
+    char attribute[128];
+    int32_t run_start = -1;
+    int32_t run_end = -1;
+    char text[256];
+
+    /* Hebrew: 4 scalars but 8 UTF-8 bytes; the run range is in scalars. */
+    pt_check(a11y_attribute(app, client, hebrew_ref.bus, hebrew_ref.path, "direction",
+                            attribute, sizeof(attribute)) &&
+             strcmp(attribute, "rtl") == 0);
+    reply = a11y_method_int1(app, client, hebrew_ref.bus, hebrew_ref.path,
+                             "org.a11y.atspi.Text", "GetAttributes", 0);
+    pt_check(reply_attributes(reply, "direction", attribute, sizeof(attribute), &run_start,
+                              &run_end) &&
+             strcmp(attribute, "rtl") == 0 && run_start == 0 && run_end == 4);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    DBusMessage *get_hebrew = dbus_message_new_method_call(
+        hebrew_ref.bus, hebrew_ref.path, "org.a11y.atspi.Text", "GetText");
+    dbus_int32_t hebrew_start = 0;
+    dbus_int32_t hebrew_end = -1;
+    dbus_message_append_args(get_hebrew, DBUS_TYPE_INT32, &hebrew_start, DBUS_TYPE_INT32,
+                             &hebrew_end, DBUS_TYPE_INVALID);
+    reply = a11y_call(app, client, get_hebrew);
+    pt_check(reply_string(reply, text, sizeof(text)) &&
+             strcmp(text, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0 && strlen(text) == 8);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    reply = a11y_method(app, client, hebrew_ref.bus, hebrew_ref.path, "org.a11y.atspi.Text",
+                        "GetDefaultAttributes");
+    pt_check(reply_default_attributes(reply, "direction", attribute, sizeof(attribute)) &&
+             strcmp(attribute, "rtl") == 0);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+
+    /* Arabic takes the same path and resolves through auto detection: a
+     * label with no explicit direction whose text starts with RTL letters. */
+    reply = a11y_method_int1(app, client, arabic_ref.bus, arabic_ref.path,
+                             "org.a11y.atspi.Text", "GetAttributes", 2);
+    pt_check(reply_attributes(reply, "direction", attribute, sizeof(attribute), &run_start,
+                              &run_end) &&
+             strcmp(attribute, "rtl") == 0 && run_start == 0 && run_end == 5);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+
+    /* An RTL UI direction with LTR text: the run direction follows the
+     * explicit text direction, not the text contents. */
+    pt_widget_set_text_direction(rtl_field, pt_text_direction_ltr);
+    reply = a11y_method_int1(app, client, rtl_field_ref.bus, rtl_field_ref.path,
+                             "org.a11y.atspi.Text", "GetAttributes", 0);
+    pt_check(reply_attributes(reply, "direction", attribute, sizeof(attribute), &run_start,
+                              &run_end) &&
+             strcmp(attribute, "ltr") == 0 && run_start == 0 && run_end == 9);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    pt_widget_set_text_direction(rtl_field, pt_text_direction_auto);
+    reply = a11y_method_int1(app, client, rtl_field_ref.bus, rtl_field_ref.path,
+                             "org.a11y.atspi.Text", "GetAttributes", 0);
+    pt_check(reply_attributes(reply, "direction", attribute, sizeof(attribute), &run_start,
+                              &run_end) &&
+             strcmp(attribute, "rtl") == 0 && run_start == 0 && run_end == 9);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+
+    /* Auto detection with no strong character falls back to the UI
+     * direction, reported explicitly as "ltr" or "rtl". */
+    a11y_ref button_ref = save_ref;
+    reply = a11y_method_int1(app, client, button_ref.bus, button_ref.path,
+                             "org.a11y.atspi.Text", "GetAttributes", 0);
+    pt_check(reply_attributes(reply, "direction", attribute, sizeof(attribute), &run_start,
+                              &run_end) &&
+             strcmp(attribute, "ltr") == 0 && run_start == 0 && run_end == 4);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    pt_check(a11y_attribute(app, client, button_ref.bus, button_ref.path, "direction",
+                            attribute, sizeof(attribute)) &&
+             strcmp(attribute, "ltr") == 0);
+
+    /* Non-text controls carry only the object-level direction. */
+    pt_check(a11y_attribute(app, client, slider_ref.bus, slider_ref.path, "direction",
+                            attribute, sizeof(attribute)) &&
+             strcmp(attribute, "ltr") == 0);
+    reply = a11y_method(app, client, slider_ref.bus, slider_ref.path, "org.a11y.atspi.Text",
+                        "GetAttributes");
+    pt_check(reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR &&
+             strcmp(dbus_message_get_error_name(reply), DBUS_ERROR_UNKNOWN_METHOD) == 0);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+
+    dbus_connection_close(client);
+    dbus_connection_unref(client);
+}
 #endif /* PT_HAVE_DBUS */
 
 int main(void) {
@@ -2065,10 +2327,21 @@ int main(void) {
     pt_widget *search = pt_entry_create(root, "Search");
     pt_widget *password_entry = pt_entry_create(root, "Password");
     pt_widget *notes = pt_text_area_create(root, "Notes");
+    pt_widget *hebrew = pt_label_create(root, "");
+    pt_widget *arabic = pt_label_create(root, "");
+    pt_widget *rtl_field = pt_entry_create(root, "RTL field");
+    pt_widget_set_text(hebrew, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d");
+    pt_widget_set_text(arabic, "\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7");
+    pt_widget_set_text(rtl_field, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d \xd7\xa2\xd7\x95\xd7\x9c\xd7\x9d");
+    pt_widget_set_ui_direction(hebrew, pt_ui_direction_rtl);
+    pt_widget_set_ui_direction(arabic, pt_ui_direction_rtl);
+    pt_widget_set_ui_direction(rtl_field, pt_ui_direction_rtl);
+    pt_widget_set_a11y_name(rtl_field, "RTL field");
     pt_widget *volume = pt_slider_create(root);
     pt_widget_set_text(search, "hello");
     pt_widget_set_text(password_entry, "secret");
     pt_entry_set_password(password_entry, true);
+    pt_widget_set_ui_direction(password_entry, pt_ui_direction_rtl);
     pt_widget_set_a11y_name(password_entry, "Password");
     pt_widget_set_text(notes, "caf\xc3\xa9 \xe4\xb8\x96\xe7\x95\x8c");
     pt_widget_set_a11y_name(notes, "Notes");
@@ -2126,6 +2399,7 @@ int main(void) {
         pt_check(pt_app_get_a11y_status(app) == pt_a11y_status_active);
         test_bridge_live(app, search, password_entry, volume, save, table, tree,
                          tree_root_node, tree_child_node, tabs, sidebar, notes);
+        test_bridge_direction(app, rtl_field);
         pt_app_disable_a11y(app);
         pt_check(pt_app_get_a11y_status(app) == pt_a11y_status_disabled);
         pt_check(pt_app_enable_a11y(app));
