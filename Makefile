@@ -96,7 +96,7 @@ CPP_EXAMPLES := $(patsubst examples/cpp/%.cpp,$(EXAMPLES)/cpp/%,$(wildcard examp
 	run-font-fallback run-column-persist \
 	run-cpp-pickers run-cpp-popup-demo run-python-pickers run-python-popup-demo \
 	run-java-pickers run-java-popup-demo run-java-icon-button \
-	api-check api-update api-docs
+	wire-driver api-check api-update api-docs
 
 all: lib examples
 
@@ -227,9 +227,29 @@ check-sanitize: $(TEST_BINS) $(TEST_BIN)/test_cpp
 	@echo "== $(TEST_BIN)/test_cpp (sanitized)"
 	@ASAN_OPTIONS=detect_leaks=1 $(TEST_BIN)/test_cpp
 
-$(TEST_BIN)/test_cpp: bindings/cpp/test_pt.cpp bindings/cpp/pt/pt.hpp $(BUILD)/libpt.a
+# The binding wire tests inject real Wayland key/pointer events through the
+# fake compositor. fake_compositor.h is C-only, so a small C driver exposes a
+# flat ABI to the C++/Python/Java suites instead of every binding including it.
+WIRE_DRIVER_OBJ := $(TEST_BIN)/wire_driver.o
+WIRE_DRIVER_LIB := $(TEST_BIN)/libwire_driver.so
+
+$(TEST_BIN)/test_cpp: bindings/cpp/test_pt.cpp bindings/cpp/pt/pt.hpp \
+	$(WIRE_DRIVER_OBJ) $(BUILD)/libpt.a
 	@mkdir -p $(dir $@)
-	$(CXX) $(CPP_FLAGS) $< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+	$(CXX) $(CPP_FLAGS) $< $(WIRE_DRIVER_OBJ) $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+
+$(WIRE_DRIVER_OBJ): tests/wire_driver.c tests/fake_compositor.h $(PROTO_HEADERS)
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) -fvisibility=default -I tests -c $< -o $@
+
+$(WIRE_DRIVER_LIB): $(WIRE_DRIVER_OBJ)
+	@mkdir -p $(dir $@)
+	$(CC) -shared -Wl,-soname,libwire_driver.so -o $@ $< $(PKG_LIBS) $(SAN_LIBS)
+
+wire-driver: $(WIRE_DRIVER_LIB)
+
+# The Python and Java wire tests load libwire_driver.so at run time.
+check-bindings: $(WIRE_DRIVER_LIB)
 
 check-bindings: lib $(TEST_BIN)/test_cpp
 	$(TEST_BIN)/test_cpp
