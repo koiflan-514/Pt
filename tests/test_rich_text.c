@@ -291,6 +291,100 @@ static void test_font_cache(void) {
                              14.0f) == regular);
 }
 
+static void test_bidi_runs(pt_window *window) {
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "sans-serif"};
+    /* "abc " + alef bet gimel + " xyz" */
+    const char *text = "abc \xD7\x90\xD7\x91\xD7\x92 xyz";
+    pt_widget *label = pt_label_create(pt_window_root(window), text);
+    pt_font *probe = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                     pt_font_slant_upright, 14.0f);
+    if (!probe || !pt_font_has_glyph(probe, 0x05D0u)) {
+        printf("skip rich_text: no Hebrew-capable frame font; bidi run checks skipped\n");
+        return;
+    }
+
+    /* Auto with a leading Latin strong character keeps an LTR base but still
+     * splits on the UBA levels and emits visual order. */
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.base_level == 0);
+    pt_check(runs.count == 3);
+    pt_check(runs.items[0].start == 0 && runs.items[0].end == 4);
+    pt_check(runs.items[0].level == 0 && runs.items[0].direction == HB_DIRECTION_LTR);
+    pt_check(runs.items[1].start == 4 && runs.items[1].end == 10);
+    pt_check(runs.items[1].level == 1 && runs.items[1].direction == HB_DIRECTION_RTL);
+    pt_check(runs.items[2].start == 10 && runs.items[2].end == 14);
+    pt_check(runs.items[2].level == 0 && runs.items[2].direction == HB_DIRECTION_LTR);
+    float total = pt_text_runs_natural_width(&runs);
+    float sum = pt_font_measure_direction(runs.items[0].font, runs.text + 0, 4, HB_DIRECTION_LTR) +
+                pt_font_measure_direction(runs.items[1].font, runs.text + 4, 6, HB_DIRECTION_RTL) +
+                pt_font_measure_direction(runs.items[2].font, runs.text + 10, 4, HB_DIRECTION_LTR);
+    pt_check(total > 0.0f);
+    pt_check_near(total, sum, 0.01f);
+    /* position_for_x stays a logical approximation in this wave. */
+    pt_check(pt_text_runs_position_for_x(&runs, 0, runs.length, 0.0f) == 0);
+    pt_check(pt_text_runs_position_for_x(&runs, 0, runs.length, total * 4.0f) == runs.length);
+    pt_text_runs_free(&runs);
+
+    /* An RTL base reorders the same bytes: the trailing Latin word is visually
+     * first, then the Hebrew run, then the leading Latin run. */
+    pt_widget_set_text_direction(label, pt_text_direction_rtl);
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.base_level == 1);
+    pt_check(runs.count == 3);
+    pt_check(runs.items[0].start == 11 && runs.items[0].end == 14);
+    pt_check(runs.items[0].level == 2 && runs.items[0].direction == HB_DIRECTION_LTR);
+    pt_check(runs.items[1].start == 3 && runs.items[1].end == 11);
+    pt_check(runs.items[1].level == 1 && runs.items[1].direction == HB_DIRECTION_RTL);
+    pt_check(runs.items[2].start == 0 && runs.items[2].end == 3);
+    pt_check(runs.items[2].direction == HB_DIRECTION_LTR);
+    pt_text_runs_free(&runs);
+
+    /* Instrument its byte count logical order in 1.x; presentation only. */
+    pt_widget_set_text_direction(label, pt_text_direction_auto);
+    pt_text_span span = span_of(1, 2, pt_text_span_has_weight | pt_text_span_has_color);
+    span.weight = pt_font_weight_bold;
+    span.color = 0xFF2244FFu;
+    pt_check(pt_widget_set_text_spans(label, &span, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    bool saw_bold_ltr = false;
+    bool saw_hebrew = false;
+    for (size_t i = 0; i < runs.count; ++i) {
+        if (runs.items[i].level == 1) {
+            saw_hebrew = true;
+            pt_check(runs.items[i].direction == HB_DIRECTION_RTL);
+        }
+        if (runs.items[i].level == 0 && runs.items[i].font->weight == (int)pt_font_weight_bold) {
+            saw_bold_ltr = true;
+        }
+        /* Level parity and explicit shaping direction always agree. */
+        pt_check(((runs.items[i].level & 1u) != 0) ==
+                 (runs.items[i].direction == HB_DIRECTION_RTL));
+    }
+    pt_check(saw_bold_ltr);
+    pt_check(saw_hebrew);
+    pt_text_runs_free(&runs);
+
+    /* Drawing visits the visual run order without crashing. */
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(480, 120, 1.0f);
+    pt_check(canvas != NULL);
+    if (canvas) {
+        pt_check(pt_window_paint(window, canvas));
+        int painted = 0;
+        for (int y = 0; y < canvas->height; ++y) {
+            for (int x = 0; x < canvas->width; ++x) {
+                if (pt_canvas_get_pixel(canvas, x, y) != 0x000000FFu) ++painted;
+            }
+        }
+        pt_check(painted > 100);
+        pt_canvas_destroy(canvas);
+    }
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.rich_text");
@@ -303,6 +397,7 @@ int main(void) {
 
     test_span_api(window);
     test_runs(window);
+    test_bidi_runs(window);
     test_layout(window);
     test_edit_maintenance(window);
     test_font_cache();

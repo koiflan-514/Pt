@@ -42,6 +42,67 @@ static void test_face_cache(pt_font *first) {
                   0.001f);
 }
 
+static void test_bidi_text(pt_font *font) {
+    pt_font *dejavu = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                      pt_font_slant_upright, 18.0f);
+    if (dejavu && pt_font_has_glyph(dejavu, 0x05D0u) && pt_font_has_glyph(dejavu, 0x0627u)) {
+        font = dejavu;
+    } else if (!pt_font_has_glyph(font, 0x05D0u) || !pt_font_has_glyph(font, 0x0627u)) {
+        printf("skip font: no Hebrew/Arabic face; bidi shaping checks skipped\n");
+        return;
+    }
+    const char *hebrew = "\xD7\x90\xD7\x91\xD7\x92";
+    const char *mixed = "abc \xD7\x90\xD7\x91\xD7\x92";
+    /* The LTR fast path must produce exactly the legacy width and run shape. */
+    float hello = pt_font_measure(font, "Hello, Pt", strlen("Hello, Pt"));
+    pt_check(pt_font_measure_bidi(font, "Hello, Pt", strlen("Hello, Pt"),
+                                  pt_bidi_base_ltr) == hello);
+    pt_font_run *runs = NULL;
+    pt_check(pt_font_runs_bidi(font, "Hello, Pt", strlen("Hello, Pt"), pt_bidi_base_ltr,
+                               &runs) == 1);
+    pt_check(runs && runs[0].level == 0 && runs[0].direction == HB_DIRECTION_INVALID);
+    pt_font_runs_free(runs);
+
+    float he_rtl = pt_font_measure_bidi(font, hebrew, strlen(hebrew), pt_bidi_base_rtl);
+    float he_ltr = pt_font_measure_bidi(font, hebrew, strlen(hebrew), pt_bidi_base_ltr);
+    pt_check(he_rtl > 0.0f);
+    pt_check_near(he_rtl, he_ltr, 0.001f); /* advances do not depend on direction */
+    runs = NULL;
+    pt_check(pt_font_runs_bidi(font, hebrew, strlen(hebrew), pt_bidi_base_auto, &runs) == 1);
+    pt_check(runs && runs[0].level == 1 && runs[0].direction == HB_DIRECTION_RTL);
+    pt_font_runs_free(runs);
+
+    runs = NULL;
+    pt_check(pt_font_runs_bidi(font, mixed, strlen(mixed), pt_bidi_base_ltr, &runs) == 2);
+    pt_check(runs && runs[0].direction == HB_DIRECTION_LTR &&
+             runs[1].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[0].end == 4 && runs[1].end == strlen(mixed));
+    pt_font_runs_free(runs);
+    pt_check(pt_font_measure_bidi(font, mixed, strlen(mixed), pt_bidi_base_ltr) > he_rtl);
+
+    /* Arabic joining is confined to one UBA run. */
+    const char *arabic = "\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85";
+    float joined = pt_font_measure_bidi(font, arabic, strlen(arabic), pt_bidi_base_rtl);
+    float separate = pt_font_measure_bidi(font, "\xD8\xB3", 2, pt_bidi_base_rtl) +
+                     pt_font_measure_bidi(font, "\xD9\x84", 2, pt_bidi_base_rtl) +
+                     pt_font_measure_bidi(font, "\xD8\xA7", 2, pt_bidi_base_rtl) +
+                     pt_font_measure_bidi(font, "\xD9\x85", 2, pt_bidi_base_rtl);
+    pt_check(joined > 0.0f && joined + 1.0f < separate);
+    runs = NULL;
+    pt_check(pt_font_runs_bidi(font, arabic, strlen(arabic), pt_bidi_base_rtl, &runs) == 1);
+    pt_check(runs && runs[0].direction == HB_DIRECTION_RTL);
+    pt_font_runs_free(runs);
+
+    /* Direction is part of the cache key: the two base directions coexist. */
+    const char *cache = "RTL \xD7\x90\xD7\x91";
+    size_t before = pt_font_shape_cache_count(font);
+    (void)pt_font_measure_bidi(font, cache, strlen(cache), pt_bidi_base_ltr);
+    size_t ltr_count = pt_font_shape_cache_count(font);
+    (void)pt_font_measure_bidi(font, cache, strlen(cache), pt_bidi_base_rtl);
+    pt_check(ltr_count > before);
+    pt_check(pt_font_shape_cache_count(font) > ltr_count);
+}
+
 int main(void) {
     pt_font *font = pt_font_acquire("sans-serif", pt_font_weight_regular, pt_font_slant_upright, 18.0f);
     pt_check(font != NULL);
@@ -78,6 +139,8 @@ int main(void) {
 
     float wrapped_height = pt_font_wrapped_height(font, paragraph, 140.0f);
     pt_check(wrapped_height >= font->line_height * 2.0f);
+
+    test_bidi_text(font);
 
     pt_canvas *canvas = pt_canvas_create(520, 220, 1.0f);
     pt_check(canvas != NULL);

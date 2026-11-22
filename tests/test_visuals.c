@@ -509,6 +509,65 @@ static void test_snapshot_icon(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Single-line RTL goldens (2.0 wave 2): forced RTL controls, an auto-direction
+ * Hebrew label under an RTL root, and a mixed Latin/Hebrew label. The same
+ * widgets are repainted under an LTR root base so the changed golden proves the
+ * reordering reaches pixels. Existing LTR snapshots must stay byte-identical. */
+static void test_snapshot_rtl(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "rtl-snapshots", 520, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_gap(root, 10.0f);
+
+    pt_widget *forced = pt_label_create(root, "\xD7\x90\xD7\x91\xD7\x92 abc");
+    pt_widget_set_text_direction(forced, pt_text_direction_rtl);
+    pt_widget_set_align_self(forced, pt_align_start);
+
+    pt_widget *automatic = pt_label_create(root, "\xD7\x90\xD7\x91\xD7\x92 abc");
+    pt_widget_set_align_self(automatic, pt_align_start);
+
+    pt_widget *mixed = pt_label_create(root, "abc \xD7\x90\xD7\x91\xD7\x92 xyz");
+    pt_widget_set_align_self(mixed, pt_align_start);
+
+    pt_widget *entry = pt_entry_create(root, "\xD7\x90\xD7\x91\xD7\x92 abc");
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_size(entry, 260.0f, 32.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+
+    pt_widget *button = pt_button_create(root, "\xD7\x90\xD7\x91\xD7\x92 abc");
+    pt_widget_set_text_direction(button, pt_text_direction_rtl);
+    pt_widget_set_align_self(button, pt_align_start);
+
+    pt_widget_set_text_direction(root, pt_text_direction_rtl);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 240, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+    uint64_t rtl = 0;
+    snapshot_paint(window, canvas, directory, "rtl-single-line", &rtl);
+    uint64_t rtl_repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-single-line-repeat", &rtl_repeat);
+    pt_check(rtl == rtl_repeat);
+
+    /* Flip the inherited base: the auto Hebrew label must reorder. */
+    pt_widget_set_text_direction(root, pt_text_direction_ltr);
+    uint64_t ltr_base = 0;
+    snapshot_paint(window, canvas, directory, "rtl-single-line-ltr-base", &ltr_base);
+    pt_check(ltr_base != rtl);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -521,6 +580,7 @@ int main(void) {
     test_snapshot_gallery(app);
     test_snapshot_views(app);
     test_snapshot_icon(app);
+    test_snapshot_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("visuals");
 }
