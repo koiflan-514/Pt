@@ -1322,12 +1322,17 @@ publishing.
 
 The gate-time digest above was measured on `e1104c2` with this record still in
 its draft (pending) form, before the figures were backfilled; editing this file
-necessarily changes the archive. `tools/ci.sh` proves the archive is
-reproducible by building `dist` twice and comparing the two digests, so the
-tagged tree reproduces its own digest exactly — re-measure there rather than
-trusting a digest quoted from inside the archive.
+necessarily changes the archive. For a reproducible reference on the record
+itself, the committed tree that carries the backfilled figures (`66f5e34`, the
+parent of the commit that adds this note) produced
+`5ad92a0f8f038d3c73d12631511be097131de3972702eb086b08c794773fb2b8` on two
+consecutive `dist` runs. Adding this digest note changes `docs/release.md` once
+more, so the tagged tree necessarily has a different digest; that is the
+self-reference of shipping the record inside the archive, not nondeterminism.
+`make dist` on the tagged tree reproduces its own digest exactly.
 
-All sha256 digests in this record were measured with
+All sha256 digests in this record — the gate-time `d785816c…` and the
+committed-tree `5ad92a0f…` — were measured with
 `SOURCE_DATE_EPOCH=1767225600`, the reproducible-build epoch that
 `tools/ci.sh` fixes. A bare `make dist` derives its epoch from the last commit
 time instead, and that epoch lands in the mtime field of every tar header, so
