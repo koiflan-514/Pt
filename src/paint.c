@@ -40,6 +40,22 @@ static float shape_radius(const pt_widget *widget) {
     return pt_min_float(pt_max_float(0.0f, radius), limit);
 }
 
+/* Chrome that lives on the trailing edge (scrollbars, disclosure triangles,
+ * selection bars) mirrors with the widget's resolved direction. Geometry is
+ * already mirrored by the layout pass (2.0 wave 5); paint must agree with it. */
+static bool paint_rtl(const pt_widget *widget) {
+    return widget && pt_widget_resolved_ui_direction(widget) == pt_ui_direction_rtl;
+}
+
+/* The scrollbar thumb sits at the trailing edge of the content box: the right
+ * in LTR, the left gutter in RTL. The 4px inset mirrors with it. */
+static float scrollbar_x(const pt_widget *widget) {
+    if (paint_rtl(widget)) {
+        return widget->x + widget->padding_left + 4.0f;
+    }
+    return widget->x + widget->width - 8.0f;
+}
+
 static void paint_focus_ring(pt_canvas *canvas, const pt_widget *widget) {
     if (!widget->focused || !widget->enabled) {
         return;
@@ -1036,7 +1052,7 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
                             pt_max_float(6.0f, layout.line_height - 2.0f), accent);
     }
     pt_canvas_pop_clip(canvas);
-    paint_vertical_scrollbar(canvas, area, area->x + area->width - 8.0f, inner.y,
+    paint_vertical_scrollbar(canvas, area, scrollbar_x(area), inner.y,
                              inner.h, inner.h, area->scroll_content_height, area->scroll_y);
     paint_focus_ring(canvas, area);
     pt_text_layout_free(&layout);
@@ -1618,7 +1634,7 @@ static void paint_scroll_bar(pt_canvas *canvas, pt_widget *scroll) {
     }
     float viewport = scroll->height;
     float content = scroll->scroll_content_height;
-    float track_x = scroll->x + scroll->width - 8.0f;
+    float track_x = scrollbar_x(scroll);
     float track_y = scroll->y + 4.0f;
     float track_h = pt_max_float(0.0f, scroll->height - 8.0f);
     float thumb_h = pt_max_float(28.0f, track_h * (viewport / content));
@@ -1645,7 +1661,16 @@ static void paint_horizontal_scrollbar(pt_canvas *canvas, const pt_widget *widge
     }
     float max_scroll = pt_max_float(0.0f, content - viewport);
     float position = max_scroll > 0.0f ? offset / max_scroll : 0.0f;
-    float thumb_x = x + 4.0f + (track_w - thumb_w) * pt_clamp_float(position, 0.0f, 1.0f);
+    float thumb_x;
+    if (paint_rtl(widget)) {
+        /* RTL table scroll offsets count from the right edge, so the thumb
+         * starts flush with that edge and travels left as the offset grows. */
+        thumb_x = x + width - 4.0f - thumb_w -
+                  (track_w - thumb_w) * pt_clamp_float(position, 0.0f, 1.0f);
+    } else {
+        thumb_x = x + 4.0f +
+                  (track_w - thumb_w) * pt_clamp_float(position, 0.0f, 1.0f);
+    }
     pt_canvas_fill_rounded_rect(canvas, thumb_x, y, thumb_w, 4.0f, 2.0f,
                                 color_from_theme(widget, pt_theme_scrollbar));
 }
@@ -1715,7 +1740,8 @@ static uint32_t table_header_sort_priority(const pt_widget *cell) {
 
 static void paint_sort_priority_badge(pt_canvas *canvas, pt_widget *cell,
                                       uint32_t priority) {
-    float cx = cell->x + cell->width - cell->padding_right - 24.0f;
+    float cx = paint_rtl(cell) ? cell->x + cell->padding_right + 24.0f
+                               : cell->x + cell->width - cell->padding_right - 24.0f;
     float cy = cell->y + cell->height * 0.5f;
     pt_canvas_fill_circle(canvas, cx, cy, 7.0f,
                           color_from_theme(cell, pt_theme_accent_soft));
@@ -1734,6 +1760,7 @@ static void paint_sort_priority_badge(pt_canvas *canvas, pt_widget *cell,
 }
 
 static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
+    bool rtl = paint_rtl(cell);
     float mix = pt_clamp_float(cell->hover_mix + cell->press_mix * 0.35f, 0.0f, 1.0f);
     if (mix > 0.01f) {
         pt_canvas_fill_rect(canvas, cell->x, cell->y, cell->width, cell->height,
@@ -1741,7 +1768,9 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
                                            (uint8_t)(mix * 170.0f)));
     }
     pt_color border = color_from_theme(cell, pt_theme_border);
-    pt_canvas_fill_rect(canvas, cell->x + cell->width - 1.0f, cell->y + 10.0f, 1.0f,
+    /* The column rule belongs to the trailing edge of each header. */
+    float rule_x = rtl ? cell->x : cell->x + cell->width - 1.0f;
+    pt_canvas_fill_rect(canvas, rule_x, cell->y + 10.0f, 1.0f,
                         pt_max_float(0.0f, cell->height - 20.0f),
                         pt_color_alpha(border, 0x90u));
     uint32_t priority = table_header_sort_priority(cell);
@@ -1749,7 +1778,9 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
                  cell->parent->parent->extra &&
                  ((const pt_table_state *)cell->parent->parent->extra)->sort_count > 1;
     float icon_space = cell->icon != pt_icon_none ? (multi ? 40.0f : 20.0f) : 0.0f;
-    pt_rect area = {cell->x + cell->padding_left, cell->y,
+    float area_x = rtl ? cell->x + cell->padding_right + icon_space
+                       : cell->x + cell->padding_left;
+    pt_rect area = {area_x, cell->y,
                     pt_max_float(0.0f, cell->width - cell->padding_left -
                                            cell->padding_right - icon_space),
                     cell->height};
@@ -1757,8 +1788,9 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
                       cell->text_align, true, 0.0f, area);
     if (cell->icon != pt_icon_none) {
         pt_color icon_color = color_from_theme(cell, pt_theme_accent);
-        pt_paint_icon_glyph(canvas, cell->icon,
-                            cell->x + cell->width - cell->padding_right - 7.0f,
+        float icon_x = rtl ? cell->x + cell->padding_right + 7.0f
+                           : cell->x + cell->width - cell->padding_right - 7.0f;
+        pt_paint_icon_glyph(canvas, cell->icon, icon_x,
                             cell->y + cell->height * 0.5f, 14.0f, icon_color);
     }
     if (multi) {
@@ -1767,10 +1799,12 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
 }
 
 static void paint_table_row(pt_canvas *canvas, pt_widget *row) {
+    bool rtl = paint_rtl(row);
     if (row->row_selected) {
         pt_canvas_fill_rect(canvas, row->x, row->y, row->width, row->height,
                             color_from_theme(row, pt_theme_accent_soft));
-        pt_canvas_fill_rect(canvas, row->x, row->y, 2.5f, row->height,
+        float bar_x = rtl ? row->x + row->width - 2.5f : row->x;
+        pt_canvas_fill_rect(canvas, bar_x, row->y, 2.5f, row->height,
                             color_from_theme(row, pt_theme_accent));
     } else if (row->hovered || row->press_mix > 0.01f) {
         float strength = pt_max_float(row->hover_mix, row->press_mix);
@@ -1793,6 +1827,7 @@ static void paint_table_row(pt_canvas *canvas, pt_widget *row) {
 }
 
 static void paint_table_cell(pt_canvas *canvas, pt_widget *cell) {
+    bool rtl = paint_rtl(cell);
     if (cell->has_background) {
         pt_canvas_fill_rect(canvas, cell->x, cell->y, cell->width, cell->height,
                             cell->background);
@@ -1801,10 +1836,14 @@ static void paint_table_cell(pt_canvas *canvas, pt_widget *cell) {
     float icon_space = has_icon ? 22.0f : 0.0f;
     if (has_icon) {
         pt_color icon_color = cell->has_foreground ? cell->foreground : text_color(cell);
-        pt_paint_icon_glyph(canvas, cell->icon, cell->x + cell->padding_left + 8.0f,
+        float icon_x = rtl ? cell->x + cell->width - cell->padding_left - 8.0f
+                           : cell->x + cell->padding_left + 8.0f;
+        pt_paint_icon_glyph(canvas, cell->icon, icon_x,
                             cell->y + cell->height * 0.5f, 16.0f, icon_color);
     }
-    pt_rect area = {cell->x + cell->padding_left + icon_space, cell->y,
+    float area_x = rtl ? cell->x + cell->padding_right + icon_space
+                       : cell->x + cell->padding_left + icon_space;
+    pt_rect area = {area_x, cell->y,
                     pt_max_float(0.0f, cell->width - cell->padding_left -
                                            cell->padding_right - icon_space),
                     cell->height};
@@ -1822,12 +1861,14 @@ static void paint_tree(pt_canvas *canvas, pt_widget *tree) {
 }
 
 static void paint_tree_row(pt_canvas *canvas, pt_widget *row) {
+    bool rtl = paint_rtl(row);
     if (row->row_selected) {
         pt_canvas_fill_rounded_rect(canvas, row->x + 4.0f, row->y + 1.0f,
                                     pt_max_float(0.0f, row->width - 8.0f),
                                     pt_max_float(0.0f, row->height - 2.0f), 7.0f,
                                     color_from_theme(row, pt_theme_accent_soft));
-        pt_canvas_fill_rect(canvas, row->x + 4.0f, row->y + 8.0f, 2.5f,
+        float bar_x = rtl ? row->x + row->width - 6.5f : row->x + 4.0f;
+        pt_canvas_fill_rect(canvas, bar_x, row->y + 8.0f, 2.5f,
                             pt_max_float(0.0f, row->height - 16.0f),
                             color_from_theme(row, pt_theme_accent));
     } else if (row->hovered || row->press_mix > 0.01f) {
@@ -1845,18 +1886,27 @@ static void paint_tree_row(pt_canvas *canvas, pt_widget *row) {
     }
     pt_tree_state *state = row->parent ? row->parent->extra : NULL;
     float indent = state && state->indent > 0.0f ? state->indent : 22.0f;
-    float left = row->x + (float)node->depth * indent + 8.0f;
+    /* The disclosure and the indent accumulate from the trailing edge, exactly
+     * like the hit zone in tree.c. */
+    float offset = (float)node->depth * indent;
+    float edge = rtl ? row->x + row->width - offset - 8.0f
+                     : row->x + offset + 8.0f;
     if (node->first_child) {
-        pt_icon chevron = node->expanded ? pt_icon_chevron_down : pt_icon_chevron_right;
-        pt_paint_icon_glyph(canvas, chevron, left + 7.0f, row->y + row->height * 0.5f, 14.0f,
+        pt_icon chevron = node->expanded
+                              ? pt_icon_chevron_down
+                              : (rtl ? pt_icon_chevron_left : pt_icon_chevron_right);
+        pt_paint_icon_glyph(canvas, chevron, rtl ? edge - 7.0f : edge + 7.0f,
+                            row->y + row->height * 0.5f, 14.0f,
                             color_from_theme(row, pt_theme_text_muted));
     } else if (node->depth > 0) {
-        pt_canvas_fill_circle(canvas, left + 6.0f, row->y + row->height * 0.5f, 1.8f,
+        pt_canvas_fill_circle(canvas, rtl ? edge - 6.0f : edge + 6.0f,
+                              row->y + row->height * 0.5f, 1.8f,
                               color_from_theme(row, pt_theme_border_strong));
     }
     const char *text = node->text ? node->text : "";
-    pt_rect area = {row->x + (float)node->depth * indent + 28.0f, row->y,
-                    pt_max_float(0.0f, row->width - (float)node->depth * indent - 36.0f),
+    float area_x = rtl ? row->x + 8.0f : row->x + offset + 28.0f;
+    pt_rect area = {area_x, row->y,
+                    pt_max_float(0.0f, row->width - offset - 36.0f),
                     row->height};
     paint_single_line(canvas, row, text, text_color(row), pt_text_align_start, true, 0.0f,
                       area);
@@ -1939,11 +1989,13 @@ static void paint_sidebar(pt_canvas *canvas, pt_widget *sidebar) {
 static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
     pt_sidebar_state *state = item->parent ? item->parent->extra : NULL;
     bool compact = state && state->compact;
+    bool rtl = paint_rtl(item);
     if (item->row_selected) {
         pt_canvas_fill_rounded_rect(canvas, item->x, item->y, item->width, item->height,
                                     shape_radius(item),
                                     color_from_theme(item, pt_theme_accent_soft));
-        pt_canvas_fill_rounded_rect(canvas, item->x + 1.0f, item->y + 9.0f, 2.5f,
+        float bar_x = rtl ? item->x + item->width - 3.5f : item->x + 1.0f;
+        pt_canvas_fill_rounded_rect(canvas, bar_x, item->y + 9.0f, 2.5f,
                                     pt_max_float(0.0f, item->height - 18.0f), 1.25f,
                                     color_from_theme(item, pt_theme_accent));
     } else if (item->hovered || item->press_mix > 0.01f) {
@@ -1955,8 +2007,14 @@ static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
                                                    (uint8_t)(strength * 180.0f)));
     }
     float icon_size = 20.0f;
-    float icon_x = compact ? item->x + item->width * 0.5f
-                           : item->x + item->padding_left + 10.0f;
+    float icon_x;
+    if (compact) {
+        icon_x = item->x + item->width * 0.5f;
+    } else if (rtl) {
+        icon_x = item->x + item->width - item->padding_left - 10.0f;
+    } else {
+        icon_x = item->x + item->padding_left + 10.0f;
+    }
     pt_color icon_color = item->row_selected ? color_from_theme(item, pt_theme_accent)
                                              : color_from_theme(item, pt_theme_text_muted);
     if (!item->enabled) {
@@ -1965,7 +2023,9 @@ static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
     pt_paint_icon_glyph(canvas, item->icon, icon_x, item->y + item->height * 0.5f,
                         icon_size, icon_color);
     if (!compact) {
-        pt_rect area = {item->x + item->padding_left + 32.0f, item->y,
+        float area_x = rtl ? item->x + item->padding_right
+                           : item->x + item->padding_left + 32.0f;
+        pt_rect area = {area_x, item->y,
                         pt_max_float(0.0f, item->width - item->padding_left -
                                                item->padding_right - 32.0f),
                         item->height};
@@ -2104,17 +2164,19 @@ static void paint_table_overlays(pt_canvas *canvas, pt_widget *table) {
     }
     paint_marquee(canvas, table, &state->marquee);
     if (state->reorder_active && state->reorder_column >= 0 && state->header) {
+        bool rtl = paint_rtl(table);
         float header_top = table->y + table->padding_top;
-        float x = table->x + table->padding_left - table->scroll_x;
+        float x = rtl ? table->x + table->width - table->padding_right + table->scroll_x
+                      : table->x + table->padding_left - table->scroll_x;
         for (pt_widget *cell = state->header->first_child; cell; cell = cell->next_sibling) {
             if (cell->kind != pt_widget_table_header_cell || !cell->visible) {
                 continue;
             }
             if (cell->column_index == (uint32_t)state->reorder_target) {
-                x = cell->x;
+                x = rtl ? cell->x + cell->width : cell->x;
                 break;
             }
-            x = cell->x + cell->width;
+            x = rtl ? cell->x : cell->x + cell->width;
         }
         pt_canvas_fill_rect(canvas, x - 1.0f, header_top, 2.0f, state->header_height,
                             color_from_theme(table, pt_theme_accent));
@@ -2280,7 +2342,9 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
     }
 
     if (widget->kind == pt_widget_scroll) {
-        pt_canvas_push_clip(canvas, widget->x + widget->padding_left,
+        bool rtl = paint_rtl(widget);
+        pt_canvas_push_clip(canvas, widget->x + widget->padding_left +
+                                       (rtl ? 10.0f : 0.0f),
                             widget->y + widget->padding_top,
                             pt_max_float(0.0f, widget->width - widget->padding_left -
                                                    widget->padding_right - 10.0f),
@@ -2301,7 +2365,7 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
             paint_widget_internal(child, canvas, ctx);
         }
         pt_canvas_pop_clip(canvas);
-        paint_vertical_scrollbar(canvas, widget, widget->x + widget->width - 8.0f, inner.y,
+        paint_vertical_scrollbar(canvas, widget, scrollbar_x(widget), inner.y,
                                  inner.h, inner.h, widget->scroll_content_height,
                                  widget->scroll_y);
         paint_drop_highlight(canvas, widget);
@@ -2319,7 +2383,7 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
         if (state) {
             float header_h = state->column_count > 0 ? state->header_height : 0.0f;
             float rows_h = pt_max_float(0.0f, inner.h - header_h);
-            paint_vertical_scrollbar(canvas, widget, widget->x + widget->width - 8.0f,
+            paint_vertical_scrollbar(canvas, widget, scrollbar_x(widget),
                                      inner.y + header_h, rows_h, rows_h,
                                      (float)widget->row_count *
                                          pt_max_float(20.0f, widget->row_height),
@@ -2341,7 +2405,7 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
             paint_widget_internal(child, canvas, ctx);
         }
         pt_canvas_pop_clip(canvas);
-        paint_vertical_scrollbar(canvas, widget, widget->x + widget->width - 8.0f, inner.y,
+        paint_vertical_scrollbar(canvas, widget, scrollbar_x(widget), inner.y,
                                  inner.h, inner.h, widget->scroll_content_height,
                                  widget->scroll_y);
         paint_drop_highlight(canvas, widget);
@@ -2364,7 +2428,7 @@ static void paint_widget_contents(pt_widget *widget, pt_canvas *canvas,
             paint_widget_internal(child, canvas, ctx);
         }
         pt_canvas_pop_clip(canvas);
-        paint_vertical_scrollbar(canvas, widget, widget->x + widget->width - 8.0f, inner.y,
+        paint_vertical_scrollbar(canvas, widget, scrollbar_x(widget), inner.y,
                                  inner.h, inner.h, widget->scroll_content_height,
                                  widget->scroll_y);
         paint_drop_highlight(canvas, widget);
