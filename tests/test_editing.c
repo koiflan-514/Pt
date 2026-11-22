@@ -758,6 +758,158 @@ static void test_rtl_entry_caret_pixels(pt_app *app) {
     pt_window_free(window);
 }
 
+static uint64_t editing_frame_hash(const pt_canvas *canvas) {
+    uint64_t hash = 1469598103934665603ull;
+    size_t count = (size_t)canvas->width * (size_t)canvas->height;
+    for (size_t i = 0; i < count; ++i) {
+        hash ^= canvas->pixels[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+/* The exact string the text painter would produce for `text` at `max_width`:
+ * the longest logical prefix that still fits with a trailing ellipsis. */
+static char *expected_ellipsis(const pt_font *font, const char *text, size_t len,
+                               float max_width, pt_bidi_base base) {
+    static const char ellipsis[] = "\xE2\x80\xA6";
+    size_t candidate = len;
+    while (candidate > 0) {
+        candidate = pt_utf8_prev_boundary(text, len, candidate);
+        size_t out_len = candidate + sizeof(ellipsis) - 1;
+        char *buffer = malloc(out_len + 1);
+        if (!buffer) {
+            return NULL;
+        }
+        memcpy(buffer, text, candidate);
+        memcpy(buffer + candidate, ellipsis, sizeof(ellipsis) - 1);
+        buffer[out_len] = '\0';
+        if (pt_font_measure_bidi(font, buffer, out_len, base) <= max_width) {
+            return buffer;
+        }
+        free(buffer);
+    }
+    return NULL;
+}
+
+/* A placeholder is a full-width line: LTR must ellipsise at the right edge and
+ * RTL at the visual left. Rendering the pre-ellipsised string has to be pixel
+ * identical to letting the painter truncate the long one. */
+static void test_entry_placeholder_ellipsis(pt_app *app) {
+    pt_window *window = pt_window_create(app, "entry-placeholder", 480, 220);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget_set_gap(root, 12.0f);
+    const char *long_ltr =
+        "A very long placeholder far wider than the field it has to fit inside";
+    const char *long_rtl = HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE
+                           HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE
+                           HE_BET HE_GIMEL_DALET_HE HE_BET HE_GIMEL_DALET_HE
+                           HE_BET HE_GIMEL_DALET_HE HE_BET;
+    pt_widget *ltr = pt_entry_create(root, long_ltr);
+    pt_check(ltr != NULL);
+    pt_widget_set_size(ltr, 120.0f, 32.0f);
+    pt_widget_set_align_self(ltr, pt_align_start);
+    pt_widget_set_text_direction(ltr, pt_text_direction_ltr);
+    pt_widget *rtl = pt_entry_create(root, long_rtl);
+    pt_check(rtl != NULL);
+    pt_widget_set_size(rtl, 120.0f, 32.0f);
+    pt_widget_set_align_self(rtl, pt_align_start);
+    pt_widget_set_text_direction(rtl, pt_text_direction_rtl);
+    pt_window_show(window);
+    pt_canvas *canvas = NULL;
+    paint(window, &canvas);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+
+    /* LTR: painting the computed ellipsised line is byte-identical. */
+    pt_layout_ctx ctx = pt_layout_context_for(ltr);
+    pt_font *font = pt_widget_font_for(ltr, &ctx);
+    pt_check(font != NULL);
+    if (!font) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
+    float area_w = ltr->width - ltr->padding_left - ltr->padding_right;
+    char *ltr_expected = expected_ellipsis(font, long_ltr, strlen(long_ltr),
+                                          area_w * scale, pt_bidi_base_ltr);
+    pt_check(ltr_expected != NULL);
+    uint64_t ltr_long = editing_frame_hash(canvas);
+    if (ltr_expected) {
+        pt_entry_set_placeholder(ltr, ltr_expected);
+        paint(window, &canvas);
+        pt_check(editing_frame_hash(canvas) == ltr_long);
+        pt_entry_set_placeholder(ltr, long_ltr);
+        free(ltr_expected);
+    }
+
+    /* RTL: same equivalence, with the ellipsis reaching the visual left. */
+    ctx = pt_layout_context_for(rtl);
+    font = pt_widget_font_for(rtl, &ctx);
+    pt_check(font != NULL);
+    if (!font) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
+    area_w = rtl->width - rtl->padding_left - rtl->padding_right;
+    char *rtl_expected = expected_ellipsis(font, long_rtl, strlen(long_rtl),
+                                          area_w * scale, pt_bidi_base_rtl);
+    pt_check(rtl_expected != NULL);
+    uint64_t rtl_long = editing_frame_hash(canvas);
+    if (rtl_expected) {
+        pt_entry_set_placeholder(rtl, rtl_expected);
+        paint(window, &canvas);
+        pt_check(editing_frame_hash(canvas) == rtl_long);
+        pt_entry_set_placeholder(rtl, long_rtl);
+        free(rtl_expected);
+    }
+    paint(window, &canvas);
+
+    /* The RTL line is right anchored and its tail (the ellipsis) is trimmed at
+     * the visual left, so ink touches the right edge and starts near the left
+     * instead of running past it. */
+    int rtl_mid = (int)(rtl->y + rtl->height * 0.5f);
+    float rtl_left = rtl->x + rtl->padding_left;
+    float rtl_right = rtl->x + rtl->width - rtl->padding_right;
+    pt_color background = pt_app_get_theme_color(app, pt_theme_control);
+    int first_ink = -1;
+    int last_ink = -1;
+    for (int x = (int)rtl_left; x < (int)rtl_right; ++x) {
+        bool inked = false;
+        for (int y = rtl_mid - 5; y <= rtl_mid + 5; ++y) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                inked = true;
+                break;
+            }
+        }
+        if (inked) {
+            if (first_ink < 0) {
+                first_ink = x;
+            }
+            last_ink = x;
+        }
+    }
+    pt_check(first_ink >= 0);
+    pt_check(first_ink >= (int)rtl_left);
+    pt_check(first_ink <= (int)rtl_left + 20);
+    pt_check(last_ink >= (int)rtl_right - 4);
+    pt_check(last_ink < (int)rtl_right);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.editing");
@@ -770,6 +922,7 @@ int main(void) {
     test_bidi_entry_editing(app);
     test_rtl_entry_anchor(app);
     test_rtl_entry_caret_pixels(app);
+    test_entry_placeholder_ellipsis(app);
     pt_app_destroy(app);
     return pt_test_finish("editing");
 }

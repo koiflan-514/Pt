@@ -734,10 +734,12 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         if (*placeholder) {
             pt_color muted = color_from_theme(entry, pt_theme_text_muted);
             size_t placeholder_len = strlen(placeholder);
+            /* The placeholder spans the whole content box: LTR draws from the
+             * left, RTL re-anchors to the right inside the bidi painter, and
+             * ellipsis trims the tail (the visual left in RTL). */
             pt_canvas_draw_text_line_bidi(
-                canvas, font, placeholder, placeholder_len,
-                entry_line_origin(entry, font, scale, placeholder, placeholder_len, area),
-                baseline, 0.0f, pt_text_align_start, muted, true,
+                canvas, font, placeholder, placeholder_len, area.x, baseline, area.w,
+                pt_text_align_start, muted, true,
                 paint_text_base(entry, placeholder, placeholder_len));
         }
     } else {
