@@ -1620,11 +1620,22 @@ Group notes:
   cannot leak, and `pt::popup` documents that it must be destroyed before its
   parent window.
 
+1.4 adds no wrapper because it adds no public function. The SVGZ support is a
+capability of the existing icon loaders, so `pt::icon_image::load_file`,
+`pt::icon_image::load_memory`, `pt.IconImage.load_file`,
+`pt.IconImage.load_memory`, `Pt.icon_image_load_file` and
+`Pt.icon_image_load_memory` accept a gzip-compressed SVG with no signature,
+argument or ownership change; hicolor `.svgz` lookup likewise rides the existing
+`from_name` wrappers. The 1.3 table above is still the current extension table,
+and the wire-matrix and multi-touch work is test/runtime infrastructure that the
+bindings do not surface.
+
 ## Binding coverage
 
 From 1.3 every function in the public C ABI (556) is wrapped in C++, Python
-and Java. The 1.2 surface shipped 554/554; 1.3 adds the two IME input-panel
-entry points. The parity audit is a hard `make check` gate: it scans the
+and Java, and 1.4 keeps that count unchanged: it adds no function, so parity
+stays 556/556. The 1.2 surface shipped 554/554; 1.3 added the two IME
+input-panel entry points. The parity audit is a hard `make check` gate: it scans the
 comment-stripped binding sources for every declared function name and allows
 zero unreviewed gaps. The reviewed allowlist is empty. The 124
 functions in the 0.6 surface (one fewer than 0.9 carried, because

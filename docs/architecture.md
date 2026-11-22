@@ -11,7 +11,7 @@ polished default look.
 
 It is not a general-purpose 3D toolkit, a compositor, a web runtime, or a
 cross-platform abstraction over X11/Win32/macOS. Linux/Wayland is the only
-backing platform in the 0.x series.
+backing platform in the 1.x series.
 
 ## Layering
 
@@ -189,9 +189,17 @@ and drag-based scrolling therefore work unchanged. Pt tracks up to ten active
 touch ids; a second contact cancels the in-flight pointer interaction and
 switches to a synthesized two-contact pinch/rotate stream unless the compositor
 already reports pinch gestures for the seat. Each frame derives the centroid,
-distance and angle from the tracked contacts, normalizes them into the same
-`pt_gesture_event` shape as compositor gestures, and ends the gesture when
-fewer than two contacts remain.
+distance and angle from the first two tracked contacts, normalizes them into
+the same `pt_gesture_event` shape as compositor gestures, and ends the gesture
+when fewer than two contacts remain.
+
+The touch focus is held until the last contact lifts, not until the first one
+does: `pt_window_input_touch_up` returns the remaining contact count and the
+platform clears the focused window only at zero. A surviving contact therefore
+keeps receiving motion and its final up, updates the emulated pointer once the
+pinch has ended, and a subsequent pinch starts from a fresh baseline. A cancel
+still releases every contact in one event. Pinch and rotate never produce a
+click.
 
 `zwp_tablet_manager_v2` tools provide stylus input. Proximity, tip down/up,
 motion, pressure, distance, tilt and rotation are collected until the tool's
@@ -761,6 +769,33 @@ is a small C-only adapter that exposes the facility as a flat C ABI, so the C++,
 Python and Java binding suites load it (`libwire_driver.so`) and assert that a
 real wire key or pointer event reaches a wrapped callback in each language. The
 facility is test infrastructure: it adds no public header, symbol or ABI.
+
+The 1.4 wave completes the input matrix on the same facility. The server
+injects `wl_touch` down/up/motion/frame/cancel with multiple contacts and a
+pinch, and can remove and restore the touch capability; tablet-v2 seat/tool
+lifecycle, proximity, pressure, tilt, rotation, slider, wheel and buttons; and
+`data_device` drag enter/motion/drop/leave with offer accept/receive over an
+`SCM_RIGHTS` descriptor plus source target/action/cancelled/`dnd_finished`;
+primary selection offers are injected and replayed as well. `test_wire_input`
+passes 595 assertions over those paths. A `wait_object` helper waits for a
+server-created object to bind instead of racing it (200 consecutive runs with
+zero failures), and the facility's tablet-manager request table had
+`get_tablet_seat`/`destroy` transposed, which this wave fixed. The touch
+sequence asserts the corrected focus lifetime: the first lift of two contacts
+keeps the window focused, the survivor's motion moves the emulated pointer and
+the final up clears everything, while pinch never clicks.
+
+Live IME composition has its own harness. `tools/live-ime.sh` starts a nested
+niri and a private-session-bus fcitx5 with its pinyin engine, and
+`tests/ime_live_probe.c` (public API only) types `nihao ` through
+text-input-v3 and expects the preedit sequence and the committed `你好`.
+A virtual keyboard on the nested display would bypass niri's input-method grab,
+so the harness injects into the parent display and lets the nested compositor
+receive the keys as a real keyboard; it rechecks the parent's focused window
+immediately before injecting. The run is bounded, tears fcitx5 down on a signal
+and skips with exit code 0 when no parent niri is available, so `make
+check-ime-live` is safe in the ordinary gate and is wired into the `ci.sh` live
+section when a session exists.
 
 At 1.0 the headless C suite is 29 executables: 27 regular suites carrying 2,968
 checks, the 454,380-check randomized property fuzzer and the AT-SPI bridge (236

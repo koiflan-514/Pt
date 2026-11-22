@@ -462,10 +462,11 @@ boxes while open.
 
 ### Icon images
 
-`pt_icon_image` is a reference-counted raster image loaded from a PNG or SVG
-file, memory, or a hicolor theme name. Widgets take their own reference, so the
-load handle can be released immediately. The loader sniffs the content: an
-`<svg` or `<?xml` prefix selects the SVG path, everything else stays PNG.
+`pt_icon_image` is a reference-counted raster image loaded from a PNG, SVG or
+SVGZ file, memory, or a hicolor theme name. Widgets take their own reference, so
+the load handle can be released immediately. The loader sniffs the content: the
+gzip magic `0x1f 0x8b` selects SVGZ first, then an `<svg` or `<?xml` prefix
+selects the SVG path, and everything else stays PNG.
 
 ```c
 pt_icon_image *image = pt_icon_image_from_name("document-open", 18);
@@ -492,6 +493,25 @@ if (vector) {
     pt_icon_image_destroy(vector);
 }
 ```
+
+The same loaders take an SVGZ file or memory buffer without any new call. A
+gzip-compressed SVG is detected by its magic before the text sniff, inflated
+through zlib with a 16 MiB bound on both the compressed input and the inflated
+document, and the result must then pass the SVG sniff; a gzip archive that is
+not SVG is rejected. The handle keeps the inflated source and re-parses it per
+requested size, exactly like a plain SVG handle.
+
+```c
+pt_icon_image *compressed = pt_icon_image_load_file("icons/mark.svgz", 24);
+if (compressed) {
+    pt_widget *mark = pt_icon_button_create(card, pt_icon_none, "Mark");
+    pt_button_set_icon_image(mark, compressed);
+    pt_icon_image_destroy(compressed);
+}
+```
+
+hicolor `scalable/` lookup tries `.svg`, then `.svgz`, then `.png`; fixed-size
+directories remain `.png` only.
 
 SVG support covers paths (including arcs), basic shapes, groups, transforms,
 fill/stroke paints with width, caps, joins and dashes, opacity, fill-rule,

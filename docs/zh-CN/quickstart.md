@@ -441,9 +441,10 @@ Delete 清除。日期字段解析所选图式（始终接受 ISO），弹出层
 
 ### 图标图像
 
-`pt_icon_image` 是引用计数的栅格图像，可从 PNG 或 SVG 文件、内存或 hicolor
-主题名加载。控件会持有自己的引用，因此加载句柄可以立即释放。加载器嗅探内容：
-`<svg` 或 `<?xml` 前缀选择 SVG 路径，其余字节流仍走 PNG。
+`pt_icon_image` 是引用计数的栅格图像，可从 PNG、SVG 或 SVGZ 文件、内存或
+hicolor 主题名加载。控件会持有自己的引用，因此加载句柄可以立即释放。加载器
+嗅探内容：gzip 魔数 `0x1f 0x8b` 优先选择 SVGZ，然后 `<svg` 或 `<?xml`
+前缀选择 SVG 路径，其余字节流仍走 PNG。
 
 ```c
 pt_icon_image *image = pt_icon_image_from_name("document-open", 18);
@@ -470,6 +471,23 @@ if (vector) {
     pt_icon_image_destroy(vector);
 }
 ```
+
+同一组加载器无需任何新调用即可接受 SVGZ 文件或内存缓冲区。gzip 压缩的 SVG
+会在文本嗅探之前通过魔数识别，经 zlib 解压，压缩输入与解压后文档均有 16 MiB
+上限；解压结果还必须通过 SVG 嗅探，因此并非 SVG 的 gzip 归档会被拒绝。句柄保留
+解压后的源字节，并像普通 SVG 句柄一样按每个请求尺寸重新解析。
+
+```c
+pt_icon_image *compressed = pt_icon_image_load_file("icons/mark.svgz", 24);
+if (compressed) {
+    pt_widget *mark = pt_icon_button_create(card, pt_icon_none, "Mark");
+    pt_button_set_icon_image(mark, compressed);
+    pt_icon_image_destroy(compressed);
+}
+```
+
+hicolor `scalable/` 查找依次尝试 `.svg`、`.svgz`、`.png`；固定尺寸目录仍仅查找
+`.png`。
 
 SVG 支持包括路径（含弧）、基本形状、组、变换、带宽度/端点/连接/虚线的
 填充和描边、不透明度、填充规则、线性/径向渐变、`defs`、内联 `style`
