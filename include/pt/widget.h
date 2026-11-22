@@ -222,6 +222,33 @@ pt_api void pt_widget_set_font_size(pt_widget *widget, float size);
 pt_api void pt_widget_set_font_weight(pt_widget *widget, pt_font_weight weight);
 /* Since 1.0. */
 pt_api void pt_widget_set_text_align(pt_widget *widget, pt_text_align align);
+
+/* Direction properties (since 2.0). UI direction orders row children, resolves
+ * start/end alignment, padding and margins, scrollbar sides and mirrorable
+ * chrome; text direction controls paragraph ordering and glyph shaping. They
+ * are independent, so an LTR editor can sit inside an RTL shell.
+ *
+ * UI resolution is the widget's explicit value, then the nearest ancestor with
+ * an explicit value, then the window, then the application, then LTR. Text
+ * resolution is the widget's explicit value, then the nearest ancestor, then
+ * auto. Auto follows UBA P2/P3: the first strong character in a paragraph
+ * selects RTL for R/AL and LTR for L, text inside an isolate is skipped, and an
+ * empty or neutral-only paragraph falls back to the resolved UI direction.
+ *
+ * Setters store the explicit value, ignore NULL or an out-of-range enum, and
+ * invalidate layout and repaint on a change. Getters return the stored explicit
+ * value, never the resolved one: an unset widget reports
+ * pt_ui_direction_inherit or pt_text_direction_auto. Both zero values keep the
+ * 1.x LTR behaviour. Direction is a presentation property; it never changes
+ * UTF-8 byte offsets, selections or accessibility character offsets. Since 2.0. */
+pt_api void pt_widget_set_ui_direction(pt_widget *widget, pt_ui_direction direction);
+/* Since 2.0. */
+pt_api pt_ui_direction pt_widget_get_ui_direction(const pt_widget *widget);
+/* Since 2.0. */
+pt_api void pt_widget_set_text_direction(pt_widget *widget, pt_text_direction direction);
+/* Since 2.0. */
+pt_api pt_text_direction pt_widget_get_text_direction(const pt_widget *widget);
+
 /* Since 1.0. */
 pt_api void pt_widget_set_visible(pt_widget *widget, bool visible);
 /* Since 1.0. */

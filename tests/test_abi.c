@@ -108,6 +108,13 @@ _Static_assert(pt_color_scheme_light == 1, "light must stay 1");
 _Static_assert(pt_align_auto == 0, "align auto must stay 0");
 _Static_assert(pt_align_stretch == 4, "align stretch must stay 4");
 _Static_assert(pt_direction_row == 0, "row must stay 0");
+/* 2.0 direction properties are appended with zero as inherit/auto. */
+_Static_assert(pt_ui_direction_inherit == 0, "ui inherit must stay 0");
+_Static_assert(pt_ui_direction_ltr == 1, "ui ltr must stay 1");
+_Static_assert(pt_ui_direction_rtl == 2, "ui rtl must stay 2");
+_Static_assert(pt_text_direction_auto == 0, "text auto must stay 0");
+_Static_assert(pt_text_direction_ltr == 1, "text ltr must stay 1");
+_Static_assert(pt_text_direction_rtl == 2, "text rtl must stay 2");
 _Static_assert(pt_justify_space_evenly == 5, "space-evenly must stay 5");
 _Static_assert(pt_text_align_end == 2, "text align end must stay 2");
 _Static_assert(pt_font_weight_regular == 400, "regular weight must stay 400");

@@ -101,6 +101,30 @@ typedef enum pt_direction {
     pt_direction_column
 } pt_direction;
 
+/* Interface direction (since 2.0). This is a presentation property: it orders
+ * row children, resolves start/end alignment, padding and margins and selects
+ * mirrored chrome. It never changes UTF-8 byte offsets or accessibility
+ * character offsets. The zero value inherits from the nearest ancestor, then
+ * the window, then the application, then the compiled LTR default; a widget
+ * that never sets it keeps 1.x behaviour. pt_direction above is unrelated: it
+ * is the row/column layout axis. */
+typedef enum pt_ui_direction {
+    pt_ui_direction_inherit = 0,
+    pt_ui_direction_ltr,
+    pt_ui_direction_rtl
+} pt_ui_direction;
+
+/* Paragraph text direction (since 2.0). auto resolves each paragraph from its
+ * first strong character (UBA P2/P3); an empty or neutral-only paragraph falls
+ * back to the resolved UI direction. The value is stored separately from the UI
+ * direction so an LTR editor can live inside an RTL shell. The zero value
+ * inherits from the nearest ancestor; the compiled default is auto. */
+typedef enum pt_text_direction {
+    pt_text_direction_auto = 0,
+    pt_text_direction_ltr,
+    pt_text_direction_rtl
+} pt_text_direction;
+
 typedef enum pt_justify {
     pt_justify_start = 0,
     pt_justify_center,

@@ -111,6 +111,21 @@ pt_api void pt_window_request_redraw(pt_window *window);
 /* Since 1.0. */
 pt_api void pt_window_focus(pt_window *window, pt_widget *widget);
 
+/* Window interface direction (since 2.0). It overrides the application value
+ * for this window and every widget inside it that inherits; the widget chain
+ * is widget -> nearest explicit ancestor -> this window -> application -> LTR.
+ * The setter stores the explicit value, ignores a NULL window and rejects
+ * values outside pt_ui_direction, and invalidates the window layout and repaint
+ * on a change. pt_ui_direction_inherit is the zero value.
+ *
+ * The getter reports the stored explicit value, not the value inherited from
+ * the application, so an unset window returns pt_ui_direction_inherit.
+ * Direction is presentation only and never changes byte or accessibility
+ * offsets. Since 2.0. */
+pt_api void pt_window_set_ui_direction(pt_window *window, pt_ui_direction direction);
+/* Since 2.0. */
+pt_api pt_ui_direction pt_window_get_ui_direction(const pt_window *window);
+
 /* Per-window theme overrides. A window inherits the application theme until a
  * role or metric is overridden here, so a settings preview or a second
  * surface can restyle itself without copying the whole palette. Passing an
