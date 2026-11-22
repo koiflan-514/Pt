@@ -15,6 +15,7 @@ typedef struct text_line_builder {
     pt_text_line *lines;
     size_t count;
     size_t capacity;
+    uint8_t base_level;
 } text_line_builder;
 
 static void line_push(text_line_builder *builder, size_t start, size_t end) {
@@ -24,6 +25,7 @@ static void line_push(text_line_builder *builder, size_t start, size_t end) {
     }
     builder->lines[builder->count].start = start;
     builder->lines[builder->count].end = end;
+    builder->lines[builder->count].base_level = builder->base_level;
     ++builder->count;
 }
 
@@ -35,8 +37,47 @@ static float measure_prefix(const pt_font *font, const char *text, size_t len, s
     return pt_font_measure(font, text, position) / scale;
 }
 
-static void layout_paragraph(const pt_font *font, const char *text, float scale, float max_width,
-                             size_t start, size_t end, text_line_builder *builder) {
+/* Width of a logical range for the breaker: styled runs measure their visual
+ * runs, a plain bidi paragraph sums the UBA runs that overlap, and the LTR
+ * fast path keeps the pre-2.0 prefix measurement. */
+typedef struct layout_measure {
+    const pt_text_runs *runs;
+    const pt_font *font;
+    const char *text;
+    const pt_bidi_line *line;
+    size_t line_offset;
+    float scale;
+    bool bidi;
+} layout_measure;
+
+static float layout_measure_range(const layout_measure *measure, size_t from, size_t to) {
+    if (to <= from) {
+        return 0.0f;
+    }
+    if (measure->runs) {
+        return pt_text_runs_measure(measure->runs, from, to);
+    }
+    if (!measure->bidi || !measure->line) {
+        return pt_font_measure(measure->font, measure->text + from, to - from) / measure->scale;
+    }
+    float total = 0.0f;
+    for (size_t i = 0; i < measure->line->run_count; ++i) {
+        const pt_bidi_run *run = &measure->line->runs[i];
+        size_t run_start = measure->line_offset + run->offset;
+        size_t run_end = run_start + run->length;
+        size_t a = from > run_start ? from : run_start;
+        size_t b = to < run_end ? to : run_end;
+        if (a >= b) {
+            continue;
+        }
+        hb_direction_t direction = (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+        total += pt_font_measure_direction(measure->font, measure->text + a, b - a, direction);
+    }
+    return total / measure->scale;
+}
+
+static void layout_paragraph(const char *text, float max_width, size_t start, size_t end,
+                             const layout_measure *measure, text_line_builder *builder) {
     if (start >= end) {
         line_push(builder, start, start);
         return;
@@ -44,7 +85,7 @@ static void layout_paragraph(const pt_font *font, const char *text, float scale,
     max_width = pt_max_float(1.0f, max_width);
     size_t position = start;
     while (position < end) {
-        if (pt_font_measure(font, text + position, end - position) / scale <= max_width) {
+        if (layout_measure_range(measure, position, end) <= max_width) {
             line_push(builder, position, end);
             return;
         }
@@ -56,7 +97,7 @@ static void layout_paragraph(const pt_font *font, const char *text, float scale,
             if (next <= scan) {
                 next = scan + 1;
             }
-            float width = pt_font_measure(font, text + position, next - position) / scale;
+            float width = layout_measure_range(measure, position, next);
             if (width > max_width && fit > position) {
                 break;
             }
@@ -130,12 +171,51 @@ bool pt_text_layout_build(const pt_widget *area, const pt_layout_ctx *ctx, float
         if (content_end > paragraph_start && text[content_end - 1] == '\r') {
             --content_end;
         }
-        layout_paragraph(font, text, scale, width, paragraph_start, content_end, &builder);
+        size_t content_len = content_end - paragraph_start;
+        pt_bidi_base base = pt_widget_text_base(area, text + paragraph_start, content_len);
+        uint8_t base_level = base == pt_bidi_base_rtl ? 1 : 0;
+        bool bidi = out->has_runs ? out->runs.bidi
+                                  : (base == pt_bidi_base_rtl ||
+                                     (content_len > 0 &&
+                                      pt_bidi_text_may_reorder(text + paragraph_start,
+                                                               content_len)));
+        if (out->has_runs) {
+            base_level = pt_text_runs_base_at(&out->runs, paragraph_start);
+        }
+        layout_measure measure = {.runs = out->has_runs ? &out->runs : NULL,
+                                  .font = font,
+                                  .text = text,
+                                  .scale = scale,
+                                  .bidi = false};
+        pt_bidi_paragraph *paragraph = NULL;
+        pt_bidi_line line = {0};
+        if (bidi && content_len > 0) {
+            pt_bidi_base forced = (base_level & 1u) ? pt_bidi_base_rtl : pt_bidi_base_ltr;
+            if (pt_bidi_paragraph_analyze(text + paragraph_start, content_len, forced,
+                                          &paragraph) &&
+                pt_bidi_line_create(paragraph, 0, content_len, &line)) {
+                measure.line = &line;
+                measure.line_offset = paragraph_start;
+                measure.bidi = true;
+                if (!out->has_runs) {
+                    base_level = line.base_level;
+                }
+            }
+        }
+        builder.base_level = base_level;
+        layout_paragraph(text, width, paragraph_start, content_end, &measure, &builder);
+        if (line.runs) {
+            pt_bidi_line_free(&line);
+        }
+        if (paragraph) {
+            pt_bidi_paragraph_free(paragraph);
+        }
         if (paragraph_end >= len) {
             break;
         }
         paragraph_start = paragraph_end + 1;
         if (paragraph_start == len) {
+            builder.base_level = base_level;
             line_push(&builder, len, len);
             break;
         }
@@ -145,6 +225,40 @@ bool pt_text_layout_build(const pt_widget *area, const pt_layout_ctx *ctx, float
     }
     out->lines = builder.lines;
     out->line_count = (int)builder.count;
+    /* Build one logical<->visual map per rendered line. The plain path
+     * re-analyses the line under its paragraph base so rule L1 applies at the
+     * wrapped line end; styled runs combine their span boundaries with a
+     * per-line UBA. */
+    if (out->line_count > 0 && out->display_len > 0) {
+        out->maps = pt_alloc_zeroed((size_t)out->line_count, sizeof(*out->maps));
+        for (int i = 0; i < out->line_count; ++i) {
+            size_t start = out->lines[i].start;
+            size_t end = out->lines[i].end;
+            if (start >= end) {
+                continue;
+            }
+            pt_bidi_base line_base = (out->lines[i].base_level & 1u) ? pt_bidi_base_rtl
+                                                                     : pt_bidi_base_ltr;
+            pt_text_visual_map *map = NULL;
+            if (out->has_runs) {
+                if (!pt_text_visual_map_build_runs(&out->runs, start, end, line_base, &map)) {
+                    map = NULL;
+                }
+            } else if (pt_text_visual_map_build_bidi(font, out->display + start, end - start,
+                                                      line_base, &map)) {
+                /* Shift the slice-relative offsets into the full display. */
+                map->start = start;
+                map->end = end;
+                for (size_t c = 0; c < map->count; ++c) {
+                    map->clusters[c].start += start;
+                    map->clusters[c].end += start;
+                }
+            } else {
+                map = NULL;
+            }
+            out->maps[i] = map;
+        }
+    }
     return true;
 }
 
@@ -154,6 +268,12 @@ void pt_text_layout_free(pt_text_layout *layout) {
     }
     if (layout->has_runs) {
         pt_text_runs_free(&layout->runs);
+    }
+    if (layout->maps) {
+        for (int i = 0; i < layout->line_count; ++i) {
+            pt_text_visual_map_free(layout->maps[i]);
+        }
+        free(layout->maps);
     }
     free(layout->display);
     free(layout->lines);
@@ -195,6 +315,10 @@ float pt_text_layout_x_for_position(const pt_text_layout *layout, int line, size
     if (position > span.end) {
         position = span.end;
     }
+    if (layout->maps && layout->maps[line]) {
+        return pt_text_visual_map_x_for_position(layout->maps[line], position,
+                                                 pt_text_bias_leading);
+    }
     if (layout->has_runs) {
         return pt_text_runs_measure(&layout->runs, span.start, position);
     }
@@ -213,6 +337,10 @@ size_t pt_text_layout_position_for_x(const pt_text_layout *layout, int line, flo
         line = layout->line_count - 1;
     }
     pt_text_line span = layout->lines[line];
+    if (layout->maps && layout->maps[line]) {
+        return pt_text_visual_map_position_for_x(layout->maps[line], local_x,
+                                                 pt_text_bias_leading);
+    }
     if (local_x <= 0.0f) {
         return span.start;
     }

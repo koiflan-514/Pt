@@ -153,8 +153,9 @@ static bool paint_rich_wrapped(pt_canvas *canvas, const pt_widget *widget, pt_co
         if (y + runs.line_height > area.y + area.h) {
             break;
         }
-        pt_text_runs_draw_line(canvas, &runs, lines[i].start, lines[i].end, area.x,
-                               y + ascent, area.w, widget->text_align, color, false);
+        pt_text_runs_draw_line_base(canvas, &runs, lines[i].start, lines[i].end,
+                                    lines[i].base_level, area.x, y + ascent, area.w,
+                                    widget->text_align, color, false);
         y += runs.line_height;
     }
     free(lines);
@@ -403,8 +404,13 @@ static void paint_wrapped_text(pt_canvas *canvas, pt_widget *widget, const char 
         pt_canvas_pop_clip(canvas);
         return;
     }
-    pt_canvas_draw_text_wrapped(canvas, font, text, area.x, area.y, area.w, area.h,
-                                widget->text_align, color);
+    pt_bidi_base explicit_base = pt_bidi_base_auto;
+    pt_bidi_base wrap_base = pt_widget_explicit_text_base(widget, &explicit_base)
+                                 ? explicit_base
+                                 : pt_bidi_base_auto;
+    pt_canvas_draw_text_wrapped_bidi(canvas, font, text, area.x, area.y, area.w, area.h,
+                                     widget->text_align, color, wrap_base,
+                                     pt_widget_rtl_default(widget));
     pt_canvas_pop_clip(canvas);
 }
 
@@ -830,22 +836,26 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
             }
         }
         if (line_end > line_start) {
+            uint8_t line_base = layout.lines[i].base_level;
             if (layout.has_runs) {
-                pt_text_runs_draw_line(canvas, &layout.runs, line_start, line_end, inner.x,
-                                       line_top + ascent, inner.w, pt_text_align_start, color,
-                                       false);
+                pt_text_runs_draw_line_base(canvas, &layout.runs, line_start, line_end,
+                                            line_base, inner.x, line_top + ascent, inner.w,
+                                            area->text_align, color, false);
             } else {
-                pt_canvas_draw_text_line(canvas, font, layout.display + line_start,
-                                         line_end - line_start, inner.x, line_top + ascent,
-                                         inner.w, pt_text_align_start, color, false);
+                pt_canvas_draw_text_line_bidi(
+                    canvas, font, layout.display + line_start, line_end - line_start,
+                    inner.x, line_top + ascent, inner.w, area->text_align, color, false,
+                    (line_base & 1u) ? pt_bidi_base_rtl : pt_bidi_base_ltr);
             }
         }
     }
     if (layout.display_len == 0 && area->placeholder && area->placeholder[0]) {
         pt_color muted = color_from_theme(area, pt_theme_text_muted);
-        pt_canvas_draw_text_line(canvas, font, area->placeholder, strlen(area->placeholder),
-                                 inner.x, inner.y + ascent, inner.w, pt_text_align_start,
-                                 muted, true);
+        size_t placeholder_len = strlen(area->placeholder);
+        pt_canvas_draw_text_line_bidi(
+            canvas, font, area->placeholder, placeholder_len, inner.x, inner.y + ascent,
+            inner.w, area->text_align, muted, true,
+            paint_text_base(area, area->placeholder, placeholder_len));
     }
     int caret_line = pt_text_layout_line_for_position(&layout, layout.caret);
     float caret_x = inner.x + pt_text_layout_x_for_position(&layout, caret_line, layout.caret);
