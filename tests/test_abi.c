@@ -39,7 +39,8 @@ _Static_assert(pt_theme_metric_count == 10, "metric count must stay 10");
 _Static_assert(pt_a11y_role_none == 0, "role none must stay 0");
 _Static_assert(pt_a11y_role_combo_box == 34, "combobox role must stay 34");
 _Static_assert(pt_a11y_role_list_box == 35, "list box role must stay 35");
-_Static_assert(pt_a11y_role_count == 36, "role count must stay 36");
+_Static_assert(pt_a11y_role_spin_button == 36, "spin button role must stay 36");
+_Static_assert(pt_a11y_role_count == 37, "role count must stay 37");
 _Static_assert(pt_a11y_state_visible == (1u << 0), "visible state bit");
 _Static_assert(pt_a11y_state_expanded == (1u << 7), "expanded state bit");
 _Static_assert(pt_a11y_state_modal == (1u << 9), "modal state bit");
@@ -231,7 +232,7 @@ int main(void) {
 
     /* The a11y role and state tables are the fields assistive technology
      * consumes; a count mismatch is an API break even when no value moved. */
-    pt_check(pt_a11y_role_count == pt_a11y_role_list_box + 1);
+    pt_check(pt_a11y_role_count == pt_a11y_role_spin_button + 1);
     pt_check(pt_theme_token_count == pt_theme_selection_text + 1);
     pt_check(pt_theme_metric_count == pt_theme_metric_control_height + 1);
 
@@ -317,3 +318,16 @@ _Static_assert(sizeof(pt_number_callback) == sizeof(void (*)(void)),
 _Static_assert(sizeof(pt_color_callback) == sizeof(void (*)(void)),
                "colour callback is a function pointer");
 _Static_assert(sizeof(pt_date) == 8, "date padding stays explicit in the layout");
+
+/* M20: a11y-spin
+ * The number picker now reports a spin-button role. The role table stays
+ * append-only: the new value sits after the shipped list-box role and no
+ * earlier value moves. */
+#include <pt/a11y.h>
+_Static_assert(pt_a11y_role_spin_button == 36, "spin button role must stay 36");
+_Static_assert(pt_a11y_role_list_box == 35, "list box role must stay 35");
+_Static_assert(pt_a11y_role_combo_box == 34, "combo box role must stay 34");
+_Static_assert(pt_a11y_role_none == 0, "role none must stay 0");
+_Static_assert(pt_a11y_role_count == 37, "role count must stay 37");
+_Static_assert(pt_a11y_role_count == pt_a11y_role_spin_button + 1,
+               "spin button is the last role before the count");

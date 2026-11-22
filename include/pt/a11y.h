@@ -75,6 +75,9 @@ typedef enum pt_a11y_role {
     /* The popup of a combo box: a collapsible set of choices, which AT-SPI
      * distinguishes from a plain list. */
     pt_a11y_role_list_box,
+    /* The spin box of a number picker: a value field with step buttons and no
+     * popup, which AT-SPI distinguishes from a combo box. Since 1.3. */
+    pt_a11y_role_spin_button,
     pt_a11y_role_count
 } pt_a11y_role;
 

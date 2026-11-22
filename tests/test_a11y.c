@@ -99,6 +99,11 @@ static void test_roles_and_names(pt_app *app) {
                     "Writes changes to disk") == 0);
     pt_widget_set_a11y_role(button, pt_a11y_role_toggle_button);
     pt_check(pt_widget_get_a11y_role(button) == pt_a11y_role_toggle_button);
+    /* The 1.3 spin-button role is reachable through the generic role override;
+     * it is distinct from the activity spinner role. */
+    pt_check(pt_a11y_role_spin_button != pt_a11y_role_spinner);
+    pt_widget_set_a11y_role(button, pt_a11y_role_spin_button);
+    pt_check(pt_widget_get_a11y_role(button) == pt_a11y_role_spin_button);
 
     uint32_t state = pt_widget_get_a11y_state(label);
     pt_check((state & pt_a11y_state_visible) != 0);
