@@ -7,6 +7,7 @@
 #include <pt/pt.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <span>
 #include <string>
 #include <string_view>
@@ -22,6 +24,43 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+
+/* Allocation-failure injection for the owned-API hardening test (M20). The
+ * budget stays -1 (disabled) for the whole suite except inside
+ * run_bad_alloc_hardening_test(), so the rest of the checks see the normal
+ * allocator. */
+namespace {
+std::atomic<long long> allocation_budget{-1};
+std::atomic<long long> allocation_attempts{0};
+} // namespace
+
+/* The replacement allocator intentionally pairs operator new with malloc and
+ * operator delete with free; GCC's cross-function check cannot see that and
+ * reports a false mismatch at inline call sites. */
+#if defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
+
+void *operator new(std::size_t size) {
+    const long long budget = allocation_budget.load(std::memory_order_relaxed);
+    if (budget >= 0) {
+        const long long attempt = allocation_attempts.fetch_add(1, std::memory_order_relaxed);
+        if (attempt >= budget) {
+            throw std::bad_alloc();
+        }
+    }
+    if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+        return memory;
+    }
+    throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
 
 /* Internal UI-thread hooks. The C suite uses the same entry points to drive
  * synthetic compositor input; they are not part of the public ABI, but the
@@ -45,6 +84,28 @@ void pt_window_input_ime_compose(pt_window *window, const char *commit, const ch
  * failure path without a live xdg_toplevel configure. */
 void pt_window_apply_wm_capabilities(pt_window *window, bool maximize, bool minimize,
                                      bool fullscreen);
+/* Fake-compositor wire driver (tests/wire_driver.c). The driver is compiled as
+ * C because tests/fake_compositor.h is C-only; this test links the object so
+ * a real Wayland key/pointer event can reach the C++ wrapper. */
+int wd_start(unsigned int options);
+void wd_stop(void);
+const char *wd_error(void);
+int wd_sync(void *app);
+int wd_settle(void *app);
+int wd_wait_configured(void *app, void *window, int attempts);
+uint32_t wd_toplevel_surface(void);
+int wd_request_overflowed(void);
+int wd_pending_fd_count(void);
+void wd_keyboard_enter(uint32_t serial, uint32_t surface);
+void wd_keyboard_leave(uint32_t serial, uint32_t surface);
+void wd_keyboard_key(uint32_t serial, uint32_t time, uint32_t keycode, int pressed);
+void wd_keyboard_modifiers(uint32_t serial, uint32_t depressed, uint32_t latched,
+                           uint32_t locked, uint32_t group);
+void wd_pointer_enter(uint32_t serial, uint32_t surface, double x, double y);
+void wd_pointer_leave(uint32_t serial, uint32_t surface);
+void wd_pointer_motion(uint32_t time, double x, double y);
+void wd_pointer_button(uint32_t serial, uint32_t time, uint32_t button, int pressed);
+void wd_pointer_axis(uint32_t time, uint32_t axis, double value);
 /* Headless offscreen canvas from src/internal.h, declared locally for the 1.2
  * picker and popup sections. Tests only paint through it; the binding itself
  * never exposes it. */
@@ -370,14 +431,16 @@ bool key_event_probe(pt_window *window, uint32_t key, uint32_t modifiers, const 
 
 struct legacy_key_capture {
     int calls = 0;
+    bool consume = true;
 };
 
 bool legacy_key_probe(pt_window *window, uint32_t key, uint32_t modifiers, void *data) {
     (void)window;
     (void)key;
     (void)modifiers;
-    ++static_cast<legacy_key_capture *>(data)->calls;
-    return true;
+    auto *capture = static_cast<legacy_key_capture *>(data);
+    ++capture->calls;
+    return capture->consume;
 }
 
 struct pointer_capture {
@@ -526,11 +589,218 @@ void color_changed(pt_widget *widget, pt_color color, void *data) {
     probe->value = color;
 }
 
+/* End-to-end wire test: a private Wayland compositor injects real key and
+ * pointer events, the C library translates them, and the header-only C++
+ * wrapper's raw callbacks observe them. This is the live-seat replacement for
+ * M19's "binding raw-callback dispatch still needs a live seat" item. */
+void run_wire_dispatch_test() {
+    const char *saved_headless = getenv("PT_HEADLESS");
+    std::string saved_value = saved_headless ? saved_headless : "";
+    const bool had_headless = saved_headless != nullptr;
+    unsetenv("PT_HEADLESS");
+
+    /* FC_OPT_ALL from tests/fake_compositor.h: mandatory globals plus every
+     * optional one, so the client binds its normal full runtime path. */
+    constexpr unsigned int wire_options = 0x1ffu;
+    check(wd_start(wire_options) == 0);
+    if (const char *error = wd_error()) {
+        std::fprintf(stderr, "wire driver start failed: %s\n", error);
+        if (had_headless) {
+            setenv("PT_HEADLESS", saved_value.c_str(), 1);
+        }
+        return;
+    }
+
+    {
+        pt::app wire_application("pt.tests.cpp.wire");
+        check(wire_application.valid());
+        if (wire_application.valid()) {
+            check(wd_settle(wire_application.get()) == 0);
+            check(wd_error() == nullptr);
+
+            pt::window wire_window(wire_application, "cpp wire", 320, 240);
+            check(wire_window.valid());
+            pt::widget wire_root = wire_window.root();
+            pt::widget wire_entry = pt::entry(wire_root, "");
+            check(wire_entry.focus());
+
+            key_event_capture wire_key;
+            legacy_key_capture wire_legacy;
+            pointer_capture wire_pointer;
+            wire_key.consume = false;
+            wire_legacy.consume = false; // let the focused entry see the text
+            wire_pointer.consume = false;
+            wire_window.on_key_event(key_event_probe, &wire_key)
+                .on_key(legacy_key_probe, &wire_legacy)
+                .on_pointer(pointer_probe, &wire_pointer);
+
+            wire_window.show();
+            check(wd_wait_configured(wire_application.get(), wire_window.get(), 300) == 1);
+            check(wd_settle(wire_application.get()) == 0);
+
+            const uint32_t wire_surface = wd_toplevel_surface();
+            check(wire_surface != 0);
+
+            /* Keyboard: enter, keymap and modifiers arrive over the wire, then
+             * a press of KEY_A produces the keysym, modifiers and text the C++
+             * callbacks report, and the focused entry receives the character. */
+            wd_keyboard_enter(7100u, wire_surface);
+            wd_keyboard_modifiers(7101u, 0u, 0u, 0u, 0u);
+            wd_keyboard_key(7102u, 20u, 30u, 1); /* KEY_A press */
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_key.calls == 1);
+            check(wire_key.window == wire_window.get());
+            check(wire_key.key == static_cast<uint32_t>(XKB_KEY_a));
+            check(wire_key.modifiers == 0u);
+            check(wire_key.text == "a");
+            check(wire_legacy.calls == 1);
+            check(wire_entry.text() == "a");
+
+            /* Shift modifier over the wire: the raw callback sees the shift key
+             * modifier and the shifted keysym/text. */
+            wd_keyboard_modifiers(7103u, 1u, 0u, 0u, 0u); /* depressed = shift */
+            wd_keyboard_key(7104u, 21u, 30u, 1);        /* KEY_A with shift */
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_key.calls == 2);
+            check(wire_key.key == static_cast<uint32_t>(XKB_KEY_A));
+            check(wire_key.modifiers == static_cast<uint32_t>(pt_key_modifier_shift));
+            check(wire_key.text == "A");
+            check(wire_legacy.calls == 2);
+            check(wire_entry.text() == "aA");
+            wd_keyboard_key(7105u, 22u, 30u, 0); /* release */
+            wd_keyboard_modifiers(7106u, 0u, 0u, 0u, 0u);
+            check(wd_sync(wire_application.get()) == 0);
+            wd_keyboard_leave(7107u, wire_surface);
+
+            /* Pointer: enter, motion, down/up and axis reach the raw callback
+             * with wire coordinates, button, click count and deltas. */
+            wd_pointer_enter(7001u, wire_surface, 40.0, 50.0);
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_pointer.events.size() == 1);
+            if (wire_pointer.events.size() == 1) {
+                check(wire_pointer.events[0].phase == pt_pointer_phase_enter);
+                check(wire_pointer.events[0].x == 40.0f);
+                check(wire_pointer.events[0].y == 50.0f);
+            }
+            wd_pointer_motion(17u, 60.0, 80.0);
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_pointer.events.size() == 2);
+            if (wire_pointer.events.size() == 2) {
+                check(wire_pointer.events[1].phase == pt_pointer_phase_motion);
+                check(wire_pointer.events[1].x == 60.0f);
+                check(wire_pointer.events[1].y == 80.0f);
+                check(wire_pointer.events[1].delta_x == 20.0f);
+                check(wire_pointer.events[1].delta_y == 30.0f);
+            }
+            wd_pointer_button(7002u, 18u, 0x110u, 1); /* BTN_LEFT down */
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_pointer.events.size() == 3);
+            if (wire_pointer.events.size() == 3) {
+                check(wire_pointer.events[2].phase == pt_pointer_phase_down);
+                check(wire_pointer.events[2].button == 0x110u);
+                check(wire_pointer.events[2].pressed);
+                check(wire_pointer.events[2].click_count == 1u);
+            }
+            wd_pointer_button(7003u, 19u, 0x110u, 0); /* BTN_LEFT up */
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_pointer.events.size() == 4);
+            if (wire_pointer.events.size() == 4) {
+                check(wire_pointer.events[3].phase == pt_pointer_phase_up);
+                check(wire_pointer.events[3].button == 0x110u);
+                check(!wire_pointer.events[3].pressed);
+            }
+            wd_pointer_axis(20u, 0u, 150.0); /* vertical scroll, 150/10 = 15 */
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_pointer.events.size() == 5);
+            if (wire_pointer.events.size() == 5) {
+                check(wire_pointer.events[4].phase == pt_pointer_phase_axis);
+                check(wire_pointer.events[4].delta_y == 15.0f);
+            }
+            wd_pointer_leave(7004u, wire_surface);
+            check(wd_sync(wire_application.get()) == 0);
+            check(wire_pointer.events.size() == 6);
+            if (wire_pointer.events.size() == 6) {
+                check(wire_pointer.events[5].phase == pt_pointer_phase_leave);
+            }
+
+            check(wd_request_overflowed() == 0);
+            check(wd_pending_fd_count() == 0);
+            check(wd_error() == nullptr);
+        }
+    }
+    wd_stop();
+    if (had_headless) {
+        setenv("PT_HEADLESS", saved_value.c_str(), 1);
+    } else {
+        unsetenv("PT_HEADLESS");
+    }
+}
+
+/* Runs `call` once per allocation budget 0..N, forcing std::bad_alloc at each
+ * successive allocation. The wrapper's RAII guard must free the C allocation
+ * on the throwing path, so the sanitized gate (LeakSanitizer) proves the
+ * native buffer is released even when the target container cannot be built. */
+template <typename Call>
+int count_bad_alloc_paths(Call call) {
+    int thrown = 0;
+    for (long long budget = 0; budget < 40; ++budget) {
+        allocation_attempts.store(0, std::memory_order_relaxed);
+        allocation_budget.store(budget, std::memory_order_relaxed);
+        try {
+            call();
+        } catch (const std::bad_alloc &) {
+            ++thrown;
+        }
+        allocation_budget.store(-1, std::memory_order_relaxed);
+    }
+    return thrown;
+}
+
+/* Every owned getter needs a payload longer than the small-string buffer so the
+ * injected failure really happens during the copy, not in SSO storage. */
+void run_bad_alloc_hardening_test(pt::window &window, pt::widget &table) {
+    const std::string long_text =
+        "owned getter payload that defeats the small string buffer 0123456789";
+
+    check(window.set_clipboard(long_text));
+    check(count_bad_alloc_paths([&window] { (void)window.clipboard(); }) > 0);
+    check(window.clipboard() == long_text);
+
+    table.set_sort_columns({{0, pt_sort_ascending}});
+    const std::string layout = table.columns_save();
+    check(!layout.empty());
+    check(count_bad_alloc_paths([&table] { (void)table.columns_save(); }) > 0);
+    check(table.columns_save() == layout);
+
+    static constexpr std::string_view uri_text =
+        "file:///tmp/bad-alloc-owned-path.txt\r\n";
+    check(count_bad_alloc_paths([] { (void)pt::uri_list_get(uri_text, 0); }) > 0);
+    check(pt::uri_list_get(uri_text, 0) == "file:///tmp/bad-alloc-owned-path.txt");
+
+    check(window.set_primary_serial(long_text, 23));
+    check(count_bad_alloc_paths([&window] { (void)window.primary(); }) > 0);
+    check(window.primary() == long_text);
+
+    const pt_color pixels[4] = {pt_rgb(0x11223344), pt_rgb(0x55667788),
+                                pt_rgb(0x99AABBCC), pt_rgb(0xDDEEFF00)};
+    check(window.set_clipboard_image(std::span<const pt_color>(pixels, 4), 2, 2));
+    check(count_bad_alloc_paths([&window] { (void)window.clipboard_image_png(); }) > 0);
+    const std::optional<pt::clipboard_image> decoded = window.clipboard_image_png();
+    check(decoded.has_value());
+    if (decoded) {
+        check(decoded->width == 2 && decoded->height == 2);
+        check(decoded->pixels.size() == 4);
+    }
+}
+
 } // namespace
 
 int main() {
     setenv("PT_HEADLESS", "1", 1);
     unsetenv("PT_REDUCED_MOTION");
+
+    run_wire_dispatch_test();
+    setenv("PT_HEADLESS", "1", 1);
 
     pt::app application("pt.tests.cpp");
     check(application.valid());
@@ -2023,6 +2293,9 @@ int main() {
     check(!null_picker.set_number_text("1"));
     check(!null_picker.set_color_hex("#000000"));
     check(!null_picker.is_select_open());
+
+    /* ---- owned getters: bad_alloc must not leak the C allocation ---- */
+    run_bad_alloc_hardening_test(window, table);
 
     pt_canvas_destroy(canvas);
 

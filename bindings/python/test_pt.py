@@ -2604,5 +2604,189 @@ class M19BindingTests(unittest.TestCase):
         popup.destroy()
 
 
+_FC_OPT_ALL = 0x1FF
+_WIRE_DRIVER: Any = None
+
+
+def _load_wire_driver() -> Any:
+    """Loads the C wire driver built by `make wire-driver`/`check-bindings`.
+
+    tests/fake_compositor.h is C-only, so the driver is the smallest adapter
+    that lets this ctypes test inject real Wayland events into libpt.so.
+    """
+    global _WIRE_DRIVER
+    if _WIRE_DRIVER is not None:
+        return _WIRE_DRIVER
+    path = os.environ.get("PT_WIRE_DRIVER")
+    if not path:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        path = os.path.join(root, "build", "tests", "libwire_driver.so")
+    library = ctypes.CDLL(path)
+    signatures = {
+        "wd_start": (ctypes.c_int, [ctypes.c_uint]),
+        "wd_stop": (None, []),
+        "wd_error": (ctypes.c_char_p, []),
+        "wd_sync": (ctypes.c_int, [ctypes.c_void_p]),
+        "wd_settle": (ctypes.c_int, [ctypes.c_void_p]),
+        "wd_wait_configured": (ctypes.c_int,
+                               [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]),
+        "wd_toplevel_surface": (ctypes.c_uint32, []),
+        "wd_request_overflowed": (ctypes.c_int, []),
+        "wd_pending_fd_count": (ctypes.c_int, []),
+        "wd_keyboard_enter": (None, [ctypes.c_uint32, ctypes.c_uint32]),
+        "wd_keyboard_leave": (None, [ctypes.c_uint32, ctypes.c_uint32]),
+        "wd_keyboard_key": (None, [ctypes.c_uint32, ctypes.c_uint32,
+                                   ctypes.c_uint32, ctypes.c_int]),
+        "wd_keyboard_modifiers": (None, [ctypes.c_uint32, ctypes.c_uint32,
+                                         ctypes.c_uint32, ctypes.c_uint32,
+                                         ctypes.c_uint32]),
+        "wd_pointer_enter": (None, [ctypes.c_uint32, ctypes.c_uint32,
+                                    ctypes.c_double, ctypes.c_double]),
+        "wd_pointer_leave": (None, [ctypes.c_uint32, ctypes.c_uint32]),
+        "wd_pointer_motion": (None, [ctypes.c_uint32, ctypes.c_double,
+                                     ctypes.c_double]),
+        "wd_pointer_button": (None, [ctypes.c_uint32, ctypes.c_uint32,
+                                     ctypes.c_uint32, ctypes.c_int]),
+        "wd_pointer_axis": (None, [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_double]),
+    }
+    for name, (restype, argtypes) in signatures.items():
+        function = getattr(library, name)
+        function.restype = restype
+        function.argtypes = argtypes
+    _WIRE_DRIVER = library
+    return library
+
+
+class WireDispatchTests(unittest.TestCase):
+    """1.3 wave 2: real Wayland key/pointer events reach the raw wrappers.
+
+    A private fake compositor speaks the wire protocol to libpt.so in this
+    process; the assertions below cover wire -> C -> Python trampoline, the
+    layer M19 could only exercise synthetically.
+    """
+
+    def setUp(self) -> None:
+        self._headless = os.environ.pop("PT_HEADLESS", None)
+        self.addCleanup(self._restore_headless)
+        self.driver = _load_wire_driver()
+        self.assertEqual(self.driver.wd_start(_FC_OPT_ALL), 0,
+                         (self.driver.wd_error() or b"").decode("utf-8", "replace"))
+        self.addCleanup(self.driver.wd_stop)
+        self.app = pt.App("pt.tests.python.wire")
+        self.addCleanup(self.app.destroy)
+        self.window = pt.Window(self.app, "python wire", 320, 240)
+        self.entry = pt.entry(self.window.root, "")
+        self.assertTrue(self.entry.focus())
+        self.key_events: list[tuple[int, int, str]] = []
+        self.key_calls: list[tuple[int, int]] = []
+        self.pointer_events: list[pt.PointerEvent] = []
+        self.window.on_key_event(
+            lambda _window, key, modifiers, text:
+            self.key_events.append((key, modifiers, text)) or False)
+        self.window.on_key(
+            lambda _window, key, modifiers:
+            self.key_calls.append((key, modifiers)) or False)
+        self.window.on_pointer(
+            lambda _window, event:
+            self.pointer_events.append(event) or False)
+        self.window.show()
+        self.assertEqual(
+            self.driver.wd_wait_configured(self.app.raw, self.window.raw, 300), 1)
+        self.assertEqual(self.driver.wd_settle(self.app.raw), 0)
+        self.surface = int(self.driver.wd_toplevel_surface())
+        self.assertNotEqual(self.surface, 0)
+
+    def _restore_headless(self) -> None:
+        if self._headless is not None:
+            os.environ["PT_HEADLESS"] = self._headless
+
+    def _sync(self) -> None:
+        self.assertEqual(self.driver.wd_sync(self.app.raw), 0)
+
+    def test_key_dispatch_over_wire(self) -> None:
+        driver = self.driver
+        driver.wd_keyboard_enter(7100, self.surface)
+        driver.wd_keyboard_modifiers(7101, 0, 0, 0, 0)
+        driver.wd_keyboard_key(7102, 20, 30, 1)  # KEY_A press
+        self._sync()
+        self.assertEqual(len(self.key_events), 1)
+        key, modifiers, text = self.key_events[0]
+        self.assertEqual(key, 0x61)  # XKB_KEY_a
+        self.assertEqual(modifiers, 0)
+        self.assertEqual(text, "a")
+        self.assertEqual(self.key_calls, [(0x61, 0)])
+        self.assertEqual(self.entry.text, "a")
+
+        driver.wd_keyboard_modifiers(7103, 1, 0, 0, 0)  # depressed = shift
+        driver.wd_keyboard_key(7104, 21, 30, 1)        # KEY_A with shift
+        self._sync()
+        self.assertEqual(len(self.key_events), 2)
+        key, modifiers, text = self.key_events[1]
+        self.assertEqual(key, 0x41)  # XKB_KEY_A
+        self.assertEqual(modifiers, pt.key_modifier_shift)
+        self.assertEqual(text, "A")
+        self.assertEqual(self.entry.text, "aA")
+
+        driver.wd_keyboard_key(7105, 22, 30, 0)  # release
+        driver.wd_keyboard_modifiers(7106, 0, 0, 0, 0)
+        self._sync()
+        driver.wd_keyboard_leave(7107, self.surface)
+        self._sync()
+        self.assertFalse(driver.wd_error())
+        self.assertEqual(driver.wd_request_overflowed(), 0)
+        self.assertEqual(driver.wd_pending_fd_count(), 0)
+
+    def test_pointer_dispatch_over_wire(self) -> None:
+        driver = self.driver
+        driver.wd_pointer_enter(7001, self.surface, 40.0, 50.0)
+        self._sync()
+        self.assertEqual(len(self.pointer_events), 1)
+        enter = self.pointer_events[0]
+        self.assertEqual(enter.phase, pt.pointer_phase_enter)
+        self.assertAlmostEqual(enter.x, 40.0, places=3)
+        self.assertAlmostEqual(enter.y, 50.0, places=3)
+
+        driver.wd_pointer_motion(17, 60.0, 80.0)
+        self._sync()
+        self.assertEqual(len(self.pointer_events), 2)
+        motion = self.pointer_events[1]
+        self.assertEqual(motion.phase, pt.pointer_phase_motion)
+        self.assertAlmostEqual(motion.x, 60.0, places=3)
+        self.assertAlmostEqual(motion.y, 80.0, places=3)
+        self.assertAlmostEqual(motion.delta_x, 20.0, places=3)
+        self.assertAlmostEqual(motion.delta_y, 30.0, places=3)
+
+        driver.wd_pointer_button(7002, 18, 0x110, 1)
+        self._sync()
+        self.assertEqual(len(self.pointer_events), 3)
+        down = self.pointer_events[2]
+        self.assertEqual(down.phase, pt.pointer_phase_down)
+        self.assertEqual(down.button, 0x110)
+        self.assertTrue(down.pressed)
+        self.assertEqual(down.click_count, 1)
+
+        driver.wd_pointer_button(7003, 19, 0x110, 0)
+        self._sync()
+        self.assertEqual(len(self.pointer_events), 4)
+        up = self.pointer_events[3]
+        self.assertEqual(up.phase, pt.pointer_phase_up)
+        self.assertEqual(up.button, 0x110)
+        self.assertFalse(up.pressed)
+
+        driver.wd_pointer_axis(20, 0, 150.0)  # vertical scroll: 150 / 10
+        self._sync()
+        self.assertEqual(len(self.pointer_events), 5)
+        axis = self.pointer_events[4]
+        self.assertEqual(axis.phase, pt.pointer_phase_axis)
+        self.assertAlmostEqual(axis.delta_y, 15.0, places=3)
+
+        driver.wd_pointer_leave(7004, self.surface)
+        self._sync()
+        self.assertEqual(len(self.pointer_events), 6)
+        self.assertEqual(self.pointer_events[5].phase, pt.pointer_phase_leave)
+        self.assertFalse(driver.wd_error())
+        self.assertEqual(driver.wd_pending_fd_count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

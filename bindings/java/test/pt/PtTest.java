@@ -10,8 +10,12 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 @SuppressWarnings("restricted")
 public final class PtTest {
@@ -128,8 +132,279 @@ public final class PtTest {
         return out.toByteArray();
     }
 
-    public static void main(String[] args) throws Exception {
+    private static MemorySegment cstring(Arena arena, String value) {
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        MemorySegment text = arena.allocate(bytes.length + 1L);
+        MemorySegment.copy(bytes, 0, text, ValueLayout.JAVA_BYTE, 0, bytes.length);
+        text.set(ValueLayout.JAVA_BYTE, bytes.length, (byte) 0);
+        return text;
+    }
+
+    private static void nativeUnsetenv(String name) throws Throwable {
+        Linker linker = Linker.nativeLinker();
+        MethodHandle unset = linker.downcallHandle(
+                linker.defaultLookup().find("unsetenv").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
         try (Arena arena = Arena.ofConfined()) {
+            int ignored = (int) unset.invokeExact(cstring(arena, name));
+        }
+    }
+
+    private static void nativeSetenv(String name, String value) throws Throwable {
+        Linker linker = Linker.nativeLinker();
+        MethodHandle set = linker.downcallHandle(
+                linker.defaultLookup().find("setenv").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+        try (Arena arena = Arena.ofConfined()) {
+            int ignored = (int) set.invokeExact(cstring(arena, name), cstring(arena, value), 1);
+        }
+    }
+
+    private static MethodHandle bindSymbol(SymbolLookup lookup, String name,
+            FunctionDescriptor descriptor) {
+        return Linker.nativeLinker().downcallHandle(
+                lookup.find(name).orElseThrow(
+                        () -> new IllegalStateException("missing wire driver symbol " + name)),
+                descriptor);
+    }
+
+    private static Path wireDriverPath() {
+        String explicit = System.getProperty("pt.wire_driver");
+        if (explicit != null && !explicit.isEmpty()) {
+            return Path.of(explicit).toAbsolutePath();
+        }
+        String library = System.getProperty("pt.library");
+        if (library != null && !library.isEmpty()) {
+            Path parent = Path.of(library).toAbsolutePath().getParent();
+            if (parent != null) {
+                return parent.resolve("tests").resolve("libwire_driver.so");
+            }
+        }
+        return Path.of("build", "tests", "libwire_driver.so").toAbsolutePath();
+    }
+
+    private static String wireError(MethodHandle wdError) throws Throwable {
+        MemorySegment text = (MemorySegment) wdError.invokeExact();
+        return text.address() == 0 ? "" : text.reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /**
+     * 1.3 wave 2: injects real Wayland key/pointer events through the C wire
+     * driver and asserts the Java upcall wrappers receive them. This closes
+     * M19's synthetic-only raw dispatch coverage.
+     */
+    private static void wireDispatchTest(Arena arena) throws Throwable {
+        final String previousHeadless = System.getenv("PT_HEADLESS");
+        nativeUnsetenv("PT_HEADLESS");
+        boolean started = false;
+        MemorySegment wireApp = MemorySegment.NULL;
+        MethodHandle wdStop = null;
+        Arena driverArena = Arena.ofConfined();
+        try {
+            SymbolLookup lookup = SymbolLookup.libraryLookup(wireDriverPath(), driverArena);
+            MethodHandle wdStart = bindSymbol(lookup, "wd_start",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            wdStop = bindSymbol(lookup, "wd_stop", FunctionDescriptor.ofVoid());
+            MethodHandle wdError = bindSymbol(lookup, "wd_error",
+                    FunctionDescriptor.of(ValueLayout.ADDRESS));
+            MethodHandle wdSync = bindSymbol(lookup, "wd_sync",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            MethodHandle wdSettle = bindSymbol(lookup, "wd_settle",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            MethodHandle wdWaitConfigured = bindSymbol(lookup, "wd_wait_configured",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MethodHandle wdToplevelSurface = bindSymbol(lookup, "wd_toplevel_surface",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT));
+            MethodHandle wdRequestOverflowed = bindSymbol(lookup, "wd_request_overflowed",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT));
+            MethodHandle wdPendingFdCount = bindSymbol(lookup, "wd_pending_fd_count",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT));
+            MethodHandle wdKeyboardEnter = bindSymbol(lookup, "wd_keyboard_enter",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdKeyboardLeave = bindSymbol(lookup, "wd_keyboard_leave",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdKeyboardKey = bindSymbol(lookup, "wd_keyboard_key",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdKeyboardModifiers = bindSymbol(lookup, "wd_keyboard_modifiers",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT));
+            MethodHandle wdPointerEnter = bindSymbol(lookup, "wd_pointer_enter",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE));
+            MethodHandle wdPointerLeave = bindSymbol(lookup, "wd_pointer_leave",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdPointerMotion = bindSymbol(lookup, "wd_pointer_motion",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_DOUBLE,
+                            ValueLayout.JAVA_DOUBLE));
+            MethodHandle wdPointerButton = bindSymbol(lookup, "wd_pointer_button",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdPointerAxis = bindSymbol(lookup, "wd_pointer_axis",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_DOUBLE));
+
+            /* FC_OPT_ALL: mandatory globals plus every optional interface. */
+            started = (int) wdStart.invokeExact(0x1FF) == 0;
+            check(started, "wire driver start: " + wireError(wdError));
+            if (!started) {
+                return;
+            }
+            wireApp = Pt.app_create("pt.tests.java.wire");
+            check(wireApp.address() != 0, "wire app_create");
+            if (wireApp.address() == 0) {
+                return;
+            }
+            check((int) wdSettle.invokeExact(wireApp) == 0, "wire settle");
+            check(wireError(wdError).isEmpty(), "wire handshake clean");
+
+            MemorySegment wireWindow = Pt.window_create(wireApp, "java wire", 320, 240);
+            check(wireWindow.address() != 0, "wire window_create");
+            MemorySegment entry = Pt.entry(Pt.window_root(wireWindow), "");
+            check(Pt.widget_focus(entry), "wire entry focus");
+
+            int[] keyEventCalls = {0};
+            int[] keyCalls = {0};
+            int[] keyValue = {0};
+            int[] keyModifiers = {0};
+            String[] keyText = {""};
+            List<Pt.PointerEvent> pointerEvents = new ArrayList<>();
+            Pt.window_set_key_event_handler(wireWindow,
+                    (window, key, modifiers, text, data) -> {
+                        keyEventCalls[0] += 1;
+                        keyValue[0] = key;
+                        keyModifiers[0] = modifiers;
+                        keyText[0] = text;
+                        return false;
+                    }, arena);
+            Pt.window_set_key_handler(wireWindow,
+                    (window, key, modifiers, data) -> {
+                        keyCalls[0] += 1;
+                        keyValue[0] = key;
+                        keyModifiers[0] = modifiers;
+                        return false;
+                    }, arena);
+            Pt.window_set_pointer_handler(wireWindow,
+                    (window, event, data) -> {
+                        pointerEvents.add(event);
+                        return false;
+                    }, arena);
+
+            Pt.window_show(wireWindow);
+            check((int) wdWaitConfigured.invokeExact(wireApp, wireWindow, 300) == 1,
+                    "wire window configured");
+            check((int) wdSettle.invokeExact(wireApp) == 0, "wire settle after show");
+            int surface = (int) wdToplevelSurface.invokeExact();
+            check(surface != 0, "wire toplevel surface");
+
+            wdKeyboardEnter.invokeExact(7100, surface);
+            wdKeyboardModifiers.invokeExact(7101, 0, 0, 0, 0);
+            wdKeyboardKey.invokeExact(7102, 20, 30, 1); /* KEY_A press */
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire key sync");
+            check(keyEventCalls[0] == 1, "wire key_event calls");
+            check(keyValue[0] == 0x61, "wire keysym a");
+            check(keyModifiers[0] == 0, "wire key modifiers 0");
+            check("a".equals(keyText[0]), "wire key text a");
+            check(keyCalls[0] == 1, "wire legacy key calls");
+            check("a".equals(Pt.widget_get_text(entry)), "wire entry text a");
+
+            wdKeyboardModifiers.invokeExact(7103, 1, 0, 0, 0); /* shift depressed */
+            wdKeyboardKey.invokeExact(7104, 21, 30, 1); /* KEY_A with shift */
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire shift sync");
+            check(keyEventCalls[0] == 2, "wire shift key_event calls");
+            check(keyValue[0] == 0x41, "wire shifted keysym A");
+            check(keyModifiers[0] == Pt.key_modifier_shift, "wire shift modifier");
+            check("A".equals(keyText[0]), "wire shifted text A");
+            check("aA".equals(Pt.widget_get_text(entry)), "wire entry text aA");
+
+            wdKeyboardKey.invokeExact(7105, 22, 30, 0); /* release */
+            wdKeyboardModifiers.invokeExact(7106, 0, 0, 0, 0);
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire release sync");
+            wdKeyboardLeave.invokeExact(7107, surface);
+
+            wdPointerEnter.invokeExact(7001, surface, 40.0, 50.0);
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire pointer enter sync");
+            check(pointerEvents.size() == 1, "wire pointer enter count");
+            if (pointerEvents.size() == 1) {
+                Pt.PointerEvent enter = pointerEvents.get(0);
+                check(enter.phase() == Pt.pointer_phase_enter, "wire pointer enter phase");
+                check(Math.abs(enter.x() - 40.0f) < 0.001f, "wire pointer enter x");
+                check(Math.abs(enter.y() - 50.0f) < 0.001f, "wire pointer enter y");
+            }
+            wdPointerMotion.invokeExact(17, 60.0, 80.0);
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire pointer motion sync");
+            check(pointerEvents.size() == 2, "wire pointer motion count");
+            if (pointerEvents.size() == 2) {
+                Pt.PointerEvent motion = pointerEvents.get(1);
+                check(motion.phase() == Pt.pointer_phase_motion, "wire pointer motion phase");
+                check(Math.abs(motion.x() - 60.0f) < 0.001f, "wire pointer motion x");
+                check(Math.abs(motion.y() - 80.0f) < 0.001f, "wire pointer motion y");
+                check(Math.abs(motion.delta_x() - 20.0f) < 0.001f, "wire motion delta x");
+                check(Math.abs(motion.delta_y() - 30.0f) < 0.001f, "wire motion delta y");
+            }
+            wdPointerButton.invokeExact(7002, 18, 0x110, 1); /* BTN_LEFT down */
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire pointer down sync");
+            check(pointerEvents.size() == 3, "wire pointer down count");
+            if (pointerEvents.size() == 3) {
+                Pt.PointerEvent down = pointerEvents.get(2);
+                check(down.phase() == Pt.pointer_phase_down, "wire pointer down phase");
+                check(down.button() == 0x110, "wire pointer down button");
+                check(down.pressed(), "wire pointer down pressed");
+                check(down.click_count() == 1, "wire pointer down click count");
+            }
+            wdPointerButton.invokeExact(7003, 19, 0x110, 0); /* BTN_LEFT up */
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire pointer up sync");
+            check(pointerEvents.size() == 4, "wire pointer up count");
+            if (pointerEvents.size() == 4) {
+                Pt.PointerEvent up = pointerEvents.get(3);
+                check(up.phase() == Pt.pointer_phase_up, "wire pointer up phase");
+                check(up.button() == 0x110, "wire pointer up button");
+                check(!up.pressed(), "wire pointer up released");
+            }
+            wdPointerAxis.invokeExact(20, 0, 150.0); /* vertical scroll: 150/10 */
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire pointer axis sync");
+            check(pointerEvents.size() == 5, "wire pointer axis count");
+            if (pointerEvents.size() == 5) {
+                Pt.PointerEvent axis = pointerEvents.get(4);
+                check(axis.phase() == Pt.pointer_phase_axis, "wire pointer axis phase");
+                check(Math.abs(axis.delta_y() - 15.0f) < 0.001f, "wire axis delta y");
+            }
+            wdPointerLeave.invokeExact(7004, surface);
+            check((int) wdSync.invokeExact(wireApp) == 0, "wire pointer leave sync");
+            check(pointerEvents.size() == 6, "wire pointer leave count");
+            if (pointerEvents.size() == 6) {
+                check(pointerEvents.get(5).phase() == Pt.pointer_phase_leave,
+                        "wire pointer leave phase");
+            }
+
+            check(wireError(wdError).isEmpty(), "wire protocol clean");
+            check((int) wdRequestOverflowed.invokeExact() == 0, "wire request log ok");
+            check((int) wdPendingFdCount.invokeExact() == 0, "wire fds drained");
+        } finally {
+            try {
+                if (wireApp.address() != 0) {
+                    Pt.app_destroy(wireApp);
+                }
+                if (started && wdStop != null) {
+                    wdStop.invokeExact();
+                }
+            } finally {
+                driverArena.close();
+                if (previousHeadless != null) {
+                    nativeSetenv("PT_HEADLESS", previousHeadless);
+                } else {
+                    nativeUnsetenv("PT_HEADLESS");
+                }
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Throwable {
+        try (Arena arena = Arena.ofConfined()) {
+            wireDispatchTest(arena);
             MemorySegment app = Pt.app_create("pt.tests.java");
             check(app.address() != 0, "app_create");
             if (app.address() == 0) {
