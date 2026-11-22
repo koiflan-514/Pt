@@ -462,6 +462,31 @@ static void test_visual_map(pt_font *font) {
         map = NULL;
     }
 
+    /* The map applies rule L1 per line: a line cut after Hebrew whitespace
+     * resets the trailing space to the LTR paragraph base. */
+    const char *l1_text = "\xD7\x90\xD7\x91   \xD7\x92\xD7\x93";
+    pt_check(pt_text_visual_map_build_bidi(font, l1_text, 5, pt_bidi_base_ltr, &map));
+    pt_check(map != NULL);
+    if (map && map->count > 0) {
+        pt_check(map->clusters[map->count - 1].level == 0);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+    pt_check(pt_text_visual_map_build_bidi(font, l1_text, strlen(l1_text), pt_bidi_base_ltr,
+                                            &map));
+    pt_check(map != NULL);
+    if (map) {
+        bool saw_embedded_space = false;
+        for (size_t i = 0; i < map->count; ++i) {
+            if (map->clusters[i].level != 0) {
+                saw_embedded_space = true;
+            }
+        }
+        pt_check(saw_embedded_space);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
     /* Empty input builds an empty map rather than failing. */
     pt_check(pt_text_visual_map_build_bidi(font, "", 0, pt_bidi_base_auto, &map));
     pt_check(map != NULL && map->count == 0 && pt_text_visual_map_width(map) == 0.0f);
