@@ -483,4 +483,16 @@ run-svg-icon: $(EXAMPLES)/c/svg_icon
 run-input-panel: $(EXAMPLES)/c/input_panel
 	$(EXAMPLES)/c/input_panel
 
-.PHONY: run-svg-icon run-input-panel
+run-cpp-input-panel: $(EXAMPLES)/cpp/input_panel
+	$(EXAMPLES)/cpp/input_panel
+
+run-python-input-panel: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/input_panel.py
+
+run-java-input-panel: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpt.library=$(abspath $(BUILD)/libpt.so) -cp $(BUILD)/java InputPanel
+
+.PHONY: run-svg-icon run-input-panel \
+	run-cpp-input-panel run-python-input-panel run-java-input-panel
