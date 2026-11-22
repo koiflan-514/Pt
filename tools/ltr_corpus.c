@@ -32,12 +32,20 @@ typedef struct scene {
     int width;
     int height;
     void (*build)(pt_widget *root);
+    /* Decorated scenes paint the CSD title bar; the rest are content-only. */
+    bool decorated;
 } scene;
 
 static void scene_ascii_label(pt_widget *root) {
     pt_widget *label = pt_label_create(
         root, "The quick brown fox jumps over the lazy dog, twice.");
     pt_widget_set_font_size(label, 20.0f);
+}
+
+/* Client-side decoration: the title bar with an ASCII title. The 1.4.0 title
+ * origin is the clip's leading edge; anything else changes these bytes. */
+static void scene_csd_title(pt_widget *root) {
+    pt_label_create(root, "Decorations");
 }
 
 static void scene_numeric_label(pt_widget *root) {
@@ -176,20 +184,21 @@ static void scene_controls(pt_widget *root) {
 }
 
 static const scene scenes[] = {
-    {"01-label-ascii.ppm", "LTR corpus: ASCII label", 660, 100, scene_ascii_label},
+    {"01-label-ascii.ppm", "LTR corpus: ASCII label", 660, 100, scene_ascii_label, false},
     {"02-label-numbers.ppm", "LTR corpus: numeric label", 560, 100,
-     scene_numeric_label},
-    {"03-entry.ppm", "LTR corpus: entry", 480, 120, scene_entry},
-    {"04-text-area.ppm", "LTR corpus: text area", 520, 220, scene_text_area},
+     scene_numeric_label, false},
+    {"03-entry.ppm", "LTR corpus: entry", 480, 120, scene_entry, false},
+    {"04-text-area.ppm", "LTR corpus: text area", 520, 220, scene_text_area, false},
     {"05-label-wrap.ppm", "LTR corpus: wrapped label", 360, 210,
-     scene_wrapped_label},
+     scene_wrapped_label, false},
     {"06-label-ellipsis.ppm", "LTR corpus: ellipsis", 300, 100,
-     scene_ellipsis_label},
-    {"07-rich-spans.ppm", "LTR corpus: rich spans", 560, 110, scene_rich_spans},
+     scene_ellipsis_label, false},
+    {"07-rich-spans.ppm", "LTR corpus: rich spans", 560, 110, scene_rich_spans, false},
     {"08-cjk-fallback.ppm", "LTR corpus: CJK fallback", 520, 120,
-     scene_cjk_label},
-    {"09-table.ppm", "LTR corpus: table", 520, 280, scene_table},
-    {"10-controls.ppm", "LTR corpus: controls", 520, 180, scene_controls},
+     scene_cjk_label, false},
+    {"09-table.ppm", "LTR corpus: table", 520, 280, scene_table, false},
+    {"10-controls.ppm", "LTR corpus: controls", 520, 180, scene_controls, false},
+    {"11-csd-title.ppm", "LTR corpus: CSD title", 520, 260, scene_csd_title, true},
 };
 
 #define SCENE_COUNT (sizeof(scenes) / sizeof(scenes[0]))
@@ -242,7 +251,7 @@ static bool render_scene(pt_app *app, const scene *item, const char *directory) 
                 pt_get_last_error());
         return false;
     }
-    pt_window_set_decorated(window, false);
+    pt_window_set_decorated(window, item->decorated);
     pt_window_set_resizable(window, false);
 
     pt_widget *root = pt_window_root(window);
