@@ -356,22 +356,24 @@ correction, exactly as [api-policy.md](api-policy.md) describes. The
 three-language wrappers report **564/564** with the reviewed allowlist empty.
 Unicode conformance runs in `make check` (770,241 + 91,707 cases, 0 failures),
 and the LTR compatibility gates are in place (17 unchanged pure-LTR snapshots;
-`tools/ltr-compat.sh` 10/10 `SAME`).
+`tools/ltr-compat.sh` 11/11 `SAME` against 1.4.0).
 
-The remaining deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md)
-under M22:
+The final gate closed the 2.0 wave and left one gate-facility item, tracked in
+[ROADMAP.md](ROADMAP.md) under M22:
 
-- **W5b paint chrome has not landed on the integration tree.** The final gate
-  expects entry right-anchoring at `scroll_x = 0`, the RTL scrollbar and tree
-  chevron paint side and the menu first-open anchor warm-up. They are in
-  progress in a parallel worktree; the release record must record whether the
-  menu anchor needed a caveat rather than implying it was fixed.
-- **The 2.0.0 gate is not complete.** `make check` and the documented
-  conformance/LTR checks pass on `cf520a0`, but the final `make check-bindings`,
-  bidi performance profiles, live RTL caret/selection run, `tools/ci.sh`,
-  `tools/release-check.sh --full` and the symbol-level ABI diff against 1.4.0
-  belong to W7 and are still pending. The release record keeps
-  `pending final gate run` markers until then.
+- **W5b paint chrome is delivered.** Entry right-anchoring at `scroll_x = 0`,
+  the RTL scrollbar and tree chevron paint side, the menu first-open anchor and
+  the mirrored CSD/combo chrome all landed in W5b and passed the final gate; the
+  LTR CSD-title origin matches 1.4.0 byte for byte.
+- **The 2.0.0 gate is complete.** `make check` and `make check-bindings` ran on
+  the frozen tree `91176c2`, the bidi performance profiles, the four live suites
+  and `tools/ltr-compat.sh` passed, the symbol-level ABI diff against 1.4.0 is
+  556 → 564 with 0 removed / 0 changed / 8 added, and
+  `tools/release-check.sh --full` reports every automated gate green. One
+  frozen-script defect remains outside the artifact: `tools/install-check.sh`
+  does not expand `$(ABI_MAJOR)`, so bare `tools/ci.sh` stops at the
+  staged-install step; the release record documents the verified one-line
+  expansion. The annotated tag is the owner's remaining step.
 - **The RTL limitations are documented, not defects.** The tested Wayland
   compositors expose no horizontal wheel axis, so a table scrolls horizontally
   by scrollbar or keyboard; Shift+arrow across a soft wrap stays an in-line

@@ -1158,17 +1158,24 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
-## 2.0.0 validation record (2026-11-23, draft — pending final gate run)
+## 2.0.0 validation record (2026-11-23, final — tag-ready)
 
-Environment: the integration tree `a02a40e` on `m22/integration` (W0-W4, W5a,
-W5b `6553270`, W6a, W6b `b4bdf99` and the W7prep LTR gate) plus the
-`m22/w7-hardening` branch, on the reference machine (CachyOS, Wayland,
-niri 26.04) with GCC 16.2.1, Python 3.14 and OpenJDK 25.
+Environment: the final gate tree `91176c2` on `m22/integration` on the
+reference machine (CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC
+16.2.1, Python 3.14.10 and OpenJDK 25.0.2. The integration tree `a02a40e`
+(W0-W4, W5a, W5b `6553270`, W6a, W6b `b4bdf99` and the W7prep LTR gate
+`43cfad6`) was fast-forwarded to the W7 hardening tip `91176c2` (12 commits,
+`a361d5b` through `91176c2`: nine hardening commits plus the CSD-title,
+entry-shaping and fuzz-oracle corrections).
 
-**This record is a draft for the final gate.** Scope, behaviour changes, known
-limits and the hardening measurements are complete. Rows that still say
-*pending final gate run* cover the full-gate transcript on the frozen tree; do
-not publish or tag from this page until those markers are replaced.
+This is the **final gate record**. Every figure below was measured on
+`91176c2`, including `make check`, `make check-bindings`, `make perf-check`,
+the four live suites, the sanitizer and staged-install passes, the reproducible
+tarball and extracted rebuild, the symbol-level ABI comparison against 1.4.0
+and `tools/release-check.sh --full`. The only steps left before the tag are the
+owner's freeze confirmation and the one frozen-gate-script correction documented
+under [Gate transcript](#gate-transcript) (`tools/install-check.sh` does not
+expand `$(ABI_MAJOR)`); the artifact itself is tag-ready.
 
 ### Scope
 
@@ -1217,14 +1224,18 @@ because 2.0 only adds declarations and corrects bidi rendering.
   passwords report direction but no character; the C getter keeps byte offsets
   and only the D-Bus `Text` interface uses scalar offsets.
 - **LTR protection.** The 17 pure-LTR snapshots in `test_visuals` are unchanged
-  and `tools/ltr-compat.sh` compares 10 LTR scenes between 1.4.0 and this tree,
-  requiring 10/10 `SAME` with no checked-in golden hash. `tools/ci.sh` now runs
-  that cross-version stage after the build and check.
+  and `tools/ltr-compat.sh` compares **11** LTR scenes between 1.4.0 and this
+  tree, requiring 11/11 `SAME` with no checked-in golden hash; W7 added the
+  decorated CSD-title scene so the 1.4.0 title origin is pinned by a pixel
+  gate. `tools/ci.sh` runs that cross-version stage after the build and check.
 - **Hardening.** `test_bidi_fuzz` pushes fixed-seed mixed-script sequences
   through paragraph/runs, the visual map and entry editing; `make perf-check`
   adds mixed-paragraph wrap+paint, a 100-row RTL table paint and 1000 RTL caret
   moves; `tools/check-rtl-live.sh` checks live IME-rectangle/map agreement;
-  `test_a11y_bridge` runs on a private accessibility bus.
+  `test_a11y_bridge` runs on a private accessibility bus. W7 also restored the
+  1.4.0 CSD-title origin (and mirrored it for RTL) and made run attachment keep
+  a mark's own script, which removes the shaping non-idempotence seen when a
+  styled run was re-shaped.
 - **Examples.** `examples/c/rtl_gallery.c` plus
   `examples/cpp/rtl_direction.cpp`, `examples/python/rtl_direction.py` and
   `examples/java/RtlDirection.java`, each wired to a `run-*` target.
@@ -1239,6 +1250,11 @@ section an upgrading application must read:
   already displayed RTL text sees different pixels; this is the rendering
   correction the major marks. An application that sets nothing keeps the 1.4
   pixels, which the two LTR gates enforce.
+- **The window CSD title keeps the 1.4.0 origin in LTR.** W7 caught a
+  sub-pixel origin drift introduced by the 2.0 shaping path and restored the
+  1.4.0 placement; the RTL title mirrors it. The decorated-title scene
+  (`11-csd-title.ppm`) is byte-identical between 1.4.0 and this tree, so a
+  title-only window that sets no direction is unchanged.
 - **Direction properties are new and default to inherit.** `pt_ui_direction`
   and `pt_text_direction` are zero-valued in existing code; setters store the
   explicit value, and `auto` resolves per paragraph. Widgets that never set a
@@ -1272,21 +1288,21 @@ section an upgrading application must read:
 
 | Check | Result |
 | --- | --- |
-| Version agreement | pass on the documentation branch: `include/pt/base.h`, `Makefile` `VERSION`, the README status line and the generated reference say 2.0.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| Version agreement | pass: `include/pt/base.h`, `Makefile` `VERSION`, the README status line and the generated reference say 2.0.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
 | API baseline | pass: `api/pt.api` reads 564 functions / 924 entries; the reference names all 564 |
 | Since audit | pass: 564/564 declarations carry a since marker (412/36/106/2/8), zero missing |
 | Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
-| Direction, bidi and rich-text suites | pass on `a02a40e` and the W7 tree: `test_direction`, `test_bidi`, `test_bidi_conformance`, `test_rich_text`, plus the RTL cases in `test_text_area`, `test_visuals`, `test_table`, `test_tree` and `test_navigation` |
-| LTR byte stability | pass: 17 pure-LTR snapshots unchanged; `tools/ltr-compat.sh` reports 10/10 `SAME` (same-machine comparison, no checked-in hash) |
+| Direction, bidi and rich-text suites | pass on `91176c2`: `test_direction` 105 checks, `test_bidi` 351, `test_bidi_conformance` 8 (770,241 + 91,707 cases), `test_bidi_fuzz` 121,050, `test_rich_text` 345, plus the RTL cases in `test_text_area` (234), `test_visuals` (326), `test_table` (187), `test_tree` (192) and `test_navigation` (180) |
+| LTR byte stability | pass: 17 pure-LTR snapshots unchanged; `tools/ltr-compat.sh 1.4.0 HEAD` reports 11/11 `SAME`, including the decorated CSD-title scene (same-machine comparison, no checked-in hash) |
 | Binding parity | pass: 564/564 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted |
 | Bilingual documentation | pass: 9 public guides, including the rewritten `rtl.md`, with byte-identical code blocks |
 | RTL examples | pass: C/C++/Python/Java examples build under `werror=1`, exit 0 with `PT_HEADLESS=1`, and exit 124 under the nested niri smoke timeout |
-| `make check` / `make check-bindings` | pending final gate run (full frozen-tree transcript); the W7 tree passes the bounded suites and parity checks |
-| `make perf-check` with bidi profiles | pass on the W7 tree: mixed paragraph wrap+paint ~0.85 ms (ceiling 2.0 ms), 100-row RTL table paint ~2.7 ms (ceiling 7.0 ms), 1000 RTL caret moves ~41 ms (ceiling 100 ms) |
-| Live RTL caret/selection and the existing live suites | pass locally on the W7 tree under nested niri: `tools/check-rtl-live.sh` reports IME rectangle/map agreement within one pixel; full live-suite transcript still pending the final gate |
-| Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pending final gate run (W7) |
-| ABI diff against 1.4.0 | expected 556 → 564 exported `pt_*` symbols, 0 removed, 0 changed, 8 added, SONAME unchanged; symbol-level run pending the final gate because libabigail is unavailable on the reference machine |
-| `tools/release-check.sh --full` | pending final gate run; the two README failures of the integration checkpoint are closed by this branch once the full report is rerun |
+| `make check` / `make check-bindings` | pass: 41 C executables (40 suites at 131,498 checks plus the 454,380-check property sweep, 585,878 in total), 0 failures; C++ 862 checks, Python 68 tests, Java 701 checks, 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
+| `make perf-check` with bidi profiles | pass on `91176c2`: dense layout 2.809 ms/frame, dense paint 5.281 ms/frame, damage 0.171 ms (3.2%), startup first frame 10.86 ms, idle 500 ms CPU 0.959 ms; every guard ceiling holds; bidi profiles mixed paragraph wrap+paint 0.874 ms (ceiling 2.0 ms), 100-row RTL table paint 2.896 ms (ceiling 7.0 ms), 1000 RTL caret moves 43.385 ms (ceiling 100 ms) |
+| Live suites | pass under nested niri on `91176c2`: `check-wayland` 48 checks with focused-entry idle 26.1 ms over 5000 ms after one external-input retry; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `PREEDIT_COUNT=5`, `LAST_PREEDIT=ni hao` and `COMMIT=你好`; `check-rtl-live` PASS — the IME rectangle matches the visual caret map within one pixel at every stop, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink |
+| Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pass with one frozen-script correction: `tools/ci.sh` on `91176c2` builds and runs every suite, perf and the 11/11 LTR gate, then stops at the staged-install step because `tools/install-check.sh` reads `libpt.so.$(ABI_MAJOR)` without expanding it; the corrected copy (temporary, repository file untouched) reports SONAME `libpt.so.1`, pkg-config 2.0.0, the baseline ABI and the C/C++/Python/Java consumers, and `uninstall` leaves no file. ASan+UBSan rebuild of 41 C binaries plus `test_cpp` (862 checks), the Python suite (68 tests) and the Java suite (701 checks) reports nothing; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.0.0` and `tests/libwire_driver.so`. Two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduce one digest (sidecar matches), and the extracted tree rebuilds with `werror=1` and passes `make check` |
+| ABI diff against 1.4.0 | pass at the symbol level on `91176c2`: 556 → 564 exported `pt_*` symbols, 0 removed, 0 changed, 8 added (`pt_app_{set,get}_ui_direction`, `pt_window_{set,get}_ui_direction`, `pt_widget_{set,get}_ui_direction`, `pt_widget_{set,get}_text_direction`), no `SB_*` exports, SONAME `libpt.so.1` on both; `readelf --dyn-syms` types agree on all 556 common symbols; `abidiff` is still unavailable on the reference machine |
+| `tools/release-check.sh --full` | pass: every automated gate is green (version agreement, header surface, 564/924 baseline, 564/564 parity in three languages, reference coverage, deprecation inventory, examples, 9 bilingual guides); the two open items are the human freeze commit/tag and live-suite sign-off, both recorded above |
 
 ### ABI statement
 
@@ -1294,12 +1310,28 @@ section an upgrading application must read:
 release major is not the ABI major: `ABI_MAJOR := 1` keeps SONAME
 `libpt.so.1`, and [api-policy.md](api-policy.md) records that a
 behavior-contract correction with additive declarations may advance the version
-without a SONAME bump. The review artifact expected on the final tree is
-`556 → 564` exported `pt_*` symbols with 0 removed, 0 changed and 8 added, no
-`SB_*` exports and no type changes among the common symbols. `abidiff`
-(libabigail) is still unavailable on the reference machine, so the release-time
-run is symbol-level with `nm -D --defined-only`; a type-level run is recommended
-where libabigail exists.
+without a SONAME bump. The final gate compared a fresh `make lib` build of
+`e09fef4` (1.4.0) against the gate build of `91176c2` with
+`nm -D --defined-only`: both libraries define only `pt_*` dynamic symbols (556
+and 564 total), the counts are **556 → 564**, and the sorted diff is
+**0 removed, 0 changed, 8 added**:
+
+```
+pt_app_get_ui_direction      pt_app_set_ui_direction
+pt_widget_get_text_direction pt_widget_set_text_direction
+pt_widget_get_ui_direction   pt_widget_set_ui_direction
+pt_window_get_ui_direction   pt_window_set_ui_direction
+```
+
+`readelf --dyn-syms` reports the same symbol type on every one of the 556
+common names, no `pt_*` object symbol exists on either side, and no `SB_*`
+symbol is exported by the 2.0 build. `readelf -d` reports `libpt.so.1` on both,
+`objdump -p` agrees, and `Makefile` reads `ABI_MAJOR := 1` with `VERSION :=
+2.0.0`. A header diff of `include/pt/` against 1.4.0 contains only the eight
+new declarations, the two new enums and the version macros; no existing
+declaration changed. `abidiff` (libabigail) is still unavailable on the
+reference machine, so the release-time run is symbol-level; a type-level run is
+recommended where libabigail exists.
 
 ### Known issues
 
@@ -1325,15 +1357,60 @@ where libabigail exists.
 
 ### Gate transcript
 
-The W7 hardening branch supplies the fuzz, bidi performance, private-bus
-accessibility, live RTL and 10/10 `SAME` cross-version LTR evidence, and
-`tools/ci.sh` now runs the LTR stage and `check-rtl-live` in its live block. The
-full frozen-tree transcript (all suites and bindings counts, sanitizer,
-tarball, `tools/release-check.sh --full`, ABI symbol diff and tag readback)
-remains for the final gate; replace this paragraph with that transcript and
-remove every *pending final gate run* marker above. The 2.0.0 tag is created
-from that frozen tree; the two human open items remain the freeze commit/tag
-and the live-suite sign-off.
+`tools/ci.sh` on `91176c2` ran the clean `werror=1` build, `make check`
+(41 C executables, the binding suites and the API audit), `make perf-check`,
+the 11/11 cross-version LTR gate and the staged-install consumers. Two frozen
+harness assumptions had to be satisfied before the suites could run at all:
+the Python wire tests and `test_canvas` resolve a repository-root `build/tests`
+path, so the transcript used the `PT_WIRE_DRIVER` environment hook the test
+documents (`$PWD/build/ci/normal/tests/libwire_driver.so`) and an existing
+`build/tests` directory. `tools/ci.sh` builds into `build/ci/normal`, so a bare
+invocation on a tree without a repository-root `build/` fails those two
+lookups; this is a test-path assumption, not a library defect, and the
+extracted tarball's own `make check` runs in `build/` and needs no hook.
+
+The staged-install step then stopped on a second frozen-script gap:
+`tools/install-check.sh` reads the literal `SONAME := libpt.so.$(ABI_MAJOR)`
+from the Makefile without expanding it (unlike `tools/release-check.sh`, which
+does expand it), so it looked for `libpt.so.$(ABI_MAJOR)` and exited 1 although
+`make install` had produced `libpt.so.2.0.0` with the `libpt.so.1` SONAME
+symlink. Running the same script with the one-line expansion in a temporary
+copy — the repository file was **not** modified — reports `SONAME libpt.so.1`,
+pkg-config 2.0.0, the baseline ABI, the C/C++/Python/Java consumers and a clean
+`uninstall` (`install check passed`).
+
+The stages after that point were run individually on the same frozen tree:
+
+- **Sanitizers.** A `sanitize=1` rebuild from an empty `build/ci/sanitize`
+  compiled 41 C binaries and `test_cpp` with
+  `-fsanitize=address,undefined -fno-omit-frame-pointer`; executed with
+  `ASAN_OPTIONS=detect_leaks=1` and `UBSAN_OPTIONS=halt_on_error=1` they report
+  nothing (41 `ok` lines, `test_cpp` 862 checks), and the sanitized Python
+  (68 tests, `detect_leaks=0` for the interpreter as documented) and Java
+  (701 checks) suites are clean. `ldd` lists `libasan.so.8` and
+  `libubsan.so.1` on `tests/test_core`, `libpt.so.2.0.0` and
+  `tests/libwire_driver.so`, so the run is instrumented rather than silently
+  skipped.
+- **Reproducible tarball.** Two `make dist` runs at
+  `SOURCE_DATE_EPOCH=1767225600` write
+  `e9e436b974a3473727465289d27e6141c2cc0d116f830e1efa888a28ce95c513`
+  (the sidecar matches); the extracted archive builds with `werror=1` and
+  passes `make check` (`all checks passed`).
+- **Live suites.** `check-wayland` 48 checks (focused-entry idle 26.1 ms over
+  5000 ms after one external-input retry); `check-typing` PASS (`ptdirect`);
+  `check-ime-live` PASS with `PREEDIT_COUNT=5`, `LAST_PREEDIT=ni hao` and
+  `COMMIT=你好`; `check-rtl-live` PASS with every IME-rectangle/caret-map stop
+  within one pixel.
+- **Readiness.** `tools/release-check.sh --full` (with the same temporary
+  script copy) reports every automated gate green and the two human open items
+  (freeze commit/tag and live-suite sign-off).
+
+`tools/install-check.sh` still needs the same `$(ABI_MAJOR)` expansion
+`tools/release-check.sh` already implements; that one-line change in the frozen
+gate facility is the only item left before a clean exit-0 `tools/ci.sh`
+transcript can be quoted. The artifact, the suite results, the live runs and
+the ABI comparison are final on this tree; the annotated tag is created by the
+owner from the frozen commit.
 
 ## 1.4.0 validation record (2026-11-22)
 

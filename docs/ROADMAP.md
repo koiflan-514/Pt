@@ -1963,7 +1963,7 @@ passes and the symbol-level diff against `1.3.0` is empty: 556 → 556 exported
 unchanged. The baseline stays at 556 functions with zero new symbols. The only
 step left is the owner's freeze confirmation and tag.
 
-## M22 - 2.0.0: RTL and bidirectional text (W0-W7 hardening delivered; final gate and tag pending)
+## M22 - 2.0.0: RTL and bidirectional text (delivered)
 
 Goal: implement the Unicode Bidirectional Algorithm and RTL layout/editing per
 [rtl.md](rtl.md), the first structural major since 1.0. The public surface is
@@ -1973,18 +1973,21 @@ contracts do not move. 2.0.0 keeps SONAME `libpt.so.1` (the major marks the bidi
 rendering correction, not a binary break); `ABI_MAJOR` decouples the SONAME from
 `VERSION` in the Makefile and release-check.
 
-Status (2026-11-23): W0-W6b are merged on `m22/integration` at `a02a40e`
-(the merge of `m22/w5b-fix` `6553270` and `m22/w6b-docs` `b4bdf99`). The tree
-exports **564 functions / 924 baseline entries**; the three bindings report
-564/564 with an empty allowlist; the vendored Unicode 18.0.0 conformance data
-passes 770,241 + 91,707 cases with 0 failures; SONAME is `libpt.so.1` with
-`ABI_MAJOR := 1`. The W7 hardening branch `m22/w7-hardening` adds the bounded
-deterministic bidi fuzz suite, bidi performance ceilings, the live RTL
-caret/selection check, private-bus accessibility isolation and the
-`tools/ci.sh` cross-version LTR stage. Only the final gate run (full
-`make check`/`check-bindings` numbers, `tools/release-check.sh --full`, the
-symbol-level ABI diff against 1.4.0, live suites on the frozen tree) and the
-tag remain before 2.0.0.
+Status (2026-11-23): **delivered** on `m22/integration`. The integration tree
+`a02a40e` (the merge of `m22/w5b-fix` `6553270` and `m22/w6b-docs` `b4bdf99`)
+was fast-forwarded to the W7 hardening tip `91176c2` (12 commits, `a361d5b`
+through `91176c2`), and the final gate ran on that tree. It exports **564
+functions / 924 baseline entries**; the three bindings report 564/564 with an
+empty allowlist; Unicode 18.0.0 conformance passes 770,241 + 91,707 cases with
+0 failures; SONAME is `libpt.so.1` with `ABI_MAJOR := 1`. The full gate record
+is in [release.md](release.md): 41 C executables (585,878 checks), C++ 862,
+Python 68, Java 701, perf ceilings green including the three bidi profiles,
+sanitizers clean with `libasan`/`libubsan` linked, staged install plus
+four-language consumers, reproducible tarball with an extracted rebuild, four
+live suites under nested niri (including the new RTL caret/selection check),
+11/11 LTR `SAME` against 1.4.0, and the symbol ABI diff 556 → 564 with 0
+removed / 0 changed / 8 added. The annotated 2.0.0 tag is the remaining owner
+step.
 
 Decisions (researched 2026-11-22, kept as taken):
 
@@ -2022,8 +2025,8 @@ Decisions (researched 2026-11-22, kept as taken):
 | W6a | AT-SPI object and text direction attributes, password-safe path | `69db766` |
 | W6b | README/guides/rtl.md final, ROADMAP/release records, RTL examples | `b4bdf99` |
 | W7prep | Cross-version LTR byte-compatibility gate (`tools/ltr-compat.sh`, 10 scenes) | `43cfad6` |
-| W7 | Fuzz/perf hardening, live RTL consistency, ci.sh LTR stage, a11y bus isolation, final gate, ABI diff, tag readback | `m22/w7-hardening` (`a361d5b` onward); final gate numbers pending |
-| Integration | W0-W4 + W5a + W6a + W6b + W5b + W7prep on `m22/integration` | `a02a40e` |
+| W7 | Fuzz/perf hardening, live RTL consistency, ci.sh LTR stage, a11y bus isolation, CSD-title and entry-shaping fixes, final gate, ABI diff | `91176c2` (12 commits, `a361d5b` through `91176c2`) |
+| Integration | W0-W4 + W5a + W6a + W6b + W5b + W7prep on `m22/integration` | `a02a40e`, fast-forwarded to W7 tip `91176c2` |
 
 Landed detail per wave:
 
@@ -2077,41 +2080,61 @@ Landed detail per wave:
   perf-check` gains three bidi/RTL ceilings; `tools/check-rtl-live.sh` verifies
   live IME rectangle/caret-map agreement; `test_a11y_bridge` runs on a private
   accessibility bus; `tools/ci.sh` runs the cross-version LTR gate and the live
-  RTL check.
+  RTL check. W7 also restored the 1.4.0 CSD-title origin and mirrored it for
+  RTL, kept a mark's own script when attaching runs (shaping idempotence), and
+  added the decorated-title scene, so the LTR gate compares **11** scenes at
+  11/11 `SAME`.
 
-### State on the integration tree
+### State on the final gate tree
 
-Verified on the W7 hardening tree based on `a02a40e`:
+Verified on `91176c2` (the integration tree `a02a40e` fast-forwarded to the W7
+hardening tip):
 
-- `make -j8 werror=1` builds without warnings; `make check` is green, including
-  `api-check`.
+- `make -j8 werror=1` builds without warnings; `make check` is green
+  (41 C executables, 585,878 checks, including `api-check`); `make
+  check-bindings` reports C++ 862, Python 68 and Java 701 with 0 failures.
 - Conformance: Unicode 18.0.0 `BidiTest` 770,241 cases and
   `BidiCharacterTest` 91,707 cases, 0 failures.
 - API: 564 functions / 924 frozen entries; binding parity 564/564 (100%) for
   C++/Python/Java, 0 missing, 0 allowlisted; the generated reference reads
   Version 2.0.0 · 564 functions.
-- `test_direction`, `test_bidi`, `test_bidi_conformance`, `test_rich_text` and
-  the RTL visual cases pass; the LTR visual goldens are unchanged.
-- ABI: SONAME `libpt.so.1`, 564 `pt_*` exports, no `SB_*` exports.
-- Sanitizer runs of the bidi/direction/rich-text suites report nothing;
-  `make perf-check` holds its existing ceilings plus the new bidi/RTL ceilings.
-- `test_bidi_fuzz`, `test_a11y_bridge` on a private bus, the live RTL probe and
-  `tools/ltr-compat.sh 1.4.0 HEAD` (10/10 `SAME`) pass on the W7 tree.
+- `test_direction` (105), `test_bidi` (351), `test_bidi_conformance` (8),
+  `test_bidi_fuzz` (121,050) and `test_rich_text` (345) pass, as do the RTL
+  cases in `test_text_area`, `test_visuals`, `test_table`, `test_tree` and
+  `test_navigation`; the LTR visual goldens are unchanged.
+- ABI: SONAME `libpt.so.1`, 564 `pt_*` exports, no `SB_*` exports; against
+  1.4.0 (`e09fef4`) the symbol diff is 556 → 564, 0 removed, 0 changed,
+  8 added.
+- `ASAN_OPTIONS=detect_leaks=1` sanitizer runs of 41 C binaries plus
+  `test_cpp` report nothing; `ldd` confirms `libasan.so.8` and `libubsan.so.1`
+  on the test binary, the library and the wire driver; the sanitized Python and
+  Java suites are clean.
+- `make perf-check` holds every ceiling plus the new bidi/RTL ceilings
+  (mixed paragraph wrap+paint 0.874 ms / 2.0 ms, 100-row RTL table paint
+  2.896 ms / 7.0 ms, 1000 RTL caret moves 43.385 ms / 100 ms).
+- The staged install and four-language consumers pass, two `dist` runs at
+  `SOURCE_DATE_EPOCH=1767225600` reproduce one digest and the extracted
+  tarball rebuilds (`werror=1`) and passes `make check`.
+- `test_a11y_bridge` on a private bus, the four live suites under nested niri
+  (`check-wayland` 48 checks, `check-typing` PASS, `check-ime-live` PASS with
+  `你好`, `check-rtl-live` PASS) and `tools/ltr-compat.sh 1.4.0 HEAD`
+  (11/11 `SAME`) pass.
 
-Pending and recorded as such:
+Closed at the final gate:
 
-- The final gate still owns the full `make check-bindings` transcript on the
-  frozen tree, `tools/release-check.sh --full`, the symbol-level ABI diff
-  against 1.4.0 (expected 0 removed / 0 changed / 8 added) and the annotated tag
-  readback. The W7 hardening branch reports its own bounded counts; the final
-  gate replaces the remaining `pending final gate run` markers.
-- The README status line is 2.0.0 in this documentation branch, so the two
-  expected README failures in `tools/release-check.sh` disappear here; the
-  remaining open items stay the human tag/live ones.
+- `tools/release-check.sh --full` reports every automated gate green and the
+  two human open items (freeze commit/tag and live-suite sign-off, both
+  recorded).
+- One frozen gate-script correction remains outside the artifact:
+  `tools/install-check.sh` reads `SONAME := libpt.so.$(ABI_MAJOR)` without
+  expanding it, so bare `tools/ci.sh` exits at the staged-install step after
+  every suite has passed. The release record documents the one-line expansion
+  (verified in a temporary copy) and the full consumer result; the repository
+  file was not modified by the documentation/gate branch.
 
 ### Completion criteria
 
-Achieved on `cf520a0` plus this documentation branch:
+Achieved on the final gate tree `91176c2`:
 
 - `make check` includes `test_direction`, `test_bidi` and
   `test_bidi_conformance`; the baseline is 564 functions / 924 entries and the
@@ -2123,20 +2146,20 @@ Achieved on `cf520a0` plus this documentation branch:
   per-rebuild performance wording, byte/scalar correction and limitations) in
   English and Simplified Chinese.
 - The LTR double gate is in place: 17 pure-LTR snapshots unchanged and
-  `tools/ltr-compat.sh` at 10/10 `SAME`.
+  `tools/ltr-compat.sh` at 11/11 `SAME`.
 - The RTL examples exist in all four languages with `run-*` targets and a
   headless smoke result.
 - SONAME stays `libpt.so.1` through `ABI_MAJOR`, and `api-policy.md` records
   why a behavior-only major does not bump the object name.
+- The final gate ran every suite, the bidi performance profiles, the four live
+  suites, `tools/ci.sh` stages and `tools/release-check.sh --full`; the ABI
+  diff against 1.4.0 is 8 added, 0 removed, 0 changed; every
+  `pending final gate run` marker in [release.md](release.md) is replaced.
 
-Still required before the tag:
-
-- Run the final gate: `make check`, `make check-bindings`, `make perf-check`
-  with the new bidi profiles, the live suites (including a live RTL
-  caret/selection check), `tools/ci.sh` and `tools/release-check.sh --full`.
-- Record the symbol-level ABI diff against 1.4.0 (8 added, 0 removed, 0
-  changed), replace every `pending final gate run` marker in
-  [release.md](release.md), and tag 2.0.0 from the frozen tree.
+**M22 is closed.** 2.0.0 is delivered on `m22/integration` as a tag-ready tree;
+the annotated tag is the owner's remaining step. The only gate-facility debt is
+the `tools/install-check.sh` `$(ABI_MAJOR)` expansion recorded under
+[release.md](release.md#gate-transcript).
 
 ## Post-1.0 horizons
 
@@ -2168,8 +2191,8 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 
 ### 2.0 — structural
 
-- RTL/bidi paragraph layout per [rtl.md](rtl.md) (delivered in M22 through
-  W6b plus W7 hardening; only the final gate and tag remain): a UBA implementation
+- RTL/bidi paragraph layout per [rtl.md](rtl.md) (delivered in M22 as 2.0.0;
+  tag pending): a UBA implementation
   (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link constraint),
   bidi-run shaping, logical offsets through the public API and AT-SPI, mirrored
   layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing,
