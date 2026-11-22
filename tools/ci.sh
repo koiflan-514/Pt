@@ -42,6 +42,17 @@ makeit -j"$jobs" BUILD="$normal" werror=1 all
 makeit BUILD="$normal" werror=1 check
 makeit BUILD="$normal" werror=1 perf-check
 
+# Same-machine cross-version LTR byte gate: build 1.4.0 and HEAD in isolated
+# temporary trees and compare the fixed LTR corpus pixel for pixel. This is a
+# repository-history check, so it is skipped honestly when the tag is not
+# present (for example a shallow CI clone).
+if git -C "$root" rev-parse --verify --quiet '1.4.0^{commit}' >/dev/null 2>&1; then
+    say "cross-version LTR byte compatibility (1.4.0 vs HEAD)"
+    "$root/tools/ltr-compat.sh" 1.4.0 HEAD
+else
+    say "skip cross-version LTR byte compatibility (1.4.0 tag not available)"
+fi
+
 say "installed consumers and ABI"
 "$root/tools/install-check.sh" "$normal"
 
@@ -99,6 +110,7 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     makeit BUILD="$normal" check-wayland
     makeit BUILD="$normal" check-typing
     makeit BUILD="$normal" check-ime-live
+    makeit BUILD="$normal" check-rtl-live
 fi
 
 printf '\nCI verification passed for Pt %s\n' "$version"
