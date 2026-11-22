@@ -321,18 +321,25 @@ $(BUILD)/bench-guards: bench/guards.c $(BUILD)/libpt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) $< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
 
-bench: $(BUILD)/bench $(BUILD)/bench-startup $(BUILD)/bench-views $(BUILD)/bench-guards
+$(BUILD)/bench-bidi: bench/bidi.c $(BUILD)/libpt.a
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) $< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+
+bench: $(BUILD)/bench $(BUILD)/bench-startup $(BUILD)/bench-views $(BUILD)/bench-guards \
+	$(BUILD)/bench-bidi
 
 run-bench: $(BUILD)/bench $(BUILD)/bench-startup $(BUILD)/bench-views
 	PT_HEADLESS=1 $(BUILD)/bench
 	PT_HEADLESS=1 $(BUILD)/bench-startup
 	PT_HEADLESS=1 $(BUILD)/bench-views
 
-perf-check: $(BUILD)/bench $(BUILD)/bench-startup $(BUILD)/bench-views $(BUILD)/bench-guards
+perf-check: $(BUILD)/bench $(BUILD)/bench-startup $(BUILD)/bench-views $(BUILD)/bench-guards \
+	$(BUILD)/bench-bidi
 	PT_HEADLESS=1 $(BUILD)/bench
 	PT_HEADLESS=1 $(BUILD)/bench-startup
 	PT_HEADLESS=1 $(BUILD)/bench-views
 	PT_HEADLESS=1 $(BUILD)/bench-guards
+	PT_HEADLESS=1 $(BUILD)/bench-bidi
 
 java-example: lib
 	$(JAVAC) -Xlint:all -d $(BUILD)/java $(wildcard bindings/java/src/pt/*.java) \
