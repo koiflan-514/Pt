@@ -695,9 +695,22 @@ void pt_menu_show_below(pt_menu *menu, pt_widget *anchor) {
     if (!menu || !anchor) {
         return;
     }
+    /* Build and measure once so the width is exact even on the first opening;
+     * the RTL right-edge anchor needs it before overlay rects exist. The
+     * measure matches pt_window_overlays_layout, which recomputes the same
+     * width. show_at rebuilds the panel, which is deliberate and cheap. */
+    menu_build_panel(menu, false);
+    if (menu->overlay.panel) {
+        pt_layout_ctx ctx = pt_layout_context_for(menu->overlay.panel);
+        float width = 0.0f;
+        float height = 0.0f;
+        pt_widget_measure(menu->overlay.panel, &ctx, overlay_menu_max_width, 900.0f,
+                          &width, &height);
+        menu->overlay.rect.w = width;
+        menu->overlay.rect.h = height;
+    }
     /* The menu hangs from the anchor's leading edge: its left edge in LTR, its
-     * right edge in RTL. The width comes from the last measure, which is exact
-     * once the menu has been shown at least once. */
+     * right edge in RTL. */
     float x = anchor->x;
     if (pt_widget_resolved_ui_direction(anchor) == pt_ui_direction_rtl) {
         x = anchor->x + anchor->width - menu->overlay.rect.w;

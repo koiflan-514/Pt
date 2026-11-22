@@ -1207,17 +1207,29 @@ static void paint_menu_item(pt_canvas *canvas, pt_widget *item) {
     }
     float gap = shortcut_width > 0.0f ? 14.0f : 0.0f;
     float label_width = pt_max_float(0.0f, area.w - shortcut_width - gap);
+    bool rtl = paint_rtl(item);
+    /* The label starts on the reading edge and the shortcut sits on the
+     * trailing edge: right in LTR, left in RTL. */
+    float label_x = rtl ? area.x + shortcut_width + gap : area.x;
     paint_single_line(canvas, item, label, text_color(item), pt_text_align_start, true, 0.0f,
-                      (pt_rect){area.x, area.y, label_width, area.h});
+                      (pt_rect){label_x, area.y, label_width, area.h});
     if (shortcut_width > 0.0f && shortcut_font) {
         pt_color muted = color_from_theme(item, pt_theme_text_muted);
         float line_height = shortcut_font->line_height / scale;
         float baseline = area.y + (area.h - line_height) * 0.5f + shortcut_font->ascent / scale;
-        pt_canvas_push_clip(canvas, area.x + area.w - shortcut_width, area.y, shortcut_width,
-                            area.h);
-        pt_canvas_draw_text_line(canvas, shortcut_font, item->shortcut,
-                                 strlen(item->shortcut), area.x + area.w - shortcut_width,
-                                 baseline, shortcut_width, pt_text_align_end, muted, false);
+        float shortcut_x = rtl ? area.x : area.x + area.w - shortcut_width;
+        pt_canvas_push_clip(canvas, shortcut_x, area.y, shortcut_width, area.h);
+        if (rtl) {
+            pt_canvas_draw_text_line_bidi(canvas, shortcut_font, item->shortcut,
+                                          strlen(item->shortcut), shortcut_x, baseline,
+                                          shortcut_width, pt_text_align_start, muted, false,
+                                          paint_text_base(item, item->shortcut,
+                                                          strlen(item->shortcut)));
+        } else {
+            pt_canvas_draw_text_line(canvas, shortcut_font, item->shortcut,
+                                     strlen(item->shortcut), shortcut_x, baseline,
+                                     shortcut_width, pt_text_align_end, muted, false);
+        }
         pt_canvas_pop_clip(canvas);
     }
 }
