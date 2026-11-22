@@ -98,6 +98,7 @@ fi
 if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     makeit BUILD="$normal" check-wayland
     makeit BUILD="$normal" check-typing
+    makeit BUILD="$normal" check-ime-live
 fi
 
 printf '\nCI verification passed for Pt %s\n' "$version"
