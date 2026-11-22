@@ -1963,7 +1963,7 @@ passes and the symbol-level diff against `1.3.0` is empty: 556 → 556 exported
 unchanged. The baseline stays at 556 functions with zero new symbols. The only
 step left is the owner's freeze confirmation and tag.
 
-## M22 - 2.0.0: RTL and bidirectional text (W0-W6a delivered; W5b and the final gate pending)
+## M22 - 2.0.0: RTL and bidirectional text (W0-W7 hardening delivered; final gate and tag pending)
 
 Goal: implement the Unicode Bidirectional Algorithm and RTL layout/editing per
 [rtl.md](rtl.md), the first structural major since 1.0. The public surface is
@@ -1973,18 +1973,18 @@ contracts do not move. 2.0.0 keeps SONAME `libpt.so.1` (the major marks the bidi
 rendering correction, not a binary break); `ABI_MAJOR` decouples the SONAME from
 `VERSION` in the Makefile and release-check.
 
-Status (2026-11-23): W0-W4, W5a, W6a and the W7prep LTR gate are merged on
-`m22/integration` at `cf520a0`. The tree exports **564 functions / 924 baseline
-entries**; the three bindings report 564/564 with an empty allowlist; the
-vendored Unicode 18.0.0 conformance data passes 770,241 + 91,707 cases with 0
-failures; SONAME is `libpt.so.1` with `ABI_MAJOR := 1`. The documentary wrap-up
-(README, public guides, `rtl.md`, this milestone and the 2.0.0 release record)
-lands in `m22/w6b-docs`. Two pieces remain before the tag: **W5b paint chrome**
-(entry right-anchoring, scrollbar side, tree chevron, menu first-open anchor) is
-in progress in a parallel worktree and is not in `cf520a0`; **W7** owns the
-final gate run (bindings suite, bidi perf profiles, live RTL caret/selection,
-`tools/ci.sh`, `tools/release-check.sh --full`), the symbol-level ABI diff
-against 1.4.0 and the backfill of this section's gate numbers.
+Status (2026-11-23): W0-W6b are merged on `m22/integration` at `a02a40e`
+(the merge of `m22/w5b-fix` `6553270` and `m22/w6b-docs` `b4bdf99`). The tree
+exports **564 functions / 924 baseline entries**; the three bindings report
+564/564 with an empty allowlist; the vendored Unicode 18.0.0 conformance data
+passes 770,241 + 91,707 cases with 0 failures; SONAME is `libpt.so.1` with
+`ABI_MAJOR := 1`. The W7 hardening branch `m22/w7-hardening` adds the bounded
+deterministic bidi fuzz suite, bidi performance ceilings, the live RTL
+caret/selection check, private-bus accessibility isolation and the
+`tools/ci.sh` cross-version LTR stage. Only the final gate run (full
+`make check`/`check-bindings` numbers, `tools/release-check.sh --full`, the
+symbol-level ABI diff against 1.4.0, live suites on the frozen tree) and the
+tag remain before 2.0.0.
 
 Decisions (researched 2026-11-22, kept as taken):
 
@@ -2018,12 +2018,12 @@ Decisions (researched 2026-11-22, kept as taken):
 | W3 | Wrapping, per-line base, logical/visual maps, L1 whitespace, ellipsis | `3bb7f2d` |
 | W4 | Visual caret/selection/IME, affinity, password bullets, multi-rect paint | `d8654f6` |
 | W5a | Flex/wrap/grid/scroll geometry, table/tree logical columns, navigation/picker/CSD/overlay mirroring (non-paint) | `08d796f` |
-| W5b | Entry right-anchor, scrollbar side, tree chevron, menu first-open anchor, paint chrome | in progress; final gate backfills the commit |
+| W5b | Entry right-anchor, scrollbar side, tree chevron, menu first-open anchor, paint chrome | `6553270` |
 | W6a | AT-SPI object and text direction attributes, password-safe path | `69db766` |
-| W6b | README/guides/rtl.md final, ROADMAP/release records, RTL examples | `m22/w6b-docs` |
+| W6b | README/guides/rtl.md final, ROADMAP/release records, RTL examples | `b4bdf99` |
 | W7prep | Cross-version LTR byte-compatibility gate (`tools/ltr-compat.sh`, 10 scenes) | `43cfad6` |
-| W7 | Final gate, ABI diff against 1.4.0, bidi perf profiles, live RTL, tag readback | pending |
-| Integration | W0-W4 + W5a + W6a + W7prep on `m22/integration` | `cf520a0` |
+| W7 | Fuzz/perf hardening, live RTL consistency, ci.sh LTR stage, a11y bus isolation, final gate, ABI diff, tag readback | `m22/w7-hardening` (`a361d5b` onward); final gate numbers pending |
+| Integration | W0-W4 + W5a + W6a + W6b + W5b + W7prep on `m22/integration` | `a02a40e` |
 
 Landed detail per wave:
 
@@ -2061,14 +2061,27 @@ Landed detail per wave:
   objects publish `direction` through `GetAttributes` and
   `GetDefaultAttributes` with a scalar range; a password entry reports direction
   and caret but no character.
+- **W5b.** Entry text is right-anchored in RTL at `scroll_x = 0`, the scrollbar,
+  tree chevron and menu first-open anchor follow the resolved UI direction, and
+  the CSD/combo chrome paints on the mirrored side. LTR snapshots stay
+  byte-identical.
+- **W6b.** The README and public guides describe the delivered behavior,
+  `rtl.md` is rewritten as a delivered design in English and Simplified
+  Chinese, and the four-language RTL examples ship with `run-*` targets.
 - **W7prep.** `tools/ltr-compat.sh` builds 1.4.0 and the current tree in
   isolated temporary trees, renders a fixed LTR corpus and compares PPM images
   byte for byte. It checks in no golden hash because font rasterization differs
   between machines. The required result is 10/10 `SAME`.
+- **W7 hardening.** `test_bidi_fuzz` runs a fixed-seed mixed-script corpus
+  through paragraph/runs, the visual map and the entry editing path; `make
+  perf-check` gains three bidi/RTL ceilings; `tools/check-rtl-live.sh` verifies
+  live IME rectangle/caret-map agreement; `test_a11y_bridge` runs on a private
+  accessibility bus; `tools/ci.sh` runs the cross-version LTR gate and the live
+  RTL check.
 
 ### State on the integration tree
 
-Verified on `cf520a0`:
+Verified on the W7 hardening tree based on `a02a40e`:
 
 - `make -j8 werror=1` builds without warnings; `make check` is green, including
   `api-check`.
@@ -2081,19 +2094,17 @@ Verified on `cf520a0`:
   the RTL visual cases pass; the LTR visual goldens are unchanged.
 - ABI: SONAME `libpt.so.1`, 564 `pt_*` exports, no `SB_*` exports.
 - Sanitizer runs of the bidi/direction/rich-text suites report nothing;
-  `make perf-check` holds its existing ceilings.
+  `make perf-check` holds its existing ceilings plus the new bidi/RTL ceilings.
+- `test_bidi_fuzz`, `test_a11y_bridge` on a private bus, the live RTL probe and
+  `tools/ltr-compat.sh 1.4.0 HEAD` (10/10 `SAME`) pass on the W7 tree.
 
 Pending and recorded as such:
 
-- W5b is not in `cf520a0`, so entry right-anchoring at `scroll_x = 0`, the RTL
-  scrollbar/tree-chevron paint side and the menu first-open anchor warm-up are
-  the remaining behavior work. The final gate backfills its commit here and in
-  the release record; if the menu anchor needs a documented caveat it is written
-  there, not implied fixed.
-- W7 owns the final `make check-bindings`, bidi performance profiles, live RTL
-  caret/selection agreement, `tools/ci.sh`, `tools/release-check.sh --full`, the
-  symbol-level ABI diff against 1.4.0 (expected 0 removed / 0 changed / 8 added)
-  and the annotated tag readback.
+- The final gate still owns the full `make check-bindings` transcript on the
+  frozen tree, `tools/release-check.sh --full`, the symbol-level ABI diff
+  against 1.4.0 (expected 0 removed / 0 changed / 8 added) and the annotated tag
+  readback. The W7 hardening branch reports its own bounded counts; the final
+  gate replaces the remaining `pending final gate run` markers.
 - The README status line is 2.0.0 in this documentation branch, so the two
   expected README failures in `tools/release-check.sh` disappear here; the
   remaining open items stay the human tag/live ones.
@@ -2120,7 +2131,6 @@ Achieved on `cf520a0` plus this documentation branch:
 
 Still required before the tag:
 
-- Land W5b and backfill its commit and behavior claims.
 - Run the final gate: `make check`, `make check-bindings`, `make perf-check`
   with the new bidi profiles, the live suites (including a live RTL
   caret/selection check), `tools/ci.sh` and `tools/release-check.sh --full`.
@@ -2159,7 +2169,7 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 ### 2.0 — structural
 
 - RTL/bidi paragraph layout per [rtl.md](rtl.md) (delivered in M22 through
-  W6a/W6b; W5b chrome and the W7 final gate remain): a UBA implementation
+  W6b plus W7 hardening; only the final gate and tag remain): a UBA implementation
   (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link constraint),
   bidi-run shaping, logical offsets through the public API and AT-SPI, mirrored
   layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing,

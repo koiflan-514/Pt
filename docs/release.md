@@ -1160,15 +1160,15 @@ archive.
 
 ## 2.0.0 validation record (2026-11-23, draft — pending final gate run)
 
-Environment: the integration tree `cf520a0` on `m22/integration` (W0-W4, W5a,
-W6a and the W7prep LTR gate) plus the `m22/w6b-docs` documentation branch on the
-reference machine (CachyOS, Wayland, niri 26.04) with GCC 16.2.1, Python 3.14
-and OpenJDK 25.
+Environment: the integration tree `a02a40e` on `m22/integration` (W0-W4, W5a,
+W5b `6553270`, W6a, W6b `b4bdf99` and the W7prep LTR gate) plus the
+`m22/w7-hardening` branch, on the reference machine (CachyOS, Wayland,
+niri 26.04) with GCC 16.2.1, Python 3.14 and OpenJDK 25.
 
-**This record is a draft.** The scope, behaviour changes, known limits and the
-already-measured numbers are complete; every row that says *pending final gate
-run* is deliberately blank until W5b lands and W7 runs the full gate. Do not
-publish or tag from this page until those markers are replaced.
+**This record is a draft for the final gate.** Scope, behaviour changes, known
+limits and the hardening measurements are complete. Rows that still say
+*pending final gate run* cover the full-gate transcript on the frozen tree; do
+not publish or tag from this page until those markers are replaced.
 
 ### Scope
 
@@ -1218,7 +1218,13 @@ because 2.0 only adds declarations and corrects bidi rendering.
   and only the D-Bus `Text` interface uses scalar offsets.
 - **LTR protection.** The 17 pure-LTR snapshots in `test_visuals` are unchanged
   and `tools/ltr-compat.sh` compares 10 LTR scenes between 1.4.0 and this tree,
-  requiring 10/10 `SAME` with no checked-in golden hash.
+  requiring 10/10 `SAME` with no checked-in golden hash. `tools/ci.sh` now runs
+  that cross-version stage after the build and check.
+- **Hardening.** `test_bidi_fuzz` pushes fixed-seed mixed-script sequences
+  through paragraph/runs, the visual map and entry editing; `make perf-check`
+  adds mixed-paragraph wrap+paint, a 100-row RTL table paint and 1000 RTL caret
+  moves; `tools/check-rtl-live.sh` checks live IME-rectangle/map agreement;
+  `test_a11y_bridge` runs on a private accessibility bus.
 - **Examples.** `examples/c/rtl_gallery.c` plus
   `examples/cpp/rtl_direction.cpp`, `examples/python/rtl_direction.py` and
   `examples/java/RtlDirection.java`, each wired to a `run-*` target.
@@ -1270,14 +1276,14 @@ section an upgrading application must read:
 | API baseline | pass: `api/pt.api` reads 564 functions / 924 entries; the reference names all 564 |
 | Since audit | pass: 564/564 declarations carry a since marker (412/36/106/2/8), zero missing |
 | Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
-| Direction, bidi and rich-text suites | pass on `cf520a0`: `test_direction`, `test_bidi`, `test_bidi_conformance`, `test_rich_text`, plus the RTL cases in `test_text_area`, `test_visuals`, `test_table`, `test_tree` and `test_navigation` |
+| Direction, bidi and rich-text suites | pass on `a02a40e` and the W7 tree: `test_direction`, `test_bidi`, `test_bidi_conformance`, `test_rich_text`, plus the RTL cases in `test_text_area`, `test_visuals`, `test_table`, `test_tree` and `test_navigation` |
 | LTR byte stability | pass: 17 pure-LTR snapshots unchanged; `tools/ltr-compat.sh` reports 10/10 `SAME` (same-machine comparison, no checked-in hash) |
 | Binding parity | pass: 564/564 (100.0%) in C++, Python and Java, 0 missing, 0 allowlisted |
 | Bilingual documentation | pass: 9 public guides, including the rewritten `rtl.md`, with byte-identical code blocks |
 | RTL examples | pass: C/C++/Python/Java examples build under `werror=1`, exit 0 with `PT_HEADLESS=1`, and exit 124 under the nested niri smoke timeout |
-| `make check` / `make check-bindings` | pending final gate run (W7), after W5b lands |
-| `make perf-check` with bidi profiles | pending final gate run (W7) |
-| Live RTL caret/selection and the existing live suites | pending final gate run (W7) |
+| `make check` / `make check-bindings` | pending final gate run (full frozen-tree transcript); the W7 tree passes the bounded suites and parity checks |
+| `make perf-check` with bidi profiles | pass on the W7 tree: mixed paragraph wrap+paint ~0.85 ms (ceiling 2.0 ms), 100-row RTL table paint ~2.7 ms (ceiling 7.0 ms), 1000 RTL caret moves ~41 ms (ceiling 100 ms) |
+| Live RTL caret/selection and the existing live suites | pass locally on the W7 tree under nested niri: `tools/check-rtl-live.sh` reports IME rectangle/map agreement within one pixel; full live-suite transcript still pending the final gate |
 | Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pending final gate run (W7) |
 | ABI diff against 1.4.0 | expected 556 → 564 exported `pt_*` symbols, 0 removed, 0 changed, 8 added, SONAME unchanged; symbol-level run pending the final gate because libabigail is unavailable on the reference machine |
 | `tools/release-check.sh --full` | pending final gate run; the two README failures of the integration checkpoint are closed by this branch once the full report is rerun |
@@ -1297,10 +1303,6 @@ where libabigail exists.
 
 ### Known issues
 
-- **W5b is not in this tree.** Entry right-anchoring, the RTL scrollbar/tree
-  chevron paint side and the menu first-open anchor warm-up land in W5b. The
-  final gate must backfill its commit and record whether the menu anchor needs
-  a documented caveat; this draft does not claim it fixed.
 - **Table horizontal scrolling needs the scrollbar or keyboard.** The tested
   Wayland compositors expose no horizontal wheel axis; this is a platform limit
   recorded in [rtl.md](rtl.md), not a table defect.
@@ -1323,12 +1325,15 @@ where libabigail exists.
 
 ### Gate transcript
 
-This draft has no final gate transcript. On W7, replace this paragraph with
-the `tools/ci.sh` transcript, the live-suite results, the bidi performance
-numbers, the final parity counts and the ABI symbol diff, and remove every
-*pending final gate run* marker above. The 2.0.0 tag is created from that frozen
-tree; the two human open items remain the freeze commit/tag and the live-suite
-sign-off.
+The W7 hardening branch supplies the fuzz, bidi performance, private-bus
+accessibility, live RTL and 10/10 `SAME` cross-version LTR evidence, and
+`tools/ci.sh` now runs the LTR stage and `check-rtl-live` in its live block. The
+full frozen-tree transcript (all suites and bindings counts, sanitizer,
+tarball, `tools/release-check.sh --full`, ABI symbol diff and tag readback)
+remains for the final gate; replace this paragraph with that transcript and
+remove every *pending final gate run* marker above. The 2.0.0 tag is created
+from that frozen tree; the two human open items remain the freeze commit/tag
+and the live-suite sign-off.
 
 ## 1.4.0 validation record (2026-11-22)
 
