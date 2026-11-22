@@ -1,8 +1,9 @@
 # Third-party notices
 
 Pt vendors standard Wayland protocol XML files so that a source checkout builds
-without depending on the exact wayland-protocols installation layout, and one
-header-only SVG library so that icons work without an external SVG dependency.
+without depending on the exact wayland-protocols installation layout, one
+header-only SVG library so that icons work without an external SVG dependency,
+the SheenBidi Unicode bidi engine, and the Unicode conformance test data.
 Each vendored file retains its upstream license header.
 
 | Path | Upstream | License |
@@ -14,6 +15,7 @@ Each vendored file retains its upstream license header.
 | `protocols/text-input-unstable-v3.xml` | wayland-protocols (unstable) | MIT |
 | `protocols/pointer-gestures-unstable-v1.xml` | wayland-protocols (unstable) | MIT |
 | `src/nanosvg.h`, `src/nanosvgrast.h` | nanosvg (master) | zlib |
+| `third_party/sheenbidi/` | SheenBidi v3.0.0 | Apache-2.0 |
 
 ## nanosvg
 
@@ -49,6 +51,24 @@ appreciated but is not required.
 misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 ```
+
+## SheenBidi
+
+- Upstream: <https://github.com/Tehreer/SheenBidi>
+- Tag: `v3.0.0`, commit `cfe430e7375a7845b679adae9d51dac6deaa8858`
+- Fetched: 2026-11-22
+- Vendored at: `third_party/sheenbidi/` (`Source/`, `Headers/`, `LICENSE`,
+  `README.md`; no upstream tools or tests)
+- Tarball SHA-256:
+  `86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786`
+- License: Apache License 2.0. Upstream ships no separate NOTICE file, so no
+  NOTICE is reproduced; the license text is in `third_party/sheenbidi/LICENSE`.
+- Modifications: none. The sources and headers are byte-identical to the tag
+  apart from the added `PROVENANCE.md`, and keep their upstream Apache-2.0
+  headers. Pt compiles the engine as one unity translation unit
+  (`-DSB_CONFIG_UNITY`) with third-party warnings isolated in the Makefile.
+  UCD tables are from Unicode 17.0.0.
+- Upgrade policy: see `third_party/sheenbidi/PROVENANCE.md`.
 
 ## System libraries
 

@@ -63,6 +63,16 @@ PROTO_OBJECTS := $(patsubst $(BUILD)/protocols/%.c,$(OBJ)/protocols/%.o,$(PROTO_
 
 LIB_SOURCES := $(wildcard src/*.c) $(wildcard src/wayland/*.c)
 LIB_OBJECTS := $(patsubst %.c,$(OBJ)/%.o,$(LIB_SOURCES)) $(PROTO_OBJECTS)
+
+# SheenBidi (2.0 bidi) is vendored third-party code, compiled as one unity
+# translation unit. Its warnings are isolated so Pt's own sources stay
+# -Werror clean; -fvisibility=hidden keeps every SB* symbol inside libpt.
+SB_CFLAGS := $(filter-out -Werror,$(ALL_CFLAGS)) -DSB_CONFIG_UNITY \
+	-Ithird_party/sheenbidi/Headers -Ithird_party/sheenbidi/Source \
+	-Wno-unused-parameter -Wno-unused-function -Wno-unused-value \
+	-Wno-implicit-fallthrough
+BIDI_OBJECT := $(OBJ)/third_party/sheenbidi/SheenBidi.o
+LIB_OBJECTS += $(BIDI_OBJECT)
 LIB_DEPS := $(LIB_OBJECTS:.o=.d)
 $(LIB_OBJECTS): $(PROTO_HEADERS)
 
@@ -134,6 +144,16 @@ $(BUILD)/pt.pc: Makefile
 $(OBJ)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BIDI_OBJECT): third_party/sheenbidi/Source/SheenBidi.c
+	@mkdir -p $(dir $@)
+	$(CC) $(SB_CFLAGS) -MMD -MP -c $< -o $@
+
+# The adapter is Pt code and stays under -Werror; it only needs the engine's
+# public header path.
+$(OBJ)/src/bidi.o: src/bidi.c
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) -Ithird_party/sheenbidi/Headers -MMD -MP -c $< -o $@
 
 $(OBJ)/protocols/%.o: $(BUILD)/protocols/%.c
 	@mkdir -p $(dir $@)
