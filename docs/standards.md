@@ -22,9 +22,12 @@ states the check that must be added before it can be claimed.
   callback typedefs, opaque handles, enum constants and new structs; it may not
   remove or rename a symbol, change a signature, renumber an existing enum
   constant, or reorder the fields of an existing public struct.
-- SONAME stays `libpt.so.1` for the whole 1.x series. Any removal or signature
-  change requires a major bump to `libpt.so.2` and a migration guide; it is never
-  smuggled into a minor.
+- SONAME stays `libpt.so.1` while `ABI_MAJOR` is 1. A release may advance
+  `VERSION` to a new major without bumping `ABI_MAJOR` when it only adds
+  declarations and corrects behavior (2.0.0 is that case); any removal or
+  signature change requires a major bump to `libpt.so.2` and a migration guide,
+  and it is never smuggled into a minor. `tools/release-check.sh` compares the
+  SONAME with `ABI_MAJOR`, never with the release major.
 - New structs that may grow later carry a size or reserved fields from their
   first release. New enum constants are appended and documented `since 1.x`.
 - `tests/test_abi.c` pins every public enum constant, modifier/state bit,
@@ -341,57 +344,65 @@ fixes regressions only and adds no feature.
 
 ## Current deviations
 
-The 1.4.0 tree keeps the gaps this page was written around closed for the
-shared C surface: the generated reference derives its module list from
-`include/pt/*.h`, the baseline and reference agree on the 556-function /
-910-entry surface, every declaration carries a since marker (412 × 1.0,
-36 × 1.1, 106 × 1.2, 2 × 1.3), the bilingual pairs are in sync, the version is
-1.4.0 everywhere, and the ABI pins cover the existing enums, structs and limits.
-The three-language wrappers keep 556/556 with the reviewed allowlist empty; the
-final 1.4.0 gate on `e1104c2` ran C++ 844 checks, Python 67 tests and Java 685
-checks with 0 failures, the same counts as 1.3.0. 1.4.0 adds no public symbol,
-so the parity and ABI surface is unchanged by construction. The remaining
-deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under M21:
+The 2.0.0 tree closes the gaps this page was written around for the shared C
+surface: the generated reference derives its module list from
+`include/pt/*.h`, the baseline and reference agree on the **564-function /
+924-entry** surface, every declaration carries a since marker (412 × 1.0,
+36 × 1.1, 106 × 1.2, 2 × 1.3, 8 × 2.0), the bilingual pairs are in sync, the
+version is 2.0.0 everywhere, and the ABI pins cover the existing enums, structs
+and limits plus the two new direction enums. SONAME stays `libpt.so.1` through
+`ABI_MAJOR := 1`; the 2.0 API is additive and the major marks the bidi rendering
+correction, exactly as [api-policy.md](api-policy.md) describes. The
+three-language wrappers report **564/564** with the reviewed allowlist empty.
+Unicode conformance runs in `make check` (770,241 + 91,707 cases, 0 failures),
+and the LTR compatibility gates are in place (17 unchanged pure-LTR snapshots;
+`tools/ltr-compat.sh` 10/10 `SAME`).
 
+The remaining deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md)
+under M22:
+
+- **W5b paint chrome has not landed on the integration tree.** The final gate
+  expects entry right-anchoring at `scroll_x = 0`, the RTL scrollbar and tree
+  chevron paint side and the menu first-open anchor warm-up. They are in
+  progress in a parallel worktree; the release record must record whether the
+  menu anchor needed a caveat rather than implying it was fixed.
+- **The 2.0.0 gate is not complete.** `make check` and the documented
+  conformance/LTR checks pass on `cf520a0`, but the final `make check-bindings`,
+  bidi performance profiles, live RTL caret/selection run, `tools/ci.sh`,
+  `tools/release-check.sh --full` and the symbol-level ABI diff against 1.4.0
+  belong to W7 and are still pending. The release record keeps
+  `pending final gate run` markers until then.
+- **The RTL limitations are documented, not defects.** The tested Wayland
+  compositors expose no horizontal wheel axis, so a table scrolls horizontally
+  by scrollbar or keyboard; Shift+arrow across a soft wrap stays an in-line
+  visual move; a multi-line mapped selection collapses toward the logical edge
+  at the boundary while its painted rectangles stay correct; `pt_text_span`
+  stays frozen without a direction field; missing Arabic/Hebrew glyphs are
+  fallback/tofu reported by `pt_app_font_uncovered_count`; and bidi control
+  characters are not sanitized automatically. These are settled 2.0 decisions
+  in [rtl.md](rtl.md), not unfinished work.
 - **The SVG subset is documented, not complete.** `pt_icon_image` accepts SVG
   and, since 1.4, SVGZ through vendored nanosvg and resolves hicolor
   `scalable/` in `.svg`, `.svgz`, `.png` order, but text, raster images,
   filters, masks, `clipPath`, `use`/`symbol`, markers, animation and the full
   CSS cascade are ignored by the parser. A document with no drawable shape is
-  rejected. This is the same honest-subset rule the PNG path follows, not a
-  claim of full SVG support.
-- **Touch and tablet wire injection are covered.** Since 1.4 the fake
-  compositor injects `wl_touch`, tablet-v2, drag-and-drop and primary-selection
-  traffic, and `test_wire_input` asserts the resulting state and wire
-  parameters; the earlier deviation is closed.
+  rejected.
 - **The toplevel-icon path has no live compositor recording.** The wire test
   asserts the submission parameters and niri/Sway/Weston take the tested no-op
   path, but none of the matrix's KWin/Labwc/Muffin/Jay/Pila exposures was run in
   this round.
 - **The live IME composition matrix is partial.** The niri+fcitx5 cell is
   recorded by `make check-ime-live`; a KWin+fcitx5 v2 or Mutter+IBus v2 run is
-  still unavailable and is recorded as open rather than implied.
-- **The pickers are locale-independent.** The date picture is explicit, the
-  committed number separator is `.`, and the process locale is never read. This
-  is a documented contract, not an unfinished translation path.
-- **Binding raw dispatch is closed at wire level, not on a live seat.**
-  `tests/wire_driver.c` delivers real wire key and pointer events to the C++,
-  Python and Java callbacks in the headless gate; a physical-seat run remains
-  optional live coverage.
-- **The 1.4.0 gate is complete on `e1104c2`; the tag is pending.** `make check`
-  (37 executables, 8,991 checks plus the 454,380-check property suite),
-  `make check-bindings`, `make perf-check`, the live suites including
-  `make check-ime-live`, `tools/ci.sh` (exit 0) and
-  `tools/release-check.sh --full` all pass and are recorded in
-  [release.md](release.md); the symbol-level ABI diff against 1.3.0 is empty.
-  The two open items are the human freeze commit/tag and live-suite sign-off.
-  The 1.3.0 gate itself remains complete on `fafbcae`.
+  still unavailable and is recorded as open rather than implied. The same is
+  true for binding raw dispatch on a physical seat and pickers that are
+  locale-independent by design.
 
-The 1.1.0 work-in-progress also violated the section 2 landing rule (headers,
+The 1.1.0 work-in-progress violated the section 2 landing rule (headers,
 bindings, reference and tests did not land atomically). That history is kept in
-M18 so the rule is not quietly forgotten; it is not a current exception. M19,
-M20 and M21 kept the rule: each wave workstream landed header, implementation,
-C tests and ABI pins together, and the integration phase owned the baseline,
-reference, version and guides. 1.4.0 extended that discipline to a wave that
-added no public symbol: the header comment is the only contract change and the
-generated reference, guides, roadmap and release record moved with it.
+M18 so the rule is not quietly forgotten; it is not a current exception. M19
+through M21 kept the rule, and M22 kept it per wave: each workstream landed
+header, implementation, C tests and ABI pins together, the integration phase
+owned the baseline/reference, and the documentation branch owns the version,
+guides and release record. The 8 direction declarations landed with their
+baseline entries, reference entries, three-language wrappers and tests in W1,
+the same change that froze the 564/924 baseline.

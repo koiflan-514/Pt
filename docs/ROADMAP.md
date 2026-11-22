@@ -1963,98 +1963,170 @@ passes and the symbol-level diff against `1.3.0` is empty: 556 → 556 exported
 unchanged. The baseline stays at 556 functions with zero new symbols. The only
 step left is the owner's freeze confirmation and tag.
 
-## M22 - 2.0.0: RTL and bidirectional text (in progress)
+## M22 - 2.0.0: RTL and bidirectional text (W0-W6a delivered; W5b and the final gate pending)
 
 Goal: implement the Unicode Bidirectional Algorithm and RTL layout/editing per
-[rtl.md](rtl.md), the first structural major since 1.0. The public surface stays
-additive: 8 new direction functions + 2 new enums (6 values); zero-value
-defaults preserve LTR behavior, and the byte-offset and accessibility
-character-offset contracts do not move. 2.0.0 keeps SONAME `libpt.so.1` (the
-major marks the bidi rendering correction, not a binary break); an `ABI_MAJOR`
-variable decouples the version from the SONAME in the Makefile and
-release-check.
+[rtl.md](rtl.md), the first structural major since 1.0. The public surface is
+additive: 8 direction functions and 2 enums (6 values); zero-value defaults
+preserve LTR behavior, and the byte-offset and accessibility character-offset
+contracts do not move. 2.0.0 keeps SONAME `libpt.so.1` (the major marks the bidi
+rendering correction, not a binary break); `ABI_MAJOR` decouples the SONAME from
+`VERSION` in the Makefile and release-check.
 
-Decisions (researched 2026-11-22):
+Status (2026-11-23): W0-W4, W5a, W6a and the W7prep LTR gate are merged on
+`m22/integration` at `cf520a0`. The tree exports **564 functions / 924 baseline
+entries**; the three bindings report 564/564 with an empty allowlist; the
+vendored Unicode 18.0.0 conformance data passes 770,241 + 91,707 cases with 0
+failures; SONAME is `libpt.so.1` with `ABI_MAJOR := 1`. The documentary wrap-up
+(README, public guides, `rtl.md`, this milestone and the 2.0.0 release record)
+lands in `m22/w6b-docs`. Two pieces remain before the tag: **W5b paint chrome**
+(entry right-anchoring, scrollbar side, tree chevron, menu first-open anchor) is
+in progress in a parallel worktree and is not in `cf520a0`; **W7** owns the
+final gate run (bindings suite, bidi perf profiles, live RTL caret/selection,
+`tools/ci.sh`, `tools/release-check.sh --full`), the symbol-level ABI diff
+against 1.4.0 and the backfill of this section's gate numbers.
 
-- Bidi engine: vendored SheenBidi v3.0.0 (Apache-2.0, tag commit `cfe430e`),
-  unity-compiled to one object under `third_party/sheenbidi`; no FriBidi
-  (LGPL static-link cost). Proven 100% UBA conformance.
+Decisions (researched 2026-11-22, kept as taken):
+
+- Bidi engine: vendored SheenBidi v3.0.0 (Apache-2.0, tag commit `cfe430e`,
+  UCD 17.0.0), unity-compiled to one object under `third_party/sheenbidi`; no
+  FriBidi (LGPL static-link cost). The UTF-8 entry point has an upstream L1
+  line-end whitespace bug, so Pt's adapter decodes to UTF-32 with a
+  byte-offset table and drives the internal path; `PROVENANCE.md` records it.
 - Conformance: Unicode `BidiTest.txt` + `BidiCharacterTest.txt` (18.0.0,
   Unicode License v3) vendored gzipped under `tests/data/bidi`; a headless
-  conformance suite runs in `make check` (770,241 + 91,707 cases, 0 failures).
+  conformance suite runs in `make check` (770,241 + 91,707 cases, 0 failures,
+  about 0.5 s).
 - Caret: visual arrow movement by default; logical movement via the existing
   window key callback escape hatch; no new caret-mode API in 2.0.
 - Spans: `pt_text_span` stays frozen (style only, no direction field).
 - Fonts: missing Arabic/Hebrew glyphs are documented fallback/tofu, not a hard
   error; tests use DejaVu Sans / Noto with skip.
 - `padding`/`margin` stay physical; table/tree keep logical column order.
+- Accessibility: object-level `direction` plus `Text.GetAttributes` and
+  `GetDefaultAttributes` direction; the C getter keeps byte offsets and only the
+  D-Bus `Text` interface uses scalar offsets. The earlier rtl.md sentence that
+  called every accessibility getter scalar was corrected in this wrap-up.
 
-Waves: W0 engine + conformance parallel with W1 direction API + bindings +
-baseline (564 functions / 924 entries); W2 UBA + single-line rendering; W3
-wrap / text area; W4 editing (highest risk); W5a UI mirroring (non-paint)
-parallel with W2-W4; W5b paint chrome; W6 accessibility / examples / docs; W7
-conformance / fuzz / perf / LTR-byte-stable / live hardening. `paint.c` is the
-sequential hotspot W2 -> W3 -> W4 -> W5b.
+### Delivered waves and evidence
 
-Staging: W0 + W1 + W2 land as a green checkpoint on `m22/integration` (main
-stays 1.4.0, no 2.0 tag yet); W3-W7 continue after the Lobster credit reset
-(2026-11-27) restores dual-provider parallelism. 2.0.0 is tagged only when the
-full rtl.md delivery order is complete and gated.
+| Wave | Scope | Evidence |
+| --- | --- | --- |
+| W0 | SheenBidi vendoring, UTF-32 adapter, conformance suite | `52d6034` |
+| W1 | Direction enums/API, resolution, bindings, 564/924 baseline | `25b5b6c` |
+| W2 | UBA levels, per-run shaping, single-line visual rendering | `2098382` |
+| W3 | Wrapping, per-line base, logical/visual maps, L1 whitespace, ellipsis | `3bb7f2d` |
+| W4 | Visual caret/selection/IME, affinity, password bullets, multi-rect paint | `d8654f6` |
+| W5a | Flex/wrap/grid/scroll geometry, table/tree logical columns, navigation/picker/CSD/overlay mirroring (non-paint) | `08d796f` |
+| W5b | Entry right-anchor, scrollbar side, tree chevron, menu first-open anchor, paint chrome | in progress; final gate backfills the commit |
+| W6a | AT-SPI object and text direction attributes, password-safe path | `69db766` |
+| W6b | README/guides/rtl.md final, ROADMAP/release records, RTL examples | `m22/w6b-docs` |
+| W7prep | Cross-version LTR byte-compatibility gate (`tools/ltr-compat.sh`, 10 scenes) | `43cfad6` |
+| W7 | Final gate, ABI diff against 1.4.0, bidi perf profiles, live RTL, tag readback | pending |
+| Integration | W0-W4 + W5a + W6a + W7prep on `m22/integration` | `cf520a0` |
 
-### Staging checkpoint (2026-11-22)
+Landed detail per wave:
 
-W0, W1 and W2 are delivered on `m22/integration` at `2098382` (fast-forward
-from `f9b3336`), with main held at 1.4.0 and no 2.0 tag. Evidence commits: W0
-engine + conformance `52d6034`, W1 direction API + bindings + baseline
-`25b5b6c`, integration fix-up `f9b3336`, W2 shaping + single-line rendering
-`2098382`.
+- **W0.** `third_party/sheenbidi` is byte-identical to v3.0.0 apart from
+  `PROVENANCE.md`; the Makefile compiles it with `-DSB_CONFIG_UNITY`, isolates
+  its warnings and keeps `-fvisibility=hidden` so no `SB_*` symbol is exported.
+  `src/bidi.c` owns the UTF-32 adapter and byte maps; no engine type escapes it.
+  `test_bidi_conformance` runs the gzipped Unicode 18.0.0 data.
+- **W1.** `pt_ui_direction` (`inherit`/`ltr`/`rtl`) and `pt_text_direction`
+  (`auto`/`ltr`/`rtl`) plus app, window and widget UI setters/getters and
+  widget text setters/getters. Resolution is widget → nearest explicit ancestor
+  → window → app → LTR; text is widget → ancestor → auto, with neutral-only
+  fallback to the resolved UI direction. Getters return the explicit value.
+  Baseline and reference read 564 functions / 924 entries; the three bindings
+  wrap 564/564 with an empty allowlist.
+- **W2.** Levels, X9 removal/restoration semantics (controls stay in shaping and
+  are skipped when painted), reorder, per-run explicit HarfBuzz direction,
+  automatic bracket mirroring, Arabic joining, per-paragraph base, the LTR fast
+  path and the shape-cache direction key. LTR snapshots stay byte-identical.
+- **W3.** Logical wrapping into candidate lines, per-line visual reorder with a
+  per-paragraph base, L1 trailing-whitespace reset, visual-end ellipsis,
+  RTL counter and bidi goldens, and the logical/visual byte map that measurement
+  and hit testing consume.
+- **W4.** Visual caret edges, affinity at soft-wrap boundaries, Home/End visual
+  line ends, Ctrl+Home/End document logical, Shift logical anchor,
+  Backspace/Delete logical, multi-rectangle selection per visual run, visual IME
+  rectangles, password bullets from the stored text direction, and the soft-wrap
+  boundary fix (`d8654f6`) that assigns a caret to the correct line.
+- **W5a.** Flex row/wrap/grid placement, start/end alignment and justify,
+  scrollbar side, tabs, sidebar, picker popups, client-side decoration and
+  overlay chrome mirror from the resolved UI direction; table and tree columns
+  keep logical order through an internal opt-out; padding/margin remain
+  physical.
+- **W6a.** Every accessible object publishes the resolved UI direction; text
+  objects publish `direction` through `GetAttributes` and
+  `GetDefaultAttributes` with a scalar range; a password entry reports direction
+  and caret but no character.
+- **W7prep.** `tools/ltr-compat.sh` builds 1.4.0 and the current tree in
+  isolated temporary trees, renders a fixed LTR corpus and compares PPM images
+  byte for byte. It checks in no golden hash because font rasterization differs
+  between machines. The required result is 10/10 `SAME`.
 
-Gate results at this checkpoint:
+### State on the integration tree
 
-- `make clean && make -j8` builds with zero warnings; `make check` is green,
-  including `api-check`.
+Verified on `cf520a0`:
+
+- `make -j8 werror=1` builds without warnings; `make check` is green, including
+  `api-check`.
 - Conformance: Unicode 18.0.0 `BidiTest` 770,241 cases and
   `BidiCharacterTest` 91,707 cases, 0 failures.
 - API: 564 functions / 924 frozen entries; binding parity 564/564 (100%) for
-  cpp, python and java, 0 missing, 0 allowlisted; the generated reference
-  matches at Version 2.0.0 · 564 functions.
-- LTR snapshots are byte-for-byte stable: `test_bidi`, `test_rich_text` and
-  `test_direction` each pass 20/20 consecutive runs with no visual regression.
-- ABI: SONAME `libpt.so.1`, decoupled from the 2.0.0 version through
-  `ABI_MAJOR`; 564 `pt_*` exports, no `SB_*` exports.
-- Sanitizer (ASan + UBSan, leak detection on) runs of `test_bidi`,
-  `test_bidi_conformance`, `test_direction` and `test_rich_text` report nothing;
-  `make perf-check` holds every ceiling.
+  C++/Python/Java, 0 missing, 0 allowlisted; the generated reference reads
+  Version 2.0.0 · 564 functions.
+- `test_direction`, `test_bidi`, `test_bidi_conformance`, `test_rich_text` and
+  the RTL visual cases pass; the LTR visual goldens are unchanged.
+- ABI: SONAME `libpt.so.1`, 564 `pt_*` exports, no `SB_*` exports.
+- Sanitizer runs of the bidi/direction/rich-text suites report nothing;
+  `make perf-check` holds its existing ceilings.
 
-Intermediate state, recorded as-is:
+Pending and recorded as such:
 
-- Entry caret, selection, preedit, scroll and IME-rect positioning are still
-  logical (single-line assumption): W4.
-- Width-driven wrapping and per-line visual reordering with per-line base
-  alignment are not done: W3. This includes the `font.c` single-line shaping API
-  falling back for multiple paragraphs.
-- `pt_text_runs_position_for_x` is still a logical approximation: W3/W4.
-- UI mirroring has not started: W5.
-- Accessibility `direction` attribute, examples and bilingual doc wrap-up are
-  pending: W6.
-- LTR cross-version PNG comparison, live RTL, fuzz and bidi perf profiles are
-  pending: W7.
-- README still reports 1.4.0, so `tools/release-check.sh` shows 2 expected
-  README failures; closing this is part of the wrap-up.
-
-W3-W7 resume once the Lobster credit reset (2026-11-27) restores dual-provider
-parallelism. 2.0.0 is tagged only after all seven steps are complete and gated.
+- W5b is not in `cf520a0`, so entry right-anchoring at `scroll_x = 0`, the RTL
+  scrollbar/tree-chevron paint side and the menu first-open anchor warm-up are
+  the remaining behavior work. The final gate backfills its commit here and in
+  the release record; if the menu anchor needs a documented caveat it is written
+  there, not implied fixed.
+- W7 owns the final `make check-bindings`, bidi performance profiles, live RTL
+  caret/selection agreement, `tools/ci.sh`, `tools/release-check.sh --full`, the
+  symbol-level ABI diff against 1.4.0 (expected 0 removed / 0 changed / 8 added)
+  and the annotated tag readback.
+- The README status line is 2.0.0 in this documentation branch, so the two
+  expected README failures in `tools/release-check.sh` disappear here; the
+  remaining open items stay the human tag/live ones.
 
 ### Completion criteria
 
-`make check` (including `test_direction` / `test_bidi` /
-`test_bidi_conformance`), `make check-bindings` at 564/564 with an empty
-allowlist, `make perf-check` (LTR ceilings not relaxed plus new bidi profiles),
-`tools/ci.sh`, `tools/release-check.sh --full` (new SONAME policy, no `SB_*`
-exports), bilingual rtl.md decision sync, an append-only ABI diff against
-1.4.0 (0 removed / 0 changed / 8 added), BidiTest 0 failures, LTR
-byte-for-byte stability against 1.4.0 on the same machine, and live RTL
-caret/selection agreement.
+Achieved on `cf520a0` plus this documentation branch:
+
+- `make check` includes `test_direction`, `test_bidi` and
+  `test_bidi_conformance`; the baseline is 564 functions / 924 entries and the
+  generated reference covers all of them.
+- Three-language parity is 564/564 with an empty allowlist.
+- UBA conformance is 770,241 + 91,707 cases with 0 failures.
+- `rtl.md` is rewritten as a delivered design (decision records, entry
+  right-anchoring, visual caret, logical columns, physical padding, bounded
+  per-rebuild performance wording, byte/scalar correction and limitations) in
+  English and Simplified Chinese.
+- The LTR double gate is in place: 17 pure-LTR snapshots unchanged and
+  `tools/ltr-compat.sh` at 10/10 `SAME`.
+- The RTL examples exist in all four languages with `run-*` targets and a
+  headless smoke result.
+- SONAME stays `libpt.so.1` through `ABI_MAJOR`, and `api-policy.md` records
+  why a behavior-only major does not bump the object name.
+
+Still required before the tag:
+
+- Land W5b and backfill its commit and behavior claims.
+- Run the final gate: `make check`, `make check-bindings`, `make perf-check`
+  with the new bidi profiles, the live suites (including a live RTL
+  caret/selection check), `tools/ci.sh` and `tools/release-check.sh --full`.
+- Record the symbol-level ABI diff against 1.4.0 (8 added, 0 removed, 0
+  changed), replace every `pending final gate run` marker in
+  [release.md](release.md), and tag 2.0.0 from the frozen tree.
 
 ## Post-1.0 horizons
 
@@ -2086,11 +2158,12 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 
 ### 2.0 — structural
 
-- RTL/bidi paragraph layout per [rtl.md](rtl.md) (in progress in M22): a UBA
-  implementation (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link
-  constraint), bidi-run shaping, logical offsets through the public API and
-  AT-SPI, mirrored layout/chrome, Unicode BidiTest conformance. Changes layout
-  and hit-testing, so it cannot land in a minor.
+- RTL/bidi paragraph layout per [rtl.md](rtl.md) (delivered in M22 through
+  W6a/W6b; W5b chrome and the W7 final gate remain): a UBA implementation
+  (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link constraint),
+  bidi-run shaping, logical offsets through the public API and AT-SPI, mirrored
+  layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing,
+  so it could not land in a minor.
 - Inline image runs (U+FFFC object replacement, baseline alignment, atomic
   selection, alt-text copy, embedded-object accessibility).
 - Optional Vulkan/EGL renderer behind the same canvas contract, software by
