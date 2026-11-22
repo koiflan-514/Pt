@@ -240,7 +240,7 @@ Two hard gates protect LTR:
 - The 17 pure-LTR PNG snapshots in `test_visuals` are byte-identical to their
   1.4 output.
 - `tools/ltr-compat.sh` builds 1.4.0 and the 2.0 tree on the same machine and
-  compares 10 LTR scenes byte for byte. The release gate requires 10/10 `SAME`.
+  compares 11 LTR scenes byte for byte. The release gate requires 11/11 `SAME`.
   No golden hash is checked in, because FreeType, HarfBuzz and the installed
   fonts legitimately differ between machines; building both revisions on one
   machine holds them constant.
@@ -322,7 +322,7 @@ These are documented behavior, not hidden surprises:
   object-level direction attribute, text-attribute direction and the
   password-with-direction case.
 - **LTR compatibility.** The 17 snapshot goldens and `tools/ltr-compat.sh`'s
-  10-scene cross-version comparison are release gates, not optional checks.
+  11-scene cross-version comparison are release gates, not optional checks.
 
 ## Delivered waves
 

@@ -193,8 +193,8 @@ Makefile 将 `ABI_MAJOR` 与 `VERSION` 分开跟踪，方向 API 只新增声明
 两道硬门保护 LTR：
 
 - `test_visuals` 中 17 张纯 LTR PNG 快照与其 1.4 输出逐字节一致。
-- `tools/ltr-compat.sh` 在同一台机器上构建 1.4.0 和 2.0 树，并逐字节比较 10 个
-  LTR 场景。发布闸门要求 10/10 `SAME`。不签入 golden hash，因为 FreeType、
+- `tools/ltr-compat.sh` 在同一台机器上构建 1.4.0 和 2.0 树，并逐字节比较 11 个
+  LTR 场景。发布闸门要求 11/11 `SAME`。不签入 golden hash，因为 FreeType、
   HarfBuzz 和已安装字体在不同机器上会合理变化；在同一台机器上构建两个版本可以
   让这些因素保持恒定。
 
@@ -256,7 +256,7 @@ O(n)；文本段/映射分配受行长度限制，并随文本布局释放。整
   滚动条一侧、箭头、表格/树逻辑列和嵌套 LTR 面板。
 - **无障碍。** `test_a11y` 和实时 `test_a11y_bridge` 覆盖对象级方向属性、文本
   属性方向和带方向的密码用例。
-- **LTR 兼容性。** 17 张快照 golden 和 `tools/ltr-compat.sh` 的 10 场景跨版本
+- **LTR 兼容性。** 17 张快照 golden 和 `tools/ltr-compat.sh` 的 11 场景跨版本
   比较是发布闸门，而不是可选检查。
 
 ## 已交付波次

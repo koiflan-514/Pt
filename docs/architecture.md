@@ -847,7 +847,7 @@ P2/P3 with isolates, neutral fallback and invalid input. `test_rich_text`,
 `test_navigation` carry the wrapped-line, caret, mirroring and golden cases.
 `test_visuals` keeps the 17 pure-LTR snapshots byte-identical to 1.4, and
 `tools/ltr-compat.sh` builds the 1.4.0 tag and the current tree on one machine
-and compares ten LTR scenes as PPM bytes; the gate requires 10/10 `SAME` and
+and compares eleven LTR scenes as PPM bytes; the gate requires 11/11 `SAME` and
 checks in no golden hash, because font rasterization legitimately varies
 between machines.
 

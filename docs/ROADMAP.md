@@ -2024,7 +2024,7 @@ Decisions (researched 2026-11-22, kept as taken):
 | W5b | Entry right-anchor, scrollbar side, tree chevron, menu first-open anchor, paint chrome | `6553270` |
 | W6a | AT-SPI object and text direction attributes, password-safe path | `69db766` |
 | W6b | README/guides/rtl.md final, ROADMAP/release records, RTL examples | `b4bdf99` |
-| W7prep | Cross-version LTR byte-compatibility gate (`tools/ltr-compat.sh`, 10 scenes) | `43cfad6` |
+| W7prep | Cross-version LTR byte-compatibility gate (`tools/ltr-compat.sh`, 10 scenes; 11 after W7) | `43cfad6` |
 | W7 | Fuzz/perf hardening, live RTL consistency, ci.sh LTR stage, a11y bus isolation, CSD-title and entry-shaping fixes, final gate, ABI diff | `91176c2` (12 commits, `a361d5b` through `91176c2`) |
 | Integration | W0-W4 + W5a + W6a + W6b + W5b + W7prep on `m22/integration` | `a02a40e`, fast-forwarded to W7 tip `91176c2`; final gate record backfilled at `a36b1c9` |
 
@@ -2074,7 +2074,7 @@ Landed detail per wave:
 - **W7prep.** `tools/ltr-compat.sh` builds 1.4.0 and the current tree in
   isolated temporary trees, renders a fixed LTR corpus and compares PPM images
   byte for byte. It checks in no golden hash because font rasterization differs
-  between machines. The required result is 10/10 `SAME`.
+  between machines. The required result is 11/11 `SAME`.
 - **W7 hardening.** `test_bidi_fuzz` runs a fixed-seed mixed-script corpus
   through paragraph/runs, the visual map and the entry editing path; `make
   perf-check` gains three bidi/RTL ceilings; `tools/check-rtl-live.sh` verifies

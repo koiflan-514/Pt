@@ -655,7 +655,7 @@ tablet-v2 的 seat/tool 生命周期、proximity、压力、倾斜、旋转、�
 `test_table`、`test_tree` 和 `test_navigation` 承载换行、插入符号、镜像和
 快照用例。`test_visuals` 保持 17 张纯 LTR 快照与 1.4 逐字节一致，而
 `tools/ltr-compat.sh` 在同一台机器上构建 1.4.0 标签和当前树，并以 PPM 字节
-比较十个 LTR 场景；闸门要求 10/10 `SAME`，且不签入 golden hash，因为字体
+比较十一个 LTR 场景；闸门要求 11/11 `SAME`，且不签入 golden hash，因为字体
 光栅化在不同机器上有合理差异。
 
 实时 IME 组合有自己的 harness。`tools/live-ime.sh` 启动嵌套 niri 和运行 pinyin
