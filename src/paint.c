@@ -1795,7 +1795,7 @@ static uint32_t table_header_sort_priority(const pt_widget *cell) {
 
 static void paint_sort_priority_badge(pt_canvas *canvas, pt_widget *cell,
                                       uint32_t priority) {
-    float cx = paint_rtl(cell) ? cell->x + cell->padding_right + 24.0f
+    float cx = paint_rtl(cell) ? cell->x + cell->padding_left + 24.0f
                                : cell->x + cell->width - cell->padding_right - 24.0f;
     float cy = cell->y + cell->height * 0.5f;
     pt_canvas_fill_circle(canvas, cx, cy, 7.0f,
@@ -1833,7 +1833,7 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
                  cell->parent->parent->extra &&
                  ((const pt_table_state *)cell->parent->parent->extra)->sort_count > 1;
     float icon_space = cell->icon != pt_icon_none ? (multi ? 40.0f : 20.0f) : 0.0f;
-    float area_x = rtl ? cell->x + cell->padding_right + icon_space
+    float area_x = rtl ? cell->x + cell->padding_left + icon_space
                        : cell->x + cell->padding_left;
     pt_rect area = {area_x, cell->y,
                     pt_max_float(0.0f, cell->width - cell->padding_left -
@@ -1846,7 +1846,7 @@ static void paint_table_header_cell(pt_canvas *canvas, pt_widget *cell) {
     paint_single_line(canvas, cell, title, text_color(cell), title_align, true, 0.0f, area);
     if (cell->icon != pt_icon_none) {
         pt_color icon_color = color_from_theme(cell, pt_theme_accent);
-        float icon_x = rtl ? cell->x + cell->padding_right + 7.0f
+        float icon_x = rtl ? cell->x + cell->padding_left + 7.0f
                            : cell->x + cell->width - cell->padding_right - 7.0f;
         pt_paint_icon_glyph(canvas, cell->icon, icon_x,
                             cell->y + cell->height * 0.5f, 14.0f, icon_color);
@@ -1894,7 +1894,7 @@ static void paint_table_cell(pt_canvas *canvas, pt_widget *cell) {
     float icon_space = has_icon ? 22.0f : 0.0f;
     if (has_icon) {
         pt_color icon_color = cell->has_foreground ? cell->foreground : text_color(cell);
-        float icon_x = rtl ? cell->x + cell->width - cell->padding_left - 8.0f
+        float icon_x = rtl ? cell->x + cell->width - cell->padding_right - 8.0f
                            : cell->x + cell->padding_left + 8.0f;
         pt_paint_icon_glyph(canvas, cell->icon, icon_x,
                             cell->y + cell->height * 0.5f, 16.0f, icon_color);
@@ -1902,7 +1902,7 @@ static void paint_table_cell(pt_canvas *canvas, pt_widget *cell) {
     /* The body text starts on the far side of the icon: right-edge inset in
      * LTR, mirrored to the left in RTL, so the slot always gives way from the
      * icon's side and never runs underneath it. */
-    float area_x = rtl ? cell->x + cell->padding_right
+    float area_x = rtl ? cell->x + cell->padding_left
                        : cell->x + cell->padding_left + icon_space;
     pt_rect area = {area_x, cell->y,
                     pt_max_float(0.0f, cell->width - cell->padding_left -
@@ -2087,7 +2087,7 @@ static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
     if (compact) {
         icon_x = item->x + item->width * 0.5f;
     } else if (rtl) {
-        icon_x = item->x + item->width - item->padding_left - 10.0f;
+        icon_x = item->x + item->width - item->padding_right - 10.0f;
     } else {
         icon_x = item->x + item->padding_left + 10.0f;
     }
@@ -2099,7 +2099,7 @@ static void paint_sidebar_item(pt_canvas *canvas, pt_widget *item) {
     pt_paint_icon_glyph(canvas, item->icon, icon_x, item->y + item->height * 0.5f,
                         icon_size, icon_color);
     if (!compact) {
-        float area_x = rtl ? item->x + item->padding_right
+        float area_x = rtl ? item->x + item->padding_left
                            : item->x + item->padding_left + 32.0f;
         pt_rect area = {area_x, item->y,
                         pt_max_float(0.0f, item->width - item->padding_left -

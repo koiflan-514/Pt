@@ -394,6 +394,116 @@ static void test_tabs_sidebar_rtl(pt_app *app) {
     pt_window_free(window);
 }
 
+/* RTL sidebar items mirror the icon to the right edge. The inset there is the
+ * physical padding_right, not the left padding, and the label gives way from
+ * the same side. Asymmetric padding exposes a mix-up that symmetric values
+ * would hide. */
+static void test_sidebar_rtl_padding(pt_app *app) {
+    static const char label[] =
+        "\xD7\x90\xD7\x91\xD7\x92\xD7\x93\xD7\x94\xD7\x95\xD7\x96\xD7\x97"
+        "\xD7\x98\xD7\x99\xD7\x9A\xD7\x9B\xD7\x9C\xD7\x9D\xD7\x9E\xD7\x9F"
+        "\xD7\xA0\xD7\xA1\xD7\xA2\xD7\xA3\xD7\xA4\xD7\xA5\xD7\xA6\xD7\xA7";
+    pt_window *window = pt_window_create(app, "sidebar-rtl-padding", 360, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *sidebar = pt_sidebar_create(root);
+    pt_check(sidebar != NULL);
+    pt_widget_set_align_self(sidebar, pt_align_start);
+    pt_widget_set_size(sidebar, 240.0f, 260.0f);
+    pt_widget *item = pt_sidebar_add_item(sidebar, pt_icon_document, label);
+    pt_check(item != NULL);
+    pt_sidebar_add_item(sidebar, pt_icon_home, "\xD7\x91\xD7\x99\xD7\xAA");
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(360, 300, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+
+    pt_widget_set_padding(item, 0.0f, 24.0f, 0.0f, 4.0f);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect r = bounds_of(item);
+    pt_color background = pt_canvas_get_pixel(canvas, (int)(r.x + r.w * 0.5f),
+                                             (int)r.y + 3);
+
+    float fixed_icon = r.x + r.w - item->padding_right - 10.0f;
+    float old_icon = r.x + r.w - item->padding_left - 10.0f;
+    int fixed_ink = 0;
+    int old_ink = 0;
+    int mid = (int)(r.y + r.h * 0.5f);
+    for (int y = mid - 8; y <= mid + 8; ++y) {
+        for (int x = (int)floorf(fixed_icon - 8.0f); x <= (int)ceilf(fixed_icon + 8.0f);
+             ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++fixed_ink;
+            }
+        }
+        for (int x = (int)floorf(old_icon - 8.0f); x <= (int)ceilf(old_icon + 8.0f);
+             ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++old_ink;
+            }
+        }
+    }
+    pt_check(fixed_ink > 0);
+    pt_check(old_ink == 0);
+
+    /* The label slot ends at width - pr - 32: the mirror of the LTR lead
+     * inset. Nothing may ink between there and the icon. */
+    float text_right = r.x + r.w - item->padding_right - 32.0f;
+    int gap_x0 = (int)ceilf(text_right) + 2;
+    int gap_x1 = (int)floorf(fixed_icon - 8.0f) - 1;
+    pt_check(gap_x1 >= gap_x0);
+    int gap_ink = 0;
+    for (int y = mid - 6; y <= mid + 6; ++y) {
+        for (int x = gap_x0; x <= gap_x1; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++gap_ink;
+            }
+        }
+    }
+    pt_check(gap_ink == 0);
+
+    /* The long label still paints, ending at the corrected right edge. */
+    int label_ink = 0;
+    for (int y = mid - 6; y <= mid + 6; ++y) {
+        for (int x = (int)(r.x + item->padding_left); x < (int)text_right - 2; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++label_ink;
+            }
+        }
+    }
+    pt_check(label_ink > 0);
+
+    /* LTR keeps the icon on the physical left. */
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    pt_check(pt_window_paint(window, canvas));
+    r = bounds_of(item);
+    background = pt_canvas_get_pixel(canvas, (int)(r.x + r.w * 0.5f), (int)r.y + 3);
+    mid = (int)(r.y + r.h * 0.5f);
+    float ltr_icon = r.x + item->padding_left + 10.0f;
+    int ltr_ink = 0;
+    for (int y = mid - 8; y <= mid + 8; ++y) {
+        for (int x = (int)floorf(ltr_icon - 8.0f); x <= (int)ceilf(ltr_icon + 8.0f);
+             ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++ltr_ink;
+            }
+        }
+    }
+    pt_check(ltr_ink > 0);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.navigation");
@@ -405,6 +515,7 @@ int main(void) {
     test_tabs(app);
     test_sidebar(app);
     test_tabs_sidebar_rtl(app);
+    test_sidebar_rtl_padding(app);
     pt_app_destroy(app);
     return pt_test_finish("navigation");
 }

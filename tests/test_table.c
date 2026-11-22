@@ -710,6 +710,93 @@ static void test_table_rtl_icon_padding(pt_app *app) {
     pt_check(gap_x1 >= gap_x0);
     pt_check(distinct_pixels(canvas, gap_x0, gap_x1, cy2 - 6, cy2 + 6, row_bg) == 0);
 
+    /* Asymmetric padding keeps the physical insets: the icon uses the right
+     * padding even though the layout runs right to left. */
+    pt_widget_set_padding(cell0, 6.0f, 24.0f, 6.0f, 4.0f);
+    pt_widget_set_padding(cell2, 6.0f, 24.0f, 6.0f, 4.0f);
+    pt_widget *head = header_cell(table, 0);
+    pt_check(head != NULL);
+    if (head) {
+        pt_widget_set_icon(head, pt_icon_document);
+    }
+    if (head) {
+        pt_widget_set_padding(head, 6.0f, 24.0f, 6.0f, 4.0f);
+    }
+    pt_check(pt_window_paint(window, canvas));
+    c0 = bounds_of(cell0);
+    c2 = bounds_of(cell2);
+    pt_check_near(c0.x, c2.x, 0.01);
+    cy0 = (int)(c0.y + c0.h * 0.5f);
+    cy2 = (int)(c2.y + c2.h * 0.5f);
+    row_bg = pt_canvas_get_pixel(canvas, (int)c0.x + 2, cy0);
+
+    float fixed_icon = c0.x + c0.w - cell0->padding_right - 8.0f;
+    float old_icon = c0.x + c0.w - cell0->padding_left - 8.0f;
+    int fixed_ink = distinct_pixels(canvas, (int)floorf(fixed_icon - 7.0f),
+                                    (int)ceilf(fixed_icon + 7.0f), cy2 - 7, cy2 + 7,
+                                    row_bg);
+    int old_ink = distinct_pixels(canvas, (int)floorf(old_icon - 7.0f),
+                                  (int)ceilf(old_icon + 7.0f), cy0 - 7, cy0 + 7,
+                                  row_bg);
+    pt_check(fixed_ink > 0);
+    pt_check(old_ink == 0);
+
+    /* The text hugs width - pr - 22, so nothing is inked between there and the
+     * mirrored icon. */
+    int text_gap0 = (int)ceilf(c0.x + c0.w - cell0->padding_right - 22.0f) + 2;
+    int text_gap1 = (int)floorf(fixed_icon - 7.0f) - 1;
+    pt_check(text_gap1 >= text_gap0);
+    pt_check(distinct_pixels(canvas, text_gap0, text_gap1, cy2 - 6, cy2 + 6,
+                             row_bg) == 0);
+
+    /* The icon region still matches the short row under the asymmetric sides. */
+    icon_diff = 0;
+    for (int y = -7; y <= 7; ++y) {
+        for (int x = (int)floorf(fixed_icon - 7.0f); x <= (int)ceilf(fixed_icon + 7.0f);
+             ++x) {
+            if (pt_canvas_get_pixel(canvas, x, cy0 + y) !=
+                pt_canvas_get_pixel(canvas, x, cy2 + y)) {
+                ++icon_diff;
+            }
+        }
+    }
+    pt_check(icon_diff == 0);
+
+    /* Header: the mirrored icon follows the left padding (accent glyph) and
+     * the title ends at width - pr instead of width - pl. */
+    if (head) {
+        pt_rect h = bounds_of(head);
+        pt_color accent = pt_app_get_theme_color(app, pt_theme_accent);
+        pt_color header_bg = pt_canvas_get_pixel(canvas, (int)(h.x + h.w * 0.5f), (int)h.y + 3);
+        float head_icon = h.x + head->padding_left + 7.0f;
+        float head_old = h.x + head->padding_right + 7.0f;
+        int head_ink = 0;
+        int head_old_ink = 0;
+        for (int y = (int)(h.y + h.h * 0.5f) - 6; y <= (int)(h.y + h.h * 0.5f) + 6; ++y) {
+            for (int x = (int)floorf(head_icon - 6.0f); x <= (int)ceilf(head_icon + 6.0f);
+                 ++x) {
+                if (pt_canvas_get_pixel(canvas, x, y) == accent) {
+                    ++head_ink;
+                }
+            }
+            for (int x = (int)floorf(head_old - 6.0f); x <= (int)ceilf(head_old + 6.0f);
+                 ++x) {
+                if (pt_canvas_get_pixel(canvas, x, y) == accent) {
+                    ++head_old_ink;
+                }
+            }
+        }
+        pt_check(head_ink > 0);
+        pt_check(head_old_ink == 0);
+
+        int mid = (int)(h.y + h.h * 0.5f);
+        int band0 = (int)(h.x + h.w - head->padding_right) + 2;
+        int band1 = (int)(h.x + h.w) - 6;
+        pt_check(band1 >= band0);
+        pt_check(distinct_pixels(canvas, band0, band1, mid - 4, mid + 4,
+                                 header_bg) == 0);
+    }
+
     /* LTR keeps the icon on the left and the lead slot on the text's side. */
     pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
     pt_check(pt_window_paint(window, canvas));
