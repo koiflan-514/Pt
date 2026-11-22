@@ -9,11 +9,20 @@
 #include "../src/internal.h"
 #include "harness.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #ifdef PT_HAVE_DBUS
 #include <dbus/dbus.h>
+#include <ftw.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define atspi_role_alert 2
 #define atspi_role_dialog 16
@@ -1429,6 +1438,13 @@ static void test_bridge_live(pt_app *app, pt_widget *search, pt_widget *password
     pt_check(a11y_attribute(app, client, password_entry.bus, password_entry.path,
                             "direction", attribute, sizeof(attribute)) &&
              strcmp(attribute, "rtl") == 0);
+    reply = a11y_method(app, client, password_entry.bus, password_entry.path,
+                        "org.a11y.atspi.Text", "GetDefaultAttributes");
+    pt_check(reply_default_attributes(reply, "direction", attribute, sizeof(attribute)) &&
+             strcmp(attribute, "rtl") == 0);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
     reply = a11y_method_int1(app, client, password_entry.bus, password_entry.path,
                              "org.a11y.atspi.Text", "GetAttributes", 0);
     int32_t password_run_start = -1;
@@ -2279,8 +2295,9 @@ static void test_bridge_direction(pt_app *app, pt_widget *rtl_field) {
         dbus_message_unref(reply);
     }
 
-    /* Auto detection with no strong character falls back to the UI
-     * direction, reported explicitly as "ltr" or "rtl". */
+    /* Auto detection resolves the strong LTR letters in "Save" to ltr.
+     * A neutral-only label would instead fall back to the UI direction,
+     * reported explicitly as "ltr" or "rtl". */
     a11y_ref button_ref = save_ref;
     reply = a11y_method_int1(app, client, button_ref.bus, button_ref.path,
                              "org.a11y.atspi.Text", "GetAttributes", 0);
@@ -2311,7 +2328,278 @@ static void test_bridge_direction(pt_app *app, pt_widget *rtl_field) {
 }
 #endif /* PT_HAVE_DBUS */
 
-int main(void) {
+#ifdef PT_HAVE_DBUS
+/* ---------- private accessibility bus (2.0 wave 7) ----------
+ *
+ * The live checks need a registry, but the user's session registry is shared
+ * state: two concurrent runs or an AT-SPI client re-scanning the tree can make
+ * an individual check flap. The test therefore re-executes itself under a
+ * private dbus-run-session with a private XDG_RUNTIME_DIR, starts one
+ * at-spi2-registryd on that session's accessibility bus and kills it on exit.
+ * Nothing in the real session bus or registry is touched. When the tools are
+ * unavailable the test falls back to the old in-process behaviour.
+ */
+
+static pid_t a11y_registry_pid = -1;
+
+static void stop_a11y_registry(void) {
+    if (a11y_registry_pid <= 0) {
+        return;
+    }
+    kill(a11y_registry_pid, SIGTERM);
+    for (int i = 0; i < 20; ++i) {
+        int status = 0;
+        pid_t done = waitpid(a11y_registry_pid, &status, WNOHANG);
+        if (done == a11y_registry_pid || (done < 0 && errno == ECHILD)) {
+            a11y_registry_pid = -1;
+            return;
+        }
+        struct timespec pause = {0, 50 * 1000 * 1000};
+        nanosleep(&pause, NULL);
+    }
+    kill(a11y_registry_pid, SIGKILL);
+    waitpid(a11y_registry_pid, NULL, 0);
+    a11y_registry_pid = -1;
+}
+
+static bool find_executable(const char *name, char *out, size_t capacity) {
+    if (!name || !name[0]) {
+        return false;
+    }
+    if (strchr(name, '/')) {
+        if (access(name, X_OK) == 0) {
+            snprintf(out, capacity, "%s", name);
+            return true;
+        }
+        return false;
+    }
+    const char *path = getenv("PATH");
+    if (!path) {
+        path = "/usr/local/bin:/usr/bin:/bin";
+    }
+    const char *cursor = path;
+    while (*cursor) {
+        const char *end = strchr(cursor, ':');
+        size_t length = end ? (size_t)(end - cursor) : strlen(cursor);
+        char candidate[PATH_MAX];
+        if (length > 0 && length + strlen(name) + 2 < sizeof(candidate)) {
+            memcpy(candidate, cursor, length);
+            candidate[length] = '/';
+            snprintf(candidate + length + 1, sizeof(candidate) - length - 1, "%s", name);
+            if (access(candidate, X_OK) == 0) {
+                snprintf(out, capacity, "%s", candidate);
+                return true;
+            }
+        }
+        if (!end) {
+            break;
+        }
+        cursor = end + 1;
+    }
+    return false;
+}
+
+static bool find_registry_binary(char *out, size_t capacity) {
+    static const char *const candidates[] = {
+        "/usr/lib/at-spi2-registryd", "/usr/libexec/at-spi2-registryd",
+        "at-spi2-registryd"};
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        if (find_executable(candidates[i], out, capacity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool session_bus_reachable(void) {
+    DBusError error;
+    dbus_error_init(&error);
+    DBusConnection *session = dbus_bus_get_private(DBUS_BUS_SESSION, &error);
+    dbus_error_free(&error);
+    if (!session) {
+        return false;
+    }
+    dbus_connection_close(session);
+    dbus_connection_unref(session);
+    return true;
+}
+
+static bool query_a11y_address(char *out, size_t capacity) {
+    DBusError error;
+    dbus_error_init(&error);
+    DBusConnection *session = dbus_bus_get_private(DBUS_BUS_SESSION, &error);
+    if (!session) {
+        dbus_error_free(&error);
+        return false;
+    }
+    dbus_connection_set_exit_on_disconnect(session, FALSE);
+    DBusMessage *request = dbus_message_new_method_call(
+        "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress");
+    DBusMessage *reply = request ? dbus_connection_send_with_reply_and_block(
+                                       session, request, 3000, &error)
+                                 : NULL;
+    if (request) {
+        dbus_message_unref(request);
+    }
+    const char *address = NULL;
+    bool ok = false;
+    if (reply) {
+        char *value = NULL;
+        if (dbus_message_get_args(reply, &error, DBUS_TYPE_STRING, &value,
+                                  DBUS_TYPE_INVALID) &&
+            value && value[0]) {
+            snprintf(out, capacity, "%s", value);
+            ok = true;
+        }
+        dbus_message_unref(reply);
+    }
+    (void)address;
+    dbus_error_free(&error);
+    dbus_connection_close(session);
+    dbus_connection_unref(session);
+    return ok;
+}
+
+/* Starts the private registry on the accessibility bus the private session bus
+ * hands out, then waits until its well-known name is owned. */
+static void start_private_a11y_registry(void) {
+    char address[512];
+    char binary[PATH_MAX];
+    if (!query_a11y_address(address, sizeof(address))) {
+        printf("# private a11y bus has no address; live checks will skip\n");
+        return;
+    }
+    if (!find_registry_binary(binary, sizeof(binary))) {
+        printf("# at-spi2-registryd not found; live checks will skip\n");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        setenv("AT_SPI_BUS_ADDRESS", address, 1);
+        execl(binary, binary, (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) {
+        printf("# cannot start at-spi2-registryd; live checks will skip\n");
+        return;
+    }
+    a11y_registry_pid = pid;
+    atexit(stop_a11y_registry);
+
+    DBusError error;
+    dbus_error_init(&error);
+    DBusConnection *bus = dbus_connection_open_private(address, &error);
+    if (bus && !dbus_bus_register(bus, &error)) {
+        dbus_connection_close(bus);
+        dbus_connection_unref(bus);
+        bus = NULL;
+    }
+    bool owned = false;
+    if (bus) {
+        for (int attempt = 0; attempt < 40 && !owned; ++attempt) {
+            dbus_bus_name_has_owner(bus, "org.a11y.atspi.Registry", &error);
+            if (dbus_error_is_set(&error)) {
+                dbus_error_free(&error);
+            } else {
+                /* name_has_owner returns false without an error when absent;
+                 * probe the registry's root object instead. */
+                DBusMessage *ping = dbus_message_new_method_call(
+                    "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root",
+                    "org.freedesktop.DBus.Peer", "Ping");
+                if (ping) {
+                    DBusMessage *reply =
+                        dbus_connection_send_with_reply_and_block(bus, ping, 200, &error);
+                    if (reply) {
+                        owned = true;
+                        dbus_message_unref(reply);
+                    }
+                    dbus_message_unref(ping);
+                }
+                if (dbus_error_is_set(&error)) {
+                    dbus_error_free(&error);
+                }
+            }
+            if (!owned) {
+                struct timespec pause = {0, 50 * 1000 * 1000};
+                nanosleep(&pause, NULL);
+            }
+        }
+    }
+    dbus_error_free(&error);
+    if (bus) {
+        dbus_connection_close(bus);
+        dbus_connection_unref(bus);
+    }
+    if (!owned) {
+        printf("# private at-spi2 registry did not come up; live checks will skip\n");
+    }
+}
+
+static int remove_entry(const char *path, const struct stat *info, int flag,
+                        struct FTW *walk) {
+    (void)info;
+    (void)flag;
+    (void)walk;
+    return remove(path);
+}
+
+/* Returns -1 when isolation is unavailable (caller runs in-process), else the
+ * child's exit status. */
+static int reexec_private_bus(char *self) {
+    char session[PATH_MAX];
+    char registry[PATH_MAX];
+    if (!find_executable("dbus-run-session", session, sizeof(session)) ||
+        !find_registry_binary(registry, sizeof(registry)) ||
+        !session_bus_reachable()) {
+        return -1;
+    }
+    if (!self[0] || access(self, X_OK) != 0) {
+        return -1;
+    }
+    char template[] = "/tmp/pt-a11y-private.XXXXXX";
+    char *directory = mkdtemp(template);
+    if (!directory) {
+        return -1;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        setenv("PT_A11Y_PRIVATE_BUS", "1", 1);
+        setenv("XDG_RUNTIME_DIR", directory, 1);
+        unsetenv("AT_SPI_BUS_ADDRESS");
+        execl(session, session, "--", self, (char *)NULL);
+        _exit(127);
+    }
+    int status = 1;
+    if (pid > 0) {
+        int raw = 0;
+        while (waitpid(pid, &raw, 0) < 0 && errno == EINTR) {
+        }
+        status = WIFEXITED(raw) ? WEXITSTATUS(raw) : 1;
+    }
+    nftw(directory, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+    return status;
+}
+#endif /* PT_HAVE_DBUS */
+
+int main(int argc, char **argv) {
+    (void)argc;
+#ifdef PT_HAVE_DBUS
+    if (!getenv("PT_A11Y_PRIVATE_BUS")) {
+        char self[PATH_MAX];
+        ssize_t resolved = readlink("/proc/self/exe", self, sizeof(self) - 1);
+        if (resolved > 0) {
+            self[resolved] = '\0';
+        } else {
+            snprintf(self, sizeof(self), "%s", argv[0] ? argv[0] : "");
+        }
+        int isolated = reexec_private_bus(self);
+        if (isolated >= 0) {
+            return isolated;
+        }
+    } else {
+        start_private_a11y_registry();
+    }
+#endif
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.a11y-bridge");
     pt_check(app != NULL);
