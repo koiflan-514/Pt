@@ -348,11 +348,10 @@ shared C surface: the generated reference derives its module list from
 36 × 1.1, 106 × 1.2, 2 × 1.3), the bilingual pairs are in sync, the version is
 1.4.0 everywhere, and the ABI pins cover the existing enums, structs and limits.
 The three-language wrappers keep 556/556 with the reviewed allowlist empty; the
-final 1.4.0 wrapper counts are pending the gate run (the last recorded figures,
-C++ 844, Python 67 and Java 685 checks, are from the 1.3.0 tree `fafbcae`).
-1.4.0 adds no public symbol, so the parity and ABI surface is unchanged by
-construction. The remaining deviations are explicit and tracked in
-[ROADMAP.md](ROADMAP.md) under M21:
+final 1.4.0 gate on `e1104c2` ran C++ 844 checks, Python 67 tests and Java 685
+checks with 0 failures, the same counts as 1.3.0. 1.4.0 adds no public symbol,
+so the parity and ABI surface is unchanged by construction. The remaining
+deviations are explicit and tracked in [ROADMAP.md](ROADMAP.md) under M21:
 
 - **The SVG subset is documented, not complete.** `pt_icon_image` accepts SVG
   and, since 1.4, SVGZ through vendored nanosvg and resolves hicolor
@@ -379,11 +378,14 @@ construction. The remaining deviations are explicit and tracked in
   `tests/wire_driver.c` delivers real wire key and pointer events to the C++,
   Python and Java callbacks in the headless gate; a physical-seat run remains
   optional live coverage.
-- **The 1.4.0 gate is pending.** The version, reference, bilingual pairs and
-  zero-delta baseline/ABI facts are in place on `b947a6e` plus the docs branch;
-  `make check`, `tools/ci.sh` and `tools/release-check.sh --full` are to be run
-  on the final tree and recorded in [release.md](release.md). The 1.3.0 gate
-  itself remains complete on `fafbcae`.
+- **The 1.4.0 gate is complete on `e1104c2`; the tag is pending.** `make check`
+  (37 executables, 8,991 checks plus the 454,380-check property suite),
+  `make check-bindings`, `make perf-check`, the live suites including
+  `make check-ime-live`, `tools/ci.sh` (exit 0) and
+  `tools/release-check.sh --full` all pass and are recorded in
+  [release.md](release.md); the symbol-level ABI diff against 1.3.0 is empty.
+  The two open items are the human freeze commit/tag and live-suite sign-off.
+  The 1.3.0 gate itself remains complete on `fafbcae`.
 
 The 1.1.0 work-in-progress also violated the section 2 landing rule (headers,
 bindings, reference and tests did not land atomically). That history is kept in

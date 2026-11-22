@@ -1837,7 +1837,7 @@ Measured on the final gate tree `fafbcae` (`tools/ci.sh` exit 0):
 - A 1.3.0 release record: **delivered** in [release.md](release.md) with the
   figures above and no `pending final gate run` markers left.
 
-## M21 - 1.4.0: input wire matrix completion and format polish (delivered; final gate pending)
+## M21 - 1.4.0: input wire matrix completion and format polish (delivered; tag pending)
 
 Goal: close the remaining appendable items carried past M20 without touching
 the 2.0 structural horizon. 1.4.0 stays append-only within `libpt.so.1`; the
@@ -1846,14 +1846,18 @@ sniffing, the wire work is test infrastructure). The M18/M19/M20 process
 repeated: parallel workstreams in isolated worktrees with a pre-registered test
 slot, integration, bilingual docs and the full gate before the tag.
 
-Status (2026-11-22): delivered and integrated on `b947a6e` (wave 1 plus wave 2
-on top of the 1.4 scaffold); the version, generated reference and bilingual
-guides land on the `m21/docs-final` branch and the final gate run is still
-pending. The tree exports **556 functions / 910 baseline entries** (556 `func`,
-282 `enum`, 43 `callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1 `type`),
-exactly as 1.3.0, and every declaration keeps its since marker (412 × 1.0,
-36 × 1.1, 106 × 1.2, 2 × 1.3). 1.4.0 adds no public function, enum or struct;
-the annotated tag awaits the owner's freeze confirmation.
+Status (2026-11-22): delivered and integrated on `e1104c2`, which merges the
+`m21/docs-final` documentation branch (version bump, generated reference and
+bilingual guides, `1460643`) and the SVGZ example refresh from `m21/examples`
+(`043c0d8`) on top of the wave-1-plus-wave-2 tree `b947a6e`. The final gate run
+on `e1104c2` is complete: `make check`, `make check-bindings`,
+`make perf-check`, the live suites including `make check-ime-live`,
+`tools/ci.sh` and `tools/release-check.sh --full` all pass. The tree exports
+**556 functions / 910 baseline entries** (556 `func`, 282 `enum`, 43
+`callback`, 10 `struct`, 12 `opaque`, 6 `define`, 1 `type`), exactly as 1.3.0,
+and every declaration keeps its since marker (412 × 1.0, 36 × 1.1, 106 × 1.2,
+2 × 1.3). 1.4.0 adds no public function, enum or struct; the annotated tag
+awaits the owner's freeze confirmation.
 
 ### Wave 1 (parallel workstreams, delivered)
 
@@ -1916,9 +1920,10 @@ did not edit bindings, generated artifacts or public guides.
 ### Integration (delivered)
 
 `44c265f` merged the wave and refreshed the generated reference, adding the
-live IME target to the gate; `b947a6e` is the final integration tree on top of
-it. The version bump, reference refresh and bilingual guides land in the
-`m21/docs-final` documentation branch. No public API moved at any step.
+live IME target to the gate; `b947a6e` is the integration tree on top of it.
+`e1104c2` merges the version bump, reference refresh and bilingual guides from
+`m21/docs-final` (`1460643`) and the SVGZ examples from `m21/examples`
+(`043c0d8`), with no conflicts. No public API moved at any step.
 
 ### M20 open items closed or still carried
 
@@ -1942,16 +1947,21 @@ it. The version bump, reference refresh and bilingual guides land in the
 
 ### Completion criteria
 
-Same gate set as M20: `make check`, `make check-bindings`, `make perf-check`,
-live suites, `tools/ci.sh`, `tools/release-check.sh --full`, bilingual sync,
-three-language parity with an empty allowlist, ABI pins and an append-only
-diff against `1.3.0`, and a 1.4.0 release record. The measured final-gate
-figures are deliberately left pending in [release.md](release.md); already
-measured on the integration tree are `test_icon` 800, `test_wire_input` 595
-and `test_damage` 98, and the baseline stays at 556 functions with zero new
-symbols. The symbol-level ABI comparison against 1.3.0 is expected to be empty
-because no declaration was added or changed, but it still has to be run and
-recorded.
+Same gate set as M20, measured on `e1104c2` and recorded in
+[release.md](release.md): `make check` passes 37 executables (36 suites plus the
+property sweep) at 8,991 checks plus the 454,380-check property suite;
+`make check-bindings` passes C++ 844, Python 67 and Java 685 with 0 failures;
+three-language parity is 556/556 with an empty allowlist; `make perf-check`
+holds every ceiling (dense full paint 5.435 ms, 4K 7.585 ms, first frame
+14.34 ms, idle 300 ms CPU 0.537 ms); the live suites pass (`check-wayland` 48,
+`check-typing` ptdirect, `check-ime-live` `你好` with `PREEDIT_COUNT=5`);
+`tools/ci.sh` exits 0 with the ASan+UBSan build, staged install and
+reproducible tarball clean; and `tools/release-check.sh --full` reports every
+automated gate green. The bilingual pair set is in sync. The ABI pin suite
+passes and the symbol-level diff against `1.3.0` is empty: 556 → 556 exported
+`pt_*` symbols, 0 added, 0 removed, no type changes, SONAME `libpt.so.1`
+unchanged. The baseline stays at 556 functions with zero new symbols. The only
+step left is the owner's freeze confirmation and tag.
 
 ## Post-1.0 horizons
 
