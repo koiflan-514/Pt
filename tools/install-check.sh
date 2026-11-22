@@ -11,7 +11,9 @@ case $build in
 *) build=$root/$build ;;
 esac
 version=$(sed -n 's/^VERSION := //p' "$root/Makefile")
-soname=$(sed -n 's/^SONAME := //p' "$root/Makefile")
+abi_major=$(sed -n 's/^ABI_MAJOR := //p' "$root/Makefile")
+# Expand the Make variable so the comparison sees the effective object name.
+soname=$(sed -n 's/^SONAME := //p' "$root/Makefile" | sed "s/\$(ABI_MAJOR)/$abi_major/g")
 prefix=/usr
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT

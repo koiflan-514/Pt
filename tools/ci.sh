@@ -38,6 +38,14 @@ makeit() {
 say "cleaning $base"
 rm -rf "$base"
 
+# test_canvas and test_font write their PNGs to a repository-relative
+# build/tests, and the Python wire test defaults to
+# build/tests/libwire_driver.so. ci.sh builds into $normal instead, so provide
+# that path and point the wire test at the driver it actually built.
+mkdir -p "$root/build/tests"
+PT_WIRE_DRIVER=$normal/tests/libwire_driver.so
+export PT_WIRE_DRIVER
+
 makeit -j"$jobs" BUILD="$normal" werror=1 all
 makeit BUILD="$normal" werror=1 check
 makeit BUILD="$normal" werror=1 perf-check
@@ -56,6 +64,10 @@ fi
 say "installed consumers and ABI"
 "$root/tools/install-check.sh" "$normal"
 
+# The tarball rebuild below resolves its own build/tests driver; do not leak
+# the $normal path into it.
+unset PT_WIRE_DRIVER
+
 if [ "$quick" -eq 0 ]; then
     makeit -j"$jobs" BUILD="$sanitized" werror=1 sanitize=1 check-sanitize
     makeit BUILD="$sanitized" werror=1 sanitize=1 lib
@@ -67,7 +79,8 @@ if [ "$quick" -eq 0 ]; then
     asan_lib=$(cc -print-file-name=libasan.so)
     say "sanitized Python binding suite"
     LD_PRELOAD="$asan_lib" ASAN_OPTIONS=detect_leaks=0 PT_HEADLESS=1 \
-        PT_LIBRARY="$sanitized/libpt.so" PYTHONPATH="$root/bindings/python" \
+        PT_LIBRARY="$sanitized/libpt.so" PT_WIRE_DRIVER="$sanitized/tests/libwire_driver.so" \
+        PYTHONPATH="$root/bindings/python" \
         python3 -m unittest discover -s "$root/bindings/python" -p 'test_*.py'
 
     say "sanitized Java binding suite"
