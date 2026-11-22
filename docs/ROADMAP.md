@@ -1963,6 +1963,55 @@ passes and the symbol-level diff against `1.3.0` is empty: 556 → 556 exported
 unchanged. The baseline stays at 556 functions with zero new symbols. The only
 step left is the owner's freeze confirmation and tag.
 
+## M22 - 2.0.0: RTL and bidirectional text (in progress)
+
+Goal: implement the Unicode Bidirectional Algorithm and RTL layout/editing per
+[rtl.md](rtl.md), the first structural major since 1.0. The public surface stays
+additive: 8 new direction functions + 2 new enums (6 values); zero-value
+defaults preserve LTR behavior, and the byte-offset and accessibility
+character-offset contracts do not move. 2.0.0 keeps SONAME `libpt.so.1` (the
+major marks the bidi rendering correction, not a binary break); an `ABI_MAJOR`
+variable decouples the version from the SONAME in the Makefile and
+release-check.
+
+Decisions (researched 2026-11-22):
+
+- Bidi engine: vendored SheenBidi v3.0.0 (Apache-2.0, tag commit `cfe430e`),
+  unity-compiled to one object under `third_party/sheenbidi`; no FriBidi
+  (LGPL static-link cost). Proven 100% UBA conformance.
+- Conformance: Unicode `BidiTest.txt` + `BidiCharacterTest.txt` (18.0.0,
+  Unicode License v3) vendored gzipped under `tests/data/bidi`; a headless
+  conformance suite runs in `make check` (770,241 + 91,707 cases, 0 failures).
+- Caret: visual arrow movement by default; logical movement via the existing
+  window key callback escape hatch; no new caret-mode API in 2.0.
+- Spans: `pt_text_span` stays frozen (style only, no direction field).
+- Fonts: missing Arabic/Hebrew glyphs are documented fallback/tofu, not a hard
+  error; tests use DejaVu Sans / Noto with skip.
+- `padding`/`margin` stay physical; table/tree keep logical column order.
+
+Waves: W0 engine + conformance parallel with W1 direction API + bindings +
+baseline (564 functions / 926 entries); W2 UBA + single-line rendering; W3
+wrap / text area; W4 editing (highest risk); W5a UI mirroring (non-paint)
+parallel with W2-W4; W5b paint chrome; W6 accessibility / examples / docs; W7
+conformance / fuzz / perf / LTR-byte-stable / live hardening. `paint.c` is the
+sequential hotspot W2 -> W3 -> W4 -> W5b.
+
+Staging: W0 + W1 + W2 land as a green checkpoint on `m22/integration` (main
+stays 1.4.0, no 2.0 tag yet); W3-W7 continue after the Lobster credit reset
+(2026-11-27) restores dual-provider parallelism. 2.0.0 is tagged only when the
+full rtl.md delivery order is complete and gated.
+
+### Completion criteria
+
+`make check` (including `test_direction` / `test_bidi` /
+`test_bidi_conformance`), `make check-bindings` at 564/564 with an empty
+allowlist, `make perf-check` (LTR ceilings not relaxed plus new bidi profiles),
+`tools/ci.sh`, `tools/release-check.sh --full` (new SONAME policy, no `SB_*`
+exports), bilingual rtl.md decision sync, an append-only ABI diff against
+1.4.0 (0 removed / 0 changed / 8 added), BidiTest 0 failures, LTR
+byte-for-byte stability against 1.4.0 on the same machine, and live RTL
+caret/selection agreement.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
@@ -1993,11 +2042,11 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 
 ### 2.0 — structural
 
-- RTL/bidi paragraph layout per [rtl.md](rtl.md): a UBA implementation
-  (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link constraint),
-  bidi-run shaping, logical offsets through the public API and AT-SPI, mirrored
-  layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing, so
-  it cannot land in a minor.
+- RTL/bidi paragraph layout per [rtl.md](rtl.md) (in progress in M22): a UBA
+  implementation (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link
+  constraint), bidi-run shaping, logical offsets through the public API and
+  AT-SPI, mirrored layout/chrome, Unicode BidiTest conformance. Changes layout
+  and hit-testing, so it cannot land in a minor.
 - Inline image runs (U+FFFC object replacement, baseline alignment, atomic
   selection, alt-text copy, embedded-object accessibility).
 - Optional Vulkan/EGL renderer behind the same canvas contract, software by
