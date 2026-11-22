@@ -75,6 +75,10 @@
  * events (action, preedit_hint, show/hide_input_panel) are unavailable. Combine
  * with FC_OPT_TEXT_INPUT; it does not advertise that global by itself. */
 #define FC_OPT_TEXT_INPUT_V1 (1u << 9)
+/* Adds WL_SEAT_CAPABILITY_TOUCH to the seat capabilities. Deliberately not part
+ * of FC_OPT_ALL: it changes what the client binds, so existing consumers keep
+ * the keyboard|pointer-only seat they were written against. */
+#define FC_OPT_TOUCH (1u << 10)
 #define FC_OPT_ALL                                                                   \
     (FC_OPT_ICON | FC_OPT_DECORATION | FC_OPT_FRACTIONAL | FC_OPT_VIEWPORTER |       \
      FC_OPT_TEXT_INPUT | FC_OPT_GESTURES | FC_OPT_DATA_DEVICE | FC_OPT_PRIMARY |      \
@@ -144,6 +148,7 @@ typedef enum fc_kind {
 #define fc_kind_xdg_toplevel_icon_manager_v1 FC_K_ICON_MANAGER
 #define fc_kind_xdg_toplevel_icon_v1 FC_K_ICON
 #define fc_kind_zxdg_toplevel_decoration_v1 FC_K_DECORATION
+#define fc_kind_wl_touch FC_K_TOUCH
 
 /* ---------- recorded requests ---------- */
 
@@ -1264,6 +1269,87 @@ static inline void fake_compositor_keyboard_repeat_info(fake_compositor *fc, int
     (void)fc_send(fc, keyboard, 5, &builder);
 }
 
+/* ---------- seat capabilities and touch ---------- */
+
+/* Re-sends wl_seat.capabilities. Tests use this to add or drop the touch
+ * capability after the initial bind; the client releases wl_touch when the bit
+ * disappears. Event opcode 0, request opcode 0. */
+static inline bool fake_compositor_seat_capabilities(fake_compositor *fc,
+                                                     uint32_t capabilities) {
+    uint32_t seat = fc_live_id(fc, FC_K_SEAT);
+    if (!seat) {
+        return false;
+    }
+    return fc_send_u32(fc, seat, 0, capabilities);
+}
+
+/* wl_touch event opcodes from wayland.xml: down(0), up(1), motion(2),
+ * frame(3), cancel(4). Coordinates are wl_fixed_t on the wire. All helpers
+ * target the newest live wl_touch and return false when the seat never bound
+ * one (FC_OPT_TOUCH was not requested or the capability was removed). */
+static inline bool fake_compositor_touch_down(fake_compositor *fc, uint32_t serial,
+                                               uint32_t time, uint32_t surface, int32_t id,
+                                               double x, double y) {
+    uint32_t touch = fc_live_id(fc, FC_K_TOUCH);
+    if (!touch) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, serial);
+    fc_b_u32(&builder, time);
+    fc_b_u32(&builder, surface);
+    fc_b_i32(&builder, id);
+    fc_b_fixed(&builder, x);
+    fc_b_fixed(&builder, y);
+    return fc_send(fc, touch, 0, &builder);
+}
+
+static inline bool fake_compositor_touch_up(fake_compositor *fc, uint32_t serial,
+                                            uint32_t time, int32_t id) {
+    uint32_t touch = fc_live_id(fc, FC_K_TOUCH);
+    if (!touch) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, serial);
+    fc_b_u32(&builder, time);
+    fc_b_i32(&builder, id);
+    return fc_send(fc, touch, 1, &builder);
+}
+
+static inline bool fake_compositor_touch_motion(fake_compositor *fc, uint32_t time, int32_t id,
+                                                double x, double y) {
+    uint32_t touch = fc_live_id(fc, FC_K_TOUCH);
+    if (!touch) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_u32(&builder, time);
+    fc_b_i32(&builder, id);
+    fc_b_fixed(&builder, x);
+    fc_b_fixed(&builder, y);
+    return fc_send(fc, touch, 2, &builder);
+}
+
+static inline bool fake_compositor_touch_frame(fake_compositor *fc) {
+    uint32_t touch = fc_live_id(fc, FC_K_TOUCH);
+    if (!touch) {
+        return false;
+    }
+    return fc_send_empty(fc, touch, 3);
+}
+
+static inline bool fake_compositor_touch_cancel(fake_compositor *fc) {
+    uint32_t touch = fc_live_id(fc, FC_K_TOUCH);
+    if (!touch) {
+        return false;
+    }
+    return fc_send_empty(fc, touch, 4);
+}
+
 /* ---------- text-input v3 events ---------- */
 
 /* Event opcodes from protocols/text-input-unstable-v3.xml. action, language and
@@ -2124,7 +2210,11 @@ static inline void fc_apply_reaction(fake_compositor *fc, const fc_reaction *rea
             break;
         case FC_K_SEAT: {
             uint32_t seat = fc_live_id(fc, FC_K_SEAT);
-            (void)fc_send_u32(fc, seat, 0, 3u); /* keyboard | pointer */
+            uint32_t capabilities = 3u; /* keyboard | pointer */
+            if (fc->options & FC_OPT_TOUCH) {
+                capabilities |= 4u; /* WL_SEAT_CAPABILITY_TOUCH */
+            }
+            (void)fc_send_u32(fc, seat, 0, capabilities);
             fc_builder builder;
             fc_b_reset(&builder);
             fc_b_string(&builder, "pt-fake-seat");
@@ -2380,6 +2470,8 @@ static inline void fc_cleanup_start(fake_compositor *fc) {
     fc->inbox = NULL;
     free(fc->keymap_text);
     fc->keymap_text = NULL;
+    free(fc->selection_text);
+    fc->selection_text = NULL;
     if (fc->had_display) {
         setenv("WAYLAND_DISPLAY", fc->saved_display, 1);
     } else {
