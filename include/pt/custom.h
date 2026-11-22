@@ -209,8 +209,9 @@ pt_api bool pt_paint_font_metrics(pt_paint_context *context, const char *family,
  *   pixel-identical to 1.2. Hinted sections add:
  *     `whole`      1.5 px accent, fully opaque;
  *     `selection`  2.5 px accent (the strongest underline);
- *     `prefix`/`suffix`  1.0 px muted text colour (not currently edited);
- *     `prediction` 1.0 px muted text colour;
+ *     `prefix`/`suffix`  1.0 px muted text colour at alpha 0xC0 (not
+ *                       currently edited);
+ *     `prediction` 1.0 px muted text colour at alpha 0xC0;
  *     `spelling_error`/`compose_error`  2.0 px danger colour.
  *   Unknown hint values are accepted and stored but add no visual, so a future
  *   protocol value degrades to the plain preedit. Ranges are byte offsets into
@@ -236,6 +237,11 @@ pt_api bool pt_paint_font_metrics(pt_paint_context *context, const char *family,
  * - The functions return true when the call changed the recorded desired
  *   state, false when it was already in that state or the window is NULL.
  *   Repeated calls are therefore idempotent and never duplicate the request.
+ * - When the window loses focus and later regains it, the remembered desired
+ *   state is re-forwarded once when IME activates again (a `show` requested
+ *   before the focus change is sent again on reactivation). The protocol
+ *   declares repeated requests harmless: a request matching the compositor's
+ *   current state is ignored, so the replay has no side effect.
  *   Call these on the UI thread only; they are safe while IME is disabled.
  *
  * `pt_window_set_ime_cursor_rect` sets the logical-pixel caret rectangle used

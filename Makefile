@@ -178,7 +178,7 @@ $(EXAMPLES)/cpp/%: examples/cpp/%.cpp bindings/cpp/pt/pt.hpp $(BUILD)/libpt.a
 
 examples: $(C_EXAMPLES) $(CPP_EXAMPLES)
 
-$(TEST_BIN)/%: tests/%.c $(BUILD)/libpt.a
+$(TEST_BIN)/%: tests/%.c $(wildcard tests/*.h) $(BUILD)/libpt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) -I tests $< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
 
