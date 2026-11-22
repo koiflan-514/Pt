@@ -568,6 +568,60 @@ static void test_snapshot_rtl(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Wrapped RTL goldens (2.0 wave 3): a wrapped mixed-script label and a
+ * multi-paragraph text area with align_end, so per-paragraph base resolution
+ * and per-line reordering reach pixels. Existing LTR goldens stay unchanged. */
+static void test_snapshot_rtl_wrapped(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "rtl-wrapped-snapshots", 520, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_gap(root, 10.0f);
+
+    pt_widget *wrapped = pt_label_create(
+        root,
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 abc \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B xyz \xD7\x9C\xD7\x9D\xD7\x9E");
+    pt_widget_set_label_wrap(wrapped, true);
+    pt_widget_set_width(wrapped, 220.0f);
+    pt_widget_set_text_direction(wrapped, pt_text_direction_rtl);
+    pt_widget_set_align_self(wrapped, pt_align_start);
+
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 300.0f, 120.0f);
+    pt_widget_set_text_direction(area, pt_text_direction_auto);
+    pt_widget_set_text(area, "abc\n\xD7\x90\xD7\x91\xD7\x92");
+    pt_widget_set_text_align(area, pt_text_align_end);
+    pt_widget_set_align_self(area, pt_align_start);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 300, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+    uint64_t rtl_wrapped = 0;
+    snapshot_paint(window, canvas, directory, "rtl-wrapped", &rtl_wrapped);
+    uint64_t repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-wrapped-repeat", &repeat);
+    pt_check(rtl_wrapped == repeat);
+    /* Forcing an LTR base reorders both wrapped widgets, proving the golden
+     * really exercises per-line bidi rather than a direction-neutral layout. */
+    pt_widget_set_text_direction(wrapped, pt_text_direction_ltr);
+    pt_widget_set_text_direction(area, pt_text_direction_ltr);
+    uint64_t ltr_base = 0;
+    snapshot_paint(window, canvas, directory, "rtl-wrapped-ltr-base", &ltr_base);
+    pt_check(ltr_base != rtl_wrapped);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -581,6 +635,7 @@ int main(void) {
     test_snapshot_views(app);
     test_snapshot_icon(app);
     test_snapshot_rtl(app);
+    test_snapshot_rtl_wrapped(app);
     pt_app_destroy(app);
     return pt_test_finish("visuals");
 }

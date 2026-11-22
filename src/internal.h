@@ -329,7 +329,50 @@ struct pt_font {
 typedef struct pt_text_line {
     size_t start;
     size_t end;
+    /* Resolved paragraph base level of this line (2.0). Wrapped lines inside
+     * one UBA paragraph reuse the paragraph base; explicit '\n' paragraphs
+     * resolve independently (rule P2/P3). Zero for the LTR fast path. */
+    uint8_t base_level;
 } pt_text_line;
+
+/* Per-line logical byte offset <-> visual x map (2.0). A map covers one
+ * rendered line, stores its clusters in logical order with both visual
+ * extents, and keeps x relative to the line's start edge. */
+typedef enum pt_text_bias {
+    /* Caret affinity to the character starting at the position (downstream). */
+    pt_text_bias_leading = 0,
+    /* Caret affinity to the character ending at the position (upstream). */
+    pt_text_bias_trailing
+} pt_text_bias;
+
+typedef struct pt_text_visual_cluster {
+    size_t start;
+    size_t end;
+    /* Visual extents, x0 <= x1. For an RTL cluster `start_x` is the right
+     * edge (logical start) and `end_x` the left edge (logical end). */
+    float x0;
+    float x1;
+    float start_x;
+    float end_x;
+    uint8_t level;
+} pt_text_visual_cluster;
+
+typedef struct pt_text_visual_map {
+    pt_text_visual_cluster *clusters;
+    size_t count;
+    size_t start;
+    size_t end;
+    float width;
+    uint8_t base_level;
+} pt_text_visual_map;
+
+typedef struct pt_text_visual_segment {
+    size_t start;
+    size_t end;
+    pt_font *font;
+    hb_direction_t direction;
+    uint8_t level;
+} pt_text_visual_segment;
 
 typedef struct pt_text_run {
     size_t start;
@@ -360,6 +403,11 @@ typedef struct pt_text_runs {
     /* Resolved paragraph base level and whether the runs were reordered. */
     uint8_t base_level;
     bool bidi;
+    /* Per-paragraph bases for bidi builds: content range (newline and a
+     * preceding CR excluded) plus the resolved level. Width wrapping reuses
+     * them for its per-line base. Empty for the LTR fast path. */
+    pt_text_line *paragraphs;
+    size_t paragraph_count;
 } pt_text_runs;
 
 bool pt_widget_supports_spans(const pt_widget *widget);
@@ -375,9 +423,19 @@ void pt_text_runs_free(pt_text_runs *runs);
 float pt_text_runs_measure(const pt_text_runs *runs, size_t start, size_t end);
 float pt_text_runs_natural_width(const pt_text_runs *runs);
 int pt_text_runs_wrap(const pt_text_runs *runs, float max_width, pt_text_line **out_lines);
+/* Per-line base for a byte position: the paragraph containing it, or the
+ * layout-wide base level when the fast path skipped paragraph tracking. */
+uint8_t pt_text_runs_base_at(const pt_text_runs *runs, size_t position);
 void pt_text_runs_draw_line(pt_canvas *canvas, const pt_text_runs *runs, size_t start,
                             size_t end, float x, float baseline, float max_width,
                             pt_text_align align, pt_color color, bool ellipsis);
+/* Same painter with an explicit per-line base: the UBA runs are recomputed for
+ * the visible line range so rule L1 applies at the wrapped line end, and
+ * ellipsis/alignment resolve against the line's own direction. */
+void pt_text_runs_draw_line_base(pt_canvas *canvas, const pt_text_runs *runs, size_t start,
+                                 size_t end, uint8_t base_level, float x, float baseline,
+                                 float max_width, pt_text_align align, pt_color color,
+                                 bool ellipsis);
 size_t pt_text_runs_position_for_x(const pt_text_runs *runs, size_t start, size_t end,
                                    float local_x);
 
@@ -446,6 +504,13 @@ size_t pt_font_fallback_cache_count(const pt_font *font);
 size_t pt_font_manager_face_count(void);
 int pt_font_wrap_lines(const pt_font *font, const char *text, size_t len, float max_width,
                        pt_text_line **out_lines);
+/* Direction-aware wrapping: lines keep their logical byte ranges, carry the
+ * resolved paragraph base, and are broken with bidi-aware widths. `base` auto
+ * resolves each paragraph with P2/P3 and falls back to `rtl_default` for
+ * neutral-only text; explicit ltr/rtl forces the base. */
+int pt_font_wrap_lines_bidi(const pt_font *font, const char *text, size_t len, float max_width,
+                            pt_bidi_base base, bool rtl_default,
+                            pt_text_line **out_lines);
 float pt_font_wrapped_height(const pt_font *font, const char *text, float max_width);
 void pt_canvas_draw_text_line(pt_canvas *canvas, const pt_font *font, const char *text,
                               size_t len, float x, float baseline, float max_width,
@@ -453,6 +518,42 @@ void pt_canvas_draw_text_line(pt_canvas *canvas, const pt_font *font, const char
 void pt_canvas_draw_text_wrapped(pt_canvas *canvas, const pt_font *font, const char *text,
                                  float x, float top, float max_width, float max_height,
                                  pt_text_align align, pt_color color);
+void pt_canvas_draw_text_wrapped_bidi(pt_canvas *canvas, const pt_font *font, const char *text,
+                                       float x, float top, float max_width, float max_height,
+                                       pt_text_align align, pt_color color, pt_bidi_base base,
+                                       bool rtl_default);
+/* ---------- logical <-> visual map (2.0 wave 3) ---------- */
+
+/* Builds a map over `text` from segments already in visual order (UBA runs
+ * split by style/font boundaries). Segments must partition [0, len). */
+bool pt_text_visual_map_build(const char *text, size_t len,
+                              const pt_text_visual_segment *segments, size_t count,
+                              uint8_t base_level, pt_text_visual_map **out);
+/* Convenience builders: plain text resolves its own UBA runs under `base`;
+ * rich runs take their span/style boundaries into account. */
+bool pt_text_visual_map_build_bidi(const pt_font *font, const char *text, size_t len,
+                                   pt_bidi_base base, pt_text_visual_map **out);
+bool pt_text_visual_map_build_runs(const pt_text_runs *runs, size_t start, size_t end,
+                                   pt_bidi_base base, pt_text_visual_map **out);
+void pt_text_visual_map_free(pt_text_visual_map *map);
+float pt_text_visual_map_width(const pt_text_visual_map *map);
+/* x of the caret at `position`. `bias` resolves positions shared by two visual
+ * runs (leading picks the character starting there, trailing the one ending
+ * there). Positions inside a cluster snap to its start/end edge. */
+float pt_text_visual_map_x_for_position(const pt_text_visual_map *map, size_t position,
+                                        pt_text_bias bias);
+/* Nearest logical position for a visual x; ties resolve with `bias`. */
+size_t pt_text_visual_map_position_for_x(const pt_text_visual_map *map, float x,
+                                         pt_text_bias bias);
+/* Cluster / visual-run boundary navigation for editing (W4). These skip the
+ * interior of a multi-byte cluster and X9-removed controls. */
+bool pt_text_visual_map_is_boundary(const pt_text_visual_map *map, size_t position);
+size_t pt_text_visual_map_next_boundary(const pt_text_visual_map *map, size_t position);
+size_t pt_text_visual_map_prev_boundary(const pt_text_visual_map *map, size_t position);
+/* Resolved base direction of the text for a widget (per paragraph when the
+ * caller passes only that paragraph). */
+bool pt_widget_explicit_text_base(const pt_widget *widget, pt_bidi_base *out);
+bool pt_widget_rtl_default(const pt_widget *widget);
 pt_font *pt_widget_font(const pt_widget *widget, float logical_size, pt_font_weight weight,
                         const pt_layout_ctx *ctx);
 pt_font *pt_widget_font_styled(const pt_widget *widget, float logical_size,
@@ -1087,6 +1188,9 @@ typedef struct pt_text_layout {
     int line_count;
     bool has_runs;
     pt_text_runs runs;
+    /* One map per line; NULL for an empty line or when the fast path had no
+     * text to map. Released with the layout. */
+    pt_text_visual_map **maps;
 } pt_text_layout;
 
 bool pt_text_layout_build(const pt_widget *area, const pt_layout_ctx *ctx, float width,

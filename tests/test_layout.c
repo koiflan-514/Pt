@@ -179,6 +179,65 @@ static void test_min_max(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Wrapped RTL text keeps its logical line order but reorders per line; the
+ * label grows to the wrapped line count and a text area measures the same. */
+static void test_wrapped_rtl(pt_app *app) {
+    pt_font *probe = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                     pt_font_slant_upright, 14.0f);
+    if (!probe || !pt_font_has_glyph(probe, 0x05D0u)) {
+        printf("skip layout: no Hebrew-capable frame font; wrapped RTL checks skipped\n");
+        return;
+    }
+    const char *text =
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E";
+    pt_text_line *lines = NULL;
+    int count = pt_font_wrap_lines_bidi(probe, text, strlen(text), 60.0f, pt_bidi_base_auto,
+                                        false, &lines);
+    pt_check(count >= 2);
+    for (int i = 0; i < count; ++i) {
+        pt_check(lines[i].base_level == 1);
+        pt_check(pt_font_measure_bidi(probe, text + lines[i].start,
+                                      lines[i].end - lines[i].start,
+                                      pt_bidi_base_rtl) <= 60.5f);
+    }
+    free(lines);
+
+    pt_window *window = pt_window_create(app, "rtl wrap", 260, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget *label = pt_label_create(root, text);
+    pt_widget_set_label_wrap(label, true);
+    pt_widget_set_width(label, 60.0f);
+    pt_widget_set_align_self(label, pt_align_start);
+    pt_canvas *canvas = pt_canvas_create(260, 240, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect bounds = bounds_of(label);
+    pt_check(bounds.h > probe->line_height);
+    uint32_t background = pt_canvas_get_pixel(canvas, 0, 0);
+    int painted = 0;
+    for (int y = 0; y < canvas->height; ++y) {
+        for (int x = 0; x < canvas->width; ++x) {
+            if (pt_canvas_get_pixel(canvas, x, y) != background) {
+                ++painted;
+            }
+        }
+    }
+    pt_check(painted > 50);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.layout");
@@ -191,6 +250,7 @@ int main(void) {
     test_scroll_clamp(app);
     test_hidden_and_wrap(app);
     test_min_max(app);
+    test_wrapped_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("layout");
 }

@@ -290,6 +290,89 @@ static void test_font_pipeline(pt_font *font) {
     pt_font_runs_free(runs);
     runs = NULL;
 
+    /* Sub-runs of one odd-level UBA run are visual: "abc " + alef bet gimel
+     * under an RTL base puts the Hebrew run, then the Common space, then the
+     * even-level Latin island. The space splits from Hebrew because it starts
+     * the UBA run and inherits no preceding script. */
+    len = strlen(mixed_ltr);
+    count = pt_font_runs_bidi(font, mixed_ltr, len, pt_bidi_base_rtl, &runs);
+    pt_check(count == 3);
+    pt_check(runs && runs[0].start == 4 && runs[0].end == 10 && runs[0].level == 1 &&
+             runs[0].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[1].start == 3 && runs[1].end == 4 && runs[1].level == 1 &&
+             runs[1].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[2].start == 0 && runs[2].end == 3 && runs[2].level == 2 &&
+             runs[2].direction == HB_DIRECTION_LTR);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
+    /* The same bytes under an LTR base keep the RTL run single and last. */
+    count = pt_font_runs_bidi(font, mixed_ltr, len, pt_bidi_base_ltr, &runs);
+    pt_check(count == 2);
+    pt_check(runs && runs[0].start == 0 && runs[0].end == 4 && runs[0].level == 0);
+    pt_check(runs && runs[1].start == 4 && runs[1].end == 10 && runs[1].level == 1 &&
+             runs[1].direction == HB_DIRECTION_RTL);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
+    /* Same mechanism with Arabic: the Arabic word plus the leading Common
+     * space are one odd-level run and are emitted word-first. */
+    const char *mixed_arabic = "abc " "\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85";
+    len = strlen(mixed_arabic);
+    count = pt_font_runs_bidi(font, mixed_arabic, len, pt_bidi_base_rtl, &runs);
+    pt_check(count == 3);
+    pt_check(runs && runs[0].start == 4 && runs[0].end == len && runs[0].level == 1);
+    pt_check(runs && runs[1].start == 3 && runs[1].end == 4 && runs[1].level == 1);
+    pt_check(runs && runs[2].start == 0 && runs[2].end == 3 && runs[2].level == 2);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
+    /* Arabic letters and Arabic-Indic digits in one RTL paragraph: the AN
+     * digits are an even-level island left of the AL word, while the leading
+     * Common space stays in the odd-level run and is reversed. */
+    const char *arabic_digits = "abc " "\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85"
+                                        " " "\xD9\xA1\xD9\xA2\xD9\xA3";
+    len = strlen(arabic_digits);
+    count = pt_font_runs_bidi(font, arabic_digits, len, pt_bidi_base_rtl, &runs);
+    pt_check(count == 4);
+    pt_check(runs && runs[0].start == 13 && runs[0].end == 19 && runs[0].level == 2 &&
+             runs[0].direction == HB_DIRECTION_LTR);
+    pt_check(runs && runs[1].start == 4 && runs[1].end == 13 && runs[1].level == 1 &&
+             runs[1].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[2].start == 3 && runs[2].end == 4 && runs[2].level == 1);
+    pt_check(runs && runs[3].start == 0 && runs[3].end == 3 && runs[3].level == 2);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
+    /* A single-line request still accepts embedded newlines: each paragraph is
+     * reordered under its own base and the visual runs stay concatenated in
+     * logical paragraph order (the old adapter fell back to logical order). */
+    const char *multiline = "abc\n\xD7\x90\xD7\x91";
+    len = strlen(multiline);
+    count = pt_font_runs_bidi(font, multiline, len, pt_bidi_base_auto, &runs);
+    pt_check(count == 3);
+    pt_check(runs && runs[0].level == 0 && runs[0].start == 0 && runs[0].end == 3);
+    pt_check(runs && runs[1].level == 0 && runs[1].start == 3 && runs[1].end == 4);
+    pt_check(runs && runs[2].level == 1 && runs[2].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[2].start == 4 && runs[2].end == len);
+    pt_check(pt_font_measure_bidi(font, multiline, len, pt_bidi_base_auto) > 0.0f);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
+    const char *rtl_first = "\xD7\x90\xD7\x91\nabc";
+    len = strlen(rtl_first);
+    count = pt_font_runs_bidi(font, rtl_first, len, pt_bidi_base_auto, &runs);
+    pt_check(count == 3);
+    /* The first paragraph is one odd-level run holding the Hebrew letters and
+     * the trailing newline (Common script), so its sub-runs are reversed:
+     * the newline is visually leftmost, then the Hebrew letter pair. */
+    pt_check(runs && runs[0].level == 1 && runs[0].direction == HB_DIRECTION_RTL);
+    pt_check(runs && runs[0].start == 4 && runs[0].end == 5);
+    pt_check(runs && runs[1].level == 1 && runs[1].start == 0 && runs[1].end == 4);
+    pt_check(runs && runs[2].level == 0 && runs[2].start == 5 && runs[2].end == len);
+    pt_font_runs_free(runs);
+    runs = NULL;
+
     /* Pure RTL and pure LTR. */
     len = strlen(hebrew);
     count = pt_font_runs_bidi(font, hebrew, len, pt_bidi_base_auto, &runs);
@@ -340,6 +423,234 @@ static void test_font_pipeline(pt_font *font) {
                   pt_font_measure_bidi(font, cache_text, len, pt_bidi_base_ltr), 0.0f);
 }
 
+/* Rule L1: whitespace at a wrapped line end resets to the paragraph base even
+ * when the paragraph-level analysis resolved it to an embedded level. */
+static void test_line_l1_whitespace(void) {
+    /* LTR base, two Hebrew words separated by spaces. The whole paragraph
+     * resolves the spaces to level 1 (inside the RTL stretch); a line cut after
+     * the first word resets the trailing space to level 0. */
+    const char *text = "\xD7\x90\xD7\x91   \xD7\x92\xD7\x93";
+    pt_bidi_paragraph *paragraph = NULL;
+    pt_check(pt_bidi_paragraph_analyze(text, strlen(text), pt_bidi_base_ltr, &paragraph));
+    pt_check(paragraph != NULL);
+    pt_bidi_line whole = {0};
+    pt_check(pt_bidi_line_create(paragraph, 0, strlen(text), &whole));
+    pt_check(whole.base_level == 0);
+    pt_check(pt_bidi_line_level_at(&whole, 4) == 1);
+    pt_check(pt_bidi_line_level_at(&whole, 5) == 1);
+    pt_bidi_line_free(&whole);
+
+    pt_bidi_line cut = {0};
+    pt_check(pt_bidi_line_create(paragraph, 0, 5, &cut));
+    pt_check(cut.base_level == 0);
+    pt_check(pt_bidi_line_level_at(&cut, 3) == 1);
+    pt_check(pt_bidi_line_level_at(&cut, 4) == 0);
+    pt_bidi_line_free(&cut);
+    pt_bidi_paragraph_free(paragraph);
+}
+
+/* Logical <-> visual map: clusters, run-boundary affinity, removed controls. */
+static void test_visual_map(pt_font *font) {
+    const char *hebrew_text = "\xD7\x90\xD7\x91\xD7\x92";
+    size_t hebrew_len = strlen(hebrew_text);
+    pt_text_visual_map *map = NULL;
+    pt_check(pt_text_visual_map_build_bidi(font, hebrew_text, hebrew_len, pt_bidi_base_rtl, &map));
+    pt_check(map != NULL);
+    if (!map) {
+        return;
+    }
+    float width = pt_text_visual_map_width(map);
+    pt_check(width > 0.0f);
+    pt_check(map->count == 3);
+    pt_check(map->base_level == 1);
+    /* Clusters are stored in logical order but their visual x walks left for an
+     * RTL run: logical start is the right edge, logical end the left edge. */
+    pt_check_near(pt_text_visual_map_x_for_position(map, 0, pt_text_bias_leading), width, 0.01f);
+    pt_check(pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading) < width);
+    pt_check(pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading) <
+             pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading));
+    pt_check_near(pt_text_visual_map_x_for_position(map, hebrew_len, pt_text_bias_trailing),
+                  0.0f, 0.01f);
+    /* Hit testing at the visual left edge returns the logical end. */
+    pt_check(pt_text_visual_map_position_for_x(map, 0.0f, pt_text_bias_leading) == hebrew_len);
+    pt_check(pt_text_visual_map_position_for_x(map, width, pt_text_bias_leading) == 0);
+    /* Cluster boundaries: the middle of a 2-byte Hebrew cluster is interior. */
+    pt_check(pt_text_visual_map_is_boundary(map, 0));
+    pt_check(!pt_text_visual_map_is_boundary(map, 1));
+    pt_check(pt_text_visual_map_is_boundary(map, 2));
+    pt_check(pt_text_visual_map_next_boundary(map, 0) == 2);
+    pt_check(pt_text_visual_map_prev_boundary(map, hebrew_len) == 4);
+    pt_text_visual_map_free(map);
+    map = NULL;
+
+    /* The map's base level is the paragraph base, not the smallest run level.
+     * An all-Latin paragraph under a forced RTL base resolves to 1; Hebrew
+     * under a forced LTR base resolves to 0. Auto keeps the engine result. */
+    pt_check(pt_text_visual_map_build_bidi(font, "abc", 3, pt_bidi_base_rtl, &map));
+    pt_check(map != NULL && map->base_level == 1);
+    pt_text_visual_map_free(map);
+    map = NULL;
+    pt_check(pt_text_visual_map_build_bidi(font, hebrew_text, hebrew_len, pt_bidi_base_ltr,
+                                           &map));
+    pt_check(map != NULL && map->base_level == 0);
+    pt_text_visual_map_free(map);
+    map = NULL;
+    pt_check(pt_text_visual_map_build_bidi(font, hebrew_text, hebrew_len, pt_bidi_base_auto,
+                                           &map));
+    pt_check(map != NULL && map->base_level == 1);
+    pt_text_visual_map_free(map);
+    map = NULL;
+    pt_check(pt_text_visual_map_build_bidi(font, "abc", 3, pt_bidi_base_auto, &map));
+    pt_check(map != NULL && map->base_level == 0);
+    pt_text_visual_map_free(map);
+    map = NULL;
+
+    /* Mixed multi-run line: "abc " + alef bet gimel under an RTL base. Segment
+     * order is visual (Hebrew, space, Latin) but the cluster array must still be
+     * monotonic in logical order for the binary lookup. Concrete caret
+     * positions follow the visual layout: the Latin island is rightmost, the
+     * space sits between it and the Hebrew word, and logical end 10 is x=0. */
+    size_t mixed_len = strlen(mixed_ltr);
+    pt_check(pt_text_visual_map_build_bidi(font, mixed_ltr, mixed_len, pt_bidi_base_rtl, &map));
+    pt_check(map != NULL);
+    if (map) {
+        float hebrew_width = pt_font_measure_direction(font, hebrew_text, hebrew_len,
+                                                       HB_DIRECTION_RTL);
+        float space_width = pt_font_measure(font, " ", 1);
+        float abc_width = pt_font_measure(font, "abc", 3);
+        float a_width = pt_font_measure(font, "a", 1);
+        float ab_width = pt_font_measure(font, "ab", 2);
+        float line_width = pt_text_visual_map_width(map);
+        pt_check(map->count == 7);
+        pt_check_near(line_width, hebrew_width + space_width + abc_width, 0.01f);
+        for (size_t i = 1; i < map->count; ++i) {
+            pt_check(map->clusters[i - 1].start <= map->clusters[i].start);
+        }
+        float latin_left = hebrew_width + space_width;
+        pt_check_near(pt_text_visual_map_x_for_position(map, 0, pt_text_bias_leading),
+                      latin_left, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 0, pt_text_bias_trailing),
+                      latin_left, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 1, pt_text_bias_leading),
+                      latin_left + a_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 1, pt_text_bias_trailing),
+                      latin_left + a_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading),
+                      latin_left + ab_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 2, pt_text_bias_trailing),
+                      latin_left + ab_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 3, pt_text_bias_leading),
+                      latin_left, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 3, pt_text_bias_trailing),
+                      line_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading),
+                      hebrew_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 10, pt_text_bias_leading), 0.0f,
+                      0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 10, pt_text_bias_trailing), 0.0f,
+                      0.01f);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
+    /* Reverse case: the same bytes under an LTR base keep logical order. The
+     * Hebrew run is an RTL island whose logical start is its right edge. */
+    pt_check(pt_text_visual_map_build_bidi(font, mixed_ltr, mixed_len, pt_bidi_base_ltr, &map));
+    pt_check(map != NULL);
+    if (map) {
+        float hebrew_width = pt_font_measure_direction(font, hebrew_text, hebrew_len,
+                                                       HB_DIRECTION_RTL);
+        float space_width = pt_font_measure(font, " ", 1);
+        float abc_width = pt_font_measure(font, "abc", 3);
+        float line_width = pt_text_visual_map_width(map);
+        pt_check(map->count == 7);
+        pt_check(map->base_level == 0);
+        for (size_t i = 1; i < map->count; ++i) {
+            pt_check(map->clusters[i - 1].start <= map->clusters[i].start);
+        }
+        pt_check_near(pt_text_visual_map_x_for_position(map, 0, pt_text_bias_leading), 0.0f,
+                      0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 3, pt_text_bias_trailing),
+                      abc_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading),
+                      line_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 4, pt_text_bias_trailing),
+                      abc_width + space_width, 0.01f);
+        pt_check_near(pt_text_visual_map_x_for_position(map, 10, pt_text_bias_leading),
+                      abc_width + space_width, 0.01f);
+        pt_check_near(pt_text_visual_map_width(map),
+                      abc_width + space_width + hebrew_width, 0.01f);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+    /* Run-boundary affinity under an LTR base: the logical position between the
+     * Latin run and the Hebrew run has two visual sides. */
+    const char *mixed = "abc \xD7\x90\xD7\x91";
+    size_t affinity_len = strlen(mixed);
+    pt_check(pt_text_visual_map_build_bidi(font, mixed, affinity_len, pt_bidi_base_auto, &map));
+    pt_check(map != NULL);
+    if (map) {
+        float leading = pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading);
+        float trailing = pt_text_visual_map_x_for_position(map, 4, pt_text_bias_trailing);
+        pt_check(leading > trailing + 0.5f);
+        /* The Hebrew cluster interior maps to one x side or the other, never
+         * past the line edges. */
+        float inside = pt_text_visual_map_x_for_position(map, 5, pt_text_bias_leading);
+        pt_check(inside >= -0.01f && inside <= pt_text_visual_map_width(map) + 0.01f);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
+    /* X9 controls keep their bytes but collapse to a zero-width cluster; they
+     * are not cluster boundaries and add no width. */
+    const char *controlled = "a\xE2\x80\xAA" "b";
+    size_t controlled_len = strlen(controlled);
+    pt_check(pt_text_visual_map_build_bidi(font, controlled, controlled_len, pt_bidi_base_ltr,
+                                            &map));
+    pt_check(map != NULL);
+    if (map) {
+        pt_check_near(pt_text_visual_map_width(map), pt_font_measure(font, "ab", 2), 0.01f);
+        pt_check(pt_text_visual_map_is_boundary(map, 1));
+        pt_check(!pt_text_visual_map_is_boundary(map, 2));
+        pt_check(!pt_text_visual_map_is_boundary(map, 3));
+        pt_check(pt_text_visual_map_is_boundary(map, 4));
+        pt_check_near(pt_text_visual_map_x_for_position(map, 2, pt_text_bias_leading),
+                      pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading), 0.01f);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
+    /* The map applies rule L1 per line: a line cut after Hebrew whitespace
+     * resets the trailing space to the LTR paragraph base. */
+    const char *l1_text = "\xD7\x90\xD7\x91   \xD7\x92\xD7\x93";
+    pt_check(pt_text_visual_map_build_bidi(font, l1_text, 5, pt_bidi_base_ltr, &map));
+    pt_check(map != NULL);
+    if (map && map->count > 0) {
+        pt_check(map->clusters[map->count - 1].level == 0);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+    pt_check(pt_text_visual_map_build_bidi(font, l1_text, strlen(l1_text), pt_bidi_base_ltr,
+                                            &map));
+    pt_check(map != NULL);
+    if (map) {
+        bool saw_embedded_space = false;
+        for (size_t i = 0; i < map->count; ++i) {
+            if (map->clusters[i].level != 0) {
+                saw_embedded_space = true;
+            }
+        }
+        pt_check(saw_embedded_space);
+        pt_text_visual_map_free(map);
+        map = NULL;
+    }
+
+    /* Empty input builds an empty map rather than failing. */
+    pt_check(pt_text_visual_map_build_bidi(font, "", 0, pt_bidi_base_auto, &map));
+    pt_check(map != NULL && map->count == 0 && pt_text_visual_map_width(map) == 0.0f);
+    pt_text_visual_map_free(map);
+}
+
 static uint64_t draw_one(pt_canvas *canvas, pt_font *font, const char *text, pt_bidi_base base,
                          float x) {
     pt_canvas_clear(canvas, 0x000000FFu);
@@ -373,6 +684,60 @@ static void test_rendering(pt_font *font) {
     uint64_t mixed_rtl_hash = draw_one(canvas, font, mixed_ltr, pt_bidi_base_rtl, 10.0f);
     pt_check(mixed_ltr_hash != mixed_rtl_hash);
 
+    /* Sub-run order inside the mixed RTL line is pixel-visible: the Hebrew word
+     * starts at the left edge, the Common space follows, then the Latin island.
+     * Composing that order from separate draws must be byte-identical to the
+     * whole line; the swapped order must not be. */
+    float hebrew_width =
+        pt_font_measure_direction(font, "\xD7\x90\xD7\x91\xD7\x92", 6, HB_DIRECTION_RTL);
+    float space_width = pt_font_measure(font, " ", 1);
+    float abc_width = pt_font_measure(font, "abc", 3);
+    pt_canvas_clear(canvas, 0x000000FFu);
+    pt_canvas_draw_text_line_bidi(canvas, font, mixed_ltr, strlen(mixed_ltr), 10.0f, 50.0f,
+                                  0.0f, pt_text_align_start, 0xFFFFFFFFu, false,
+                                  pt_bidi_base_rtl);
+    uint64_t whole = pixels_hash(canvas);
+    pt_canvas_clear(canvas, 0x000000FFu);
+    pt_canvas_draw_text_line_direction(canvas, font, "\xD7\x90\xD7\x91\xD7\x92", 6, 10.0f,
+                                       50.0f, 0.0f, pt_text_align_start, 0xFFFFFFFFu, false,
+                                       HB_DIRECTION_RTL);
+    pt_canvas_draw_text_line(canvas, font, "abc", 3, 10.0f + hebrew_width + space_width,
+                             50.0f, 0.0f, pt_text_align_start, 0xFFFFFFFFu, false);
+    pt_check(pixels_hash(canvas) == whole);
+    pt_canvas_clear(canvas, 0x000000FFu);
+    pt_canvas_draw_text_line(canvas, font, "abc", 3, 10.0f, 50.0f, 0.0f,
+                             pt_text_align_start, 0xFFFFFFFFu, false);
+    pt_canvas_draw_text_line_direction(canvas, font, "\xD7\x90\xD7\x91\xD7\x92", 6,
+                                       10.0f + abc_width + space_width, 50.0f, 0.0f,
+                                       pt_text_align_start, 0xFFFFFFFFu, false,
+                                       HB_DIRECTION_RTL);
+    pt_check(pixels_hash(canvas) != whole);
+
+    /* The same holds for Arabic in an RTL base. */
+    const char *arabic_word = "\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85";
+    const char *mixed_arabic = "abc " "\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85";
+    float arabic_width = pt_font_measure_direction(font, arabic_word, 8, HB_DIRECTION_RTL);
+    pt_canvas_clear(canvas, 0x000000FFu);
+    pt_canvas_draw_text_line_bidi(canvas, font, mixed_arabic, strlen(mixed_arabic), 10.0f,
+                                  50.0f, 0.0f, pt_text_align_start, 0xFFFFFFFFu, false,
+                                  pt_bidi_base_rtl);
+    uint64_t arabic_whole = pixels_hash(canvas);
+    pt_canvas_clear(canvas, 0x000000FFu);
+    pt_canvas_draw_text_line_direction(canvas, font, arabic_word, 8, 10.0f, 50.0f, 0.0f,
+                                       pt_text_align_start, 0xFFFFFFFFu, false,
+                                       HB_DIRECTION_RTL);
+    pt_canvas_draw_text_line(canvas, font, "abc", 3, 10.0f + arabic_width + space_width,
+                             50.0f, 0.0f, pt_text_align_start, 0xFFFFFFFFu, false);
+    pt_check(pixels_hash(canvas) == arabic_whole);
+    pt_canvas_clear(canvas, 0x000000FFu);
+    pt_canvas_draw_text_line(canvas, font, "abc", 3, 10.0f, 50.0f, 0.0f,
+                             pt_text_align_start, 0xFFFFFFFFu, false);
+    pt_canvas_draw_text_line_direction(canvas, font, arabic_word, 8,
+                                       10.0f + abc_width + space_width, 50.0f, 0.0f,
+                                       pt_text_align_start, 0xFFFFFFFFu, false,
+                                       HB_DIRECTION_RTL);
+    pt_check(pixels_hash(canvas) != arabic_whole);
+
     /* A mixed line paints a meaningful number of pixels. */
     pt_canvas_clear(canvas, 0x000000FFu);
     pt_canvas_draw_text_line_bidi(canvas, font, mixed_ltr, strlen(mixed_ltr), 10.0f, 50.0f,
@@ -401,6 +766,7 @@ int main(void) {
     test_paragraph_basics();
     test_byte_maps();
     test_controls_and_combining();
+    test_line_l1_whitespace();
 
     pt_font *font = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
                                     pt_font_slant_upright, 24.0f);
@@ -409,6 +775,7 @@ int main(void) {
     } else {
         test_font_pipeline(font);
         test_rendering(font);
+        test_visual_map(font);
     }
 
     /* Neutral fallback keeps the API surface honest even without the font. */

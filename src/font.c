@@ -12,6 +12,7 @@
 #include <fontconfig/fontconfig.h>
 #include <hb-ft.h>
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -976,6 +977,23 @@ static hb_direction_t direction_for_level(uint8_t level) {
     return (level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
 }
 
+/* Reverses the sub-runs just appended for one RTL (odd level) embedding run.
+ * Script/face sub-runs inside a single UBA run are kept in logical order by the
+ * splitter, but painting advances the pen left to right and each sub-run is
+ * shaped RTL already (HarfBuzz returns its glyphs in visual order). Odd-level
+ * sub-runs therefore have to be emitted in reverse logical order; even-level
+ * runs stay logical, which is also their visual order. */
+static void reverse_run_range(run_builder *builder, size_t first) {
+    if (!builder || builder->count <= first + 1) {
+        return;
+    }
+    for (size_t left = first, right = builder->count - 1; left < right; ++left, --right) {
+        pt_shaped_run temporary = builder->runs[left];
+        builder->runs[left] = builder->runs[right];
+        builder->runs[right] = temporary;
+    }
+}
+
 static pt_shape_entry *shape_entry_alloc(pt_font *font, const char *text, size_t len,
                                          uint8_t direction_key) {
     pt_shape_entry *entry = pt_alloc_zeroed(1, sizeof(*entry));
@@ -1034,20 +1052,75 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
             base = pt_bidi_base_auto;
             break;
         }
-        if (pt_bidi_paragraph_analyze(text, len, base, &paragraph) &&
-            pt_bidi_line_create(paragraph, 0, len, &line)) {
-            for (size_t i = 0; i < line.run_count; ++i) {
-                const pt_bidi_run *run = &line.runs[i];
-                builder.level = run->level;
-                builder.direction = direction_for_level(run->level);
-                build_runs_between(font, text, run->offset, run->offset + run->length, true,
-                                   &builder);
+        /* A single-line request may still receive embedded newlines (a label
+         * with explicit breaks). Each UBA paragraph reorders independently;
+         * the paragraphs stay concatenated in logical order on the one painted
+         * line, which is the best single-line reading of the text. */
+        uint8_t first_base = 0;
+        bool saw_paragraph = false;
+        size_t at = 0;
+        while (at < len) {
+            size_t remaining = len - at;
+            if (!pt_bidi_paragraph_analyze(text + at, remaining, base, &paragraph)) {
+                break;
+            }
+            size_t paragraph_length = pt_bidi_paragraph_length(paragraph);
+            if (paragraph_length == 0 || paragraph_length > remaining) {
+                pt_bidi_paragraph_free(paragraph);
+                paragraph = NULL;
+                break;
+            }
+            if (pt_bidi_line_create(paragraph, 0, paragraph_length, &line)) {
+                if (!saw_paragraph) {
+                    first_base = line.base_level;
+                    saw_paragraph = true;
+                }
+                for (size_t i = 0; i < line.run_count; ++i) {
+                    const pt_bidi_run *run = &line.runs[i];
+                    size_t first = builder.count;
+                    builder.level = run->level;
+                    builder.direction = direction_for_level(run->level);
+                    build_runs_between(font, text, at + run->offset,
+                                       at + run->offset + run->length, true, &builder);
+                    if (run->level & 1u) {
+                        reverse_run_range(&builder, first);
+                    }
+                }
+                pt_bidi_line_free(&line);
+            } else {
+                /* Keep the bytes when a paragraph line cannot be created; the
+                 * paragraph base still drives their direction. */
+                if (!saw_paragraph) {
+                    first_base = pt_bidi_paragraph_base_level(paragraph);
+                    saw_paragraph = true;
+                }
+                builder.level = pt_bidi_paragraph_base_level(paragraph);
+                builder.direction = direction_for_level(builder.level);
+                size_t first = builder.count;
+                build_runs_between(font, text, at, at + paragraph_length, true, &builder);
+                if (builder.level & 1u) {
+                    reverse_run_range(&builder, first);
+                }
+            }
+            pt_bidi_paragraph_free(paragraph);
+            paragraph = NULL;
+            at += paragraph_length;
+        }
+        if (saw_paragraph) {
+            if (at < len) {
+                builder.level = first_base;
+                builder.direction = direction_for_level(first_base);
+                size_t first = builder.count;
+                build_runs_between(font, text, at, len, true, &builder);
+                if (builder.level & 1u) {
+                    reverse_run_range(&builder, first);
+                }
             }
             if (builder.count == 0) {
-                /* Degenerate all-removed lines still shape under the paragraph
+                /* Degenerate all-removed text still shapes under the paragraph
                  * base so empty/control-only input is not guessed LTR. */
-                builder.level = line.base_level;
-                builder.direction = direction_for_level(line.base_level);
+                builder.level = first_base;
+                builder.direction = direction_for_level(first_base);
             }
             reordered = true;
         }
@@ -1065,7 +1138,11 @@ static pt_shape_entry *shape_entry_build(pt_font *font, const char *text, size_t
             builder.level = 1;
             builder.direction = HB_DIRECTION_RTL;
         }
+        size_t first = builder.count;
         build_runs_between(font, text, 0, len, bidi, &builder);
+        if (bidi && (builder.level & 1u)) {
+            reverse_run_range(&builder, first);
+        }
     }
     if (builder.count == 0) {
         run_push(&builder, 0, len, font, HB_SCRIPT_INVALID, true);
@@ -1170,6 +1247,373 @@ float pt_font_measure_direction(const pt_font *font, const char *text, size_t le
     uint8_t key =
         direction == HB_DIRECTION_RTL ? pt_shape_key_run_rtl : pt_shape_key_run_ltr;
     return shape_entry_measure_and_release((pt_font *)font, text, len, key, true);
+}
+
+/* ---------- logical <-> visual map (2.0 wave 3) ---------- */
+
+typedef struct glyph_group {
+    size_t offset;
+    float x0;
+    float x1;
+} glyph_group;
+
+typedef struct group_builder {
+    glyph_group *items;
+    size_t count;
+    size_t capacity;
+} group_builder;
+
+static void group_push(group_builder *builder, size_t offset, float x0, float x1) {
+    if (builder->count == builder->capacity) {
+        builder->capacity = builder->capacity ? builder->capacity * 2 : 16;
+        builder->items = pt_realloc_mem(builder->items,
+                                        builder->capacity * sizeof(*builder->items));
+    }
+    builder->items[builder->count++] = (glyph_group){offset, x0, x1};
+}
+
+static int compare_groups(const void *a, const void *b) {
+    const glyph_group *ga = a;
+    const glyph_group *gb = b;
+    if (ga->offset < gb->offset) return -1;
+    if (ga->offset > gb->offset) return 1;
+    return 0;
+}
+
+/* Collects glyph clusters for one visual segment. HarfBuzz reports glyphs in
+ * visual order and shaped entries keep their sub-runs in visual order too (odd
+ * levels are reversed when the entry is built), so walking the runs forward
+ * advances the pen left to right. Cluster values are run-relative and shifted
+ * back to segment offsets. */
+static bool segment_glyph_groups(pt_font *font, const char *text, size_t len,
+                                 hb_direction_t direction, float origin,
+                                 group_builder *groups, float *out_width) {
+    uint8_t key = direction == HB_DIRECTION_RTL ? pt_shape_key_run_rtl
+                                                : pt_shape_key_run_ltr;
+    bool cached = false;
+    pt_shape_entry *entry = shape_entry_get(font, text, len, key, true, &cached);
+    float pen = origin;
+    for (unsigned int step = 0; step < entry->run_count; ++step) {
+        const pt_shaped_run *run = &entry->runs[step];
+        hb_buffer_t *buffer = run->buffer;
+        if (!buffer) {
+            continue;
+        }
+        unsigned int glyph_count = 0;
+        hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+        hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+        size_t open_offset = 0;
+        float open_x0 = pen;
+        bool open = false;
+        for (unsigned int i = 0; i < glyph_count; ++i) {
+            size_t offset = run->start + (size_t)infos[i].cluster;
+            if (!open || offset != open_offset) {
+                if (open) {
+                    group_push(groups, open_offset, open_x0, pen);
+                }
+                open = true;
+                open_offset = offset;
+                open_x0 = pen;
+            }
+            pen += (float)positions[i].x_advance / 64.0f;
+        }
+        if (open) {
+            group_push(groups, open_offset, open_x0, pen);
+        }
+    }
+    *out_width = pen - origin;
+    if (!cached) {
+        shape_entry_clear(entry);
+    }
+    return true;
+}
+
+/* Clusters are appended segment by segment in visual order, so their logical
+ * starts are not monotonic on mixed lines. The map contract, the binary lookup
+ * and the two end shortcuts all assume logical order; a stable insertion sort
+ * (same logical start => zero-width removed clusters keep relative order) makes
+ * the array monotonic again. Insertion sort is linear on the already sorted
+ * pure LTR and single-run RTL arrays. */
+static void clusters_sort_by_start(pt_text_visual_map *map) {
+    for (size_t i = 1; i < map->count; ++i) {
+        pt_text_visual_cluster cluster = map->clusters[i];
+        size_t at = i;
+        while (at > 0 && map->clusters[at - 1].start > cluster.start) {
+            map->clusters[at] = map->clusters[at - 1];
+            --at;
+        }
+        map->clusters[at] = cluster;
+    }
+}
+
+bool pt_text_visual_map_build(const char *text, size_t len,
+                              const pt_text_visual_segment *segments, size_t count,
+                              uint8_t base_level, pt_text_visual_map **out) {
+    if (!out) {
+        return false;
+    }
+    *out = NULL;
+    if (!text && len != 0) {
+        return false;
+    }
+    pt_text_visual_map *map = pt_alloc_zeroed(1, sizeof(*map));
+    map->start = 0;
+    map->end = len;
+    map->base_level = base_level;
+    if (len == 0 || count == 0) {
+        *out = map;
+        return true;
+    }
+    size_t capacity = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (segments[i].end > segments[i].start) {
+            capacity += segments[i].end - segments[i].start;
+        }
+    }
+    if (capacity == 0) {
+        *out = map;
+        return true;
+    }
+    map->clusters = pt_alloc_zeroed(capacity, sizeof(*map->clusters));
+    float visual_x = 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        const pt_text_visual_segment *segment = &segments[i];
+        if (segment->end <= segment->start || !segment->font) {
+            continue;
+        }
+        const char *segment_text = text + segment->start;
+        size_t segment_len = segment->end - segment->start;
+        group_builder groups = {0};
+        float width = 0.0f;
+        if (!segment_glyph_groups(segment->font, segment_text, segment_len, segment->direction,
+                                  visual_x, &groups, &width)) {
+            free(groups.items);
+            pt_text_visual_map_free(map);
+            return false;
+        }
+        qsort(groups.items, groups.count, sizeof(*groups.items), compare_groups);
+        bool rtl = segment->direction == HB_DIRECTION_RTL;
+        for (size_t g = 0; g < groups.count; ++g) {
+            /* Cluster extent ends at the next group start in logical order; the
+             * final one ends at the segment end. Groups with the same logical
+             * offset (reordered marks) are merged by taking the union. */
+            size_t cluster_start = groups.items[g].offset;
+            size_t cluster_end = g + 1 < groups.count ? groups.items[g + 1].offset
+                                                      : segment_len;
+            if (cluster_end <= cluster_start) {
+                cluster_end = segment_len;
+            }
+            float x0 = groups.items[g].x0;
+            float x1 = groups.items[g].x1;
+            if (x1 < x0) {
+                float swap = x0;
+                x0 = x1;
+                x1 = swap;
+            }
+            pt_text_visual_cluster *cluster = &map->clusters[map->count++];
+            cluster->start = segment->start + cluster_start;
+            cluster->end = segment->start + cluster_end;
+            cluster->x0 = x0;
+            cluster->x1 = x1;
+            cluster->level = segment->level;
+            if (rtl) {
+                cluster->start_x = x1;
+                cluster->end_x = x0;
+            } else {
+                cluster->start_x = x0;
+                cluster->end_x = x1;
+            }
+        }
+        free(groups.items);
+        visual_x += width;
+    }
+    clusters_sort_by_start(map);
+    map->width = visual_x;
+    *out = map;
+    return true;
+}
+
+bool pt_text_visual_map_build_bidi(const pt_font *font, const char *text, size_t len,
+                                   pt_bidi_base base, pt_text_visual_map **out) {
+    if (!out) {
+        return false;
+    }
+    *out = NULL;
+    if (!font || (!text && len != 0)) {
+        return false;
+    }
+    pt_font_run *runs = NULL;
+    int run_count = pt_font_runs_bidi(font, text, len, base, &runs);
+    if (len > 0 && run_count <= 0) {
+        return false;
+    }
+    pt_text_visual_segment *segments =
+        run_count > 0 ? pt_alloc_zeroed((size_t)run_count, sizeof(*segments)) : NULL;
+    /* The map's base is the paragraph's resolved base, never the smallest run
+     * level: an all-LTR paragraph under a forced RTL base has only level 2 runs,
+     * and Hebrew under a forced LTR base only level 1 runs. Auto resolves
+     * P2/P3 once for the whole range. */
+    uint8_t base_level = base == pt_bidi_base_rtl ? 1 : 0;
+    if (base == pt_bidi_base_auto) {
+        pt_bidi_paragraph *paragraph = NULL;
+        if (pt_bidi_paragraph_analyze(text, len, pt_bidi_base_auto, &paragraph)) {
+            base_level = pt_bidi_paragraph_base_level(paragraph);
+            pt_bidi_paragraph_free(paragraph);
+        }
+    }
+    for (int i = 0; i < run_count; ++i) {
+        segments[i].start = runs[i].start;
+        segments[i].end = runs[i].end;
+        segments[i].font = runs[i].font;
+        segments[i].level = runs[i].level;
+        segments[i].direction =
+            runs[i].direction != HB_DIRECTION_INVALID
+                ? runs[i].direction
+                : ((runs[i].level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
+    }
+    bool ok = pt_text_visual_map_build(text, len, segments, (size_t)run_count, base_level, out);
+    free(segments);
+    pt_font_runs_free(runs);
+    return ok;
+}
+
+void pt_text_visual_map_free(pt_text_visual_map *map) {
+    if (!map) {
+        return;
+    }
+    free(map->clusters);
+    free(map);
+}
+
+float pt_text_visual_map_width(const pt_text_visual_map *map) {
+    return map ? map->width : 0.0f;
+}
+
+static const pt_text_visual_cluster *map_cluster_at(const pt_text_visual_map *map,
+                                                    size_t position) {
+    if (!map || map->count == 0) {
+        return NULL;
+    }
+    size_t low = 0;
+    size_t high = map->count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (map->clusters[middle].start <= position) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if (low == 0) {
+        return &map->clusters[0];
+    }
+    return &map->clusters[low - 1];
+}
+
+float pt_text_visual_map_x_for_position(const pt_text_visual_map *map, size_t position,
+                                        pt_text_bias bias) {
+    if (!map || map->count == 0) {
+        return 0.0f;
+    }
+    if (position <= map->start) {
+        return map->clusters[0].start_x;
+    }
+    if (position >= map->end) {
+        const pt_text_visual_cluster *last = &map->clusters[map->count - 1];
+        return last->end_x;
+    }
+    const pt_text_visual_cluster *cluster = map_cluster_at(map, position);
+    if (!cluster) {
+        return 0.0f;
+    }
+    if (position == cluster->start) {
+        if (bias == pt_text_bias_trailing && cluster > map->clusters) {
+            return (cluster - 1)->end_x;
+        }
+        return cluster->start_x;
+    }
+    return bias == pt_text_bias_trailing ? cluster->end_x : cluster->start_x;
+}
+
+size_t pt_text_visual_map_position_for_x(const pt_text_visual_map *map, float x,
+                                         pt_text_bias bias) {
+    if (!map || map->count == 0) {
+        return map ? map->start : 0;
+    }
+    size_t best = map->start;
+    float best_distance = FLT_MAX;
+    bool best_leading = bias == pt_text_bias_leading;
+    bool have_best = false;
+    for (size_t i = 0; i < map->count; ++i) {
+        const pt_text_visual_cluster *cluster = &map->clusters[i];
+        float distance = fabsf(x - cluster->start_x);
+        if (!have_best || distance < best_distance ||
+            (distance == best_distance && bias == pt_text_bias_leading)) {
+            best = cluster->start;
+            best_distance = distance;
+            best_leading = true;
+            have_best = true;
+        }
+        distance = fabsf(x - cluster->end_x);
+        if (!have_best || distance < best_distance ||
+            (distance == best_distance && bias == pt_text_bias_trailing)) {
+            best = cluster->end;
+            best_distance = distance;
+            best_leading = false;
+            have_best = true;
+        }
+    }
+    (void)best_leading;
+    return best;
+}
+
+bool pt_text_visual_map_is_boundary(const pt_text_visual_map *map, size_t position) {
+    if (!map || position < map->start || position > map->end) {
+        return false;
+    }
+    if (position == map->start || position == map->end) {
+        return true;
+    }
+    for (size_t i = 0; i < map->count; ++i) {
+        if (map->clusters[i].start == position || map->clusters[i].end == position) {
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t pt_text_visual_map_next_boundary(const pt_text_visual_map *map, size_t position) {
+    if (!map) {
+        return position;
+    }
+    size_t best = map->end;
+    for (size_t i = 0; i < map->count; ++i) {
+        const pt_text_visual_cluster *cluster = &map->clusters[i];
+        if (cluster->end > position && cluster->end < best) {
+            best = cluster->end;
+        }
+        if (cluster->start > position && cluster->start < best) {
+            best = cluster->start;
+        }
+    }
+    return best;
+}
+
+size_t pt_text_visual_map_prev_boundary(const pt_text_visual_map *map, size_t position) {
+    if (!map) {
+        return position;
+    }
+    size_t best = map->start;
+    for (size_t i = 0; i < map->count; ++i) {
+        const pt_text_visual_cluster *cluster = &map->clusters[i];
+        if (cluster->start < position && cluster->start > best) {
+            best = cluster->start;
+        }
+        if (cluster->end < position && cluster->end > best) {
+            best = cluster->end;
+        }
+    }
+    return best;
 }
 
 void pt_font_metrics_for_text(const pt_font *font, const char *text, size_t len,
@@ -1576,6 +2020,7 @@ typedef struct line_builder {
     pt_text_line *lines;
     size_t count;
     size_t capacity;
+    uint8_t base_level;
 } line_builder;
 
 static void line_push(line_builder *builder, size_t start, size_t end) {
@@ -1583,11 +2028,46 @@ static void line_push(line_builder *builder, size_t start, size_t end) {
         builder->capacity = builder->capacity == 0 ? 16 : builder->capacity * 2;
         builder->lines = pt_realloc_mem(builder->lines, builder->capacity * sizeof(pt_text_line));
     }
-    builder->lines[builder->count++] = (pt_text_line){start, end};
+    builder->lines[builder->count++] =
+        (pt_text_line){start, end, builder->base_level};
+}
+
+/* Width measurement for the logical-order line breaker. The LTR fast path
+ * calls the pre-2.0 prefix measurement unchanged; a bidi paragraph sums the
+ * UBA runs that overlap the logical range, so widths already reflect run
+ * direction and fallback shaping. */
+typedef struct wrap_measure {
+    const pt_font *font;
+    const char *text;
+    const pt_bidi_line *line;
+    bool bidi;
+} wrap_measure;
+
+static float wrap_measure_range(const wrap_measure *measure, size_t from, size_t to) {
+    if (to <= from) {
+        return 0.0f;
+    }
+    if (!measure->bidi || !measure->line) {
+        return pt_font_measure(measure->font, measure->text + from, to - from);
+    }
+    float total = 0.0f;
+    for (size_t i = 0; i < measure->line->run_count; ++i) {
+        const pt_bidi_run *run = &measure->line->runs[i];
+        size_t run_end = run->offset + run->length;
+        size_t a = from > run->offset ? from : run->offset;
+        size_t b = to < run_end ? to : run_end;
+        if (a >= b) {
+            continue;
+        }
+        hb_direction_t direction = (run->level & 1u) ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+        total += pt_font_measure_direction(measure->font, measure->text + a, b - a, direction);
+    }
+    return total;
 }
 
 static void wrap_paragraph(const pt_font *font, const char *text, size_t start, size_t end,
-                           float max_width, line_builder *builder) {
+                           float max_width, const wrap_measure *measure,
+                           line_builder *builder) {
     if (!font || !text) {
         line_push(builder, start, start);
         return;
@@ -1611,7 +2091,7 @@ static void wrap_paragraph(const pt_font *font, const char *text, size_t start, 
             unit_end = cursor + 1;
         }
         size_t candidate_end = trim_ascii_spaces(text, line_start, unit_end);
-        float width = pt_font_measure(font, text + line_start, candidate_end - line_start);
+        float width = wrap_measure_range(measure, line_start, candidate_end);
         if (width <= max_width || !has_content) {
             if (width > max_width && !has_content && candidate_end > line_start) {
                 size_t fit_end = line_start;
@@ -1621,7 +2101,7 @@ static void wrap_paragraph(const pt_font *font, const char *text, size_t start, 
                     if (next <= scan) {
                         next = scan + 1;
                     }
-                    float prefix = pt_font_measure(font, text + line_start, next - line_start);
+                    float prefix = wrap_measure_range(measure, line_start, next);
                     if (prefix > max_width && fit_end > line_start) {
                         break;
                     }
@@ -1663,7 +2143,7 @@ static void wrap_paragraph(const pt_font *font, const char *text, size_t start, 
             if (next <= scan) {
                 next = scan + 1;
             }
-            float prefix = pt_font_measure(font, text + line_start, next - line_start);
+            float prefix = wrap_measure_range(measure, line_start, next);
             if (prefix > max_width && fit_end > line_start) {
                 break;
             }
@@ -1687,13 +2167,19 @@ static void wrap_paragraph(const pt_font *font, const char *text, size_t start, 
     }
 }
 
-int pt_font_wrap_lines(const pt_font *font, const char *text, size_t len, float max_width,
-                       pt_text_line **out_lines) {
+int pt_font_wrap_lines_bidi(const pt_font *font, const char *text, size_t len, float max_width,
+                            pt_bidi_base base, bool rtl_default,
+                            pt_text_line **out_lines) {
     line_builder builder = {0};
     if (!text) {
         len = 0;
     }
+    if (!out_lines) {
+        return 0;
+    }
     if (!font || len == 0) {
+        builder.base_level =
+            base == pt_bidi_base_rtl || (base == pt_bidi_base_auto && rtl_default) ? 1 : 0;
         line_push(&builder, 0, 0);
         *out_lines = builder.lines;
         return (int)builder.count;
@@ -1707,7 +2193,62 @@ int pt_font_wrap_lines(const pt_font *font, const char *text, size_t len, float 
         bool drop_carriage_return = paragraph_end > paragraph_start &&
                                     text[paragraph_end - 1] == '\r';
         size_t content_end = drop_carriage_return ? paragraph_end - 1 : paragraph_end;
-        wrap_paragraph(font, text, paragraph_start, content_end, max_width, &builder);
+        size_t content_len = content_end - paragraph_start;
+
+        wrap_measure measure = {.font = font, .text = text, .bidi = false};
+        pt_bidi_paragraph *paragraph = NULL;
+        pt_bidi_line line = {0};
+        bool bidi = base == pt_bidi_base_rtl || rtl_default ||
+                    (content_len > 0 &&
+                     pt_bidi_text_may_reorder(text + paragraph_start, content_len));
+        uint8_t base_level =
+            base == pt_bidi_base_rtl ? 1 : (base == pt_bidi_base_ltr ? 0 : (rtl_default ? 1 : 0));
+        if (bidi && content_len > 0) {
+            bool analyzed =
+                base == pt_bidi_base_auto
+                    ? pt_bidi_paragraph_analyze_default(text + paragraph_start, content_len,
+                                                        rtl_default, &paragraph)
+                    : pt_bidi_paragraph_analyze(text + paragraph_start, content_len, base,
+                                                &paragraph);
+            if (analyzed) {
+                base_level = pt_bidi_paragraph_base_level(paragraph);
+                if (pt_bidi_line_create(paragraph, 0, content_len, &line)) {
+                    /* Line offsets in `line` are relative to the paragraph;
+                     * shift the measurement window with the paragraph start. */
+                    measure.text = text + paragraph_start;
+                    measure.line = &line;
+                    measure.bidi = true;
+                    line_builder shifted = builder;
+                    shifted.base_level = base_level;
+                    size_t before = builder.count;
+                    wrap_paragraph(font, measure.text, 0, content_len, max_width, &measure,
+                                   &shifted);
+                    for (size_t i = before; i < shifted.count; ++i) {
+                        shifted.lines[i].start += paragraph_start;
+                        shifted.lines[i].end += paragraph_start;
+                    }
+                    builder = shifted;
+                    pt_bidi_line_free(&line);
+                    pt_bidi_paragraph_free(paragraph);
+                    paragraph = NULL;
+                    if (paragraph_end >= len) {
+                        break;
+                    }
+                    paragraph_start = paragraph_end + 1;
+                    if (paragraph_start == len) {
+                        builder.base_level = base_level;
+                        line_push(&builder, len, len);
+                        break;
+                    }
+                    continue;
+                }
+            }
+            if (paragraph) {
+                pt_bidi_paragraph_free(paragraph);
+            }
+        }
+        builder.base_level = base_level;
+        wrap_paragraph(font, text, paragraph_start, content_end, max_width, &measure, &builder);
         if (paragraph_end >= len) {
             break;
         }
@@ -1719,6 +2260,12 @@ int pt_font_wrap_lines(const pt_font *font, const char *text, size_t len, float 
     }
     *out_lines = builder.lines;
     return (int)builder.count;
+}
+
+int pt_font_wrap_lines(const pt_font *font, const char *text, size_t len, float max_width,
+                       pt_text_line **out_lines) {
+    return pt_font_wrap_lines_bidi(font, text, len, max_width, pt_bidi_base_auto, false,
+                                   out_lines);
 }
 
 float pt_font_wrapped_height(const pt_font *font, const char *text, float max_width) {
@@ -2041,18 +2588,21 @@ void pt_canvas_draw_text_line_direction(pt_canvas *canvas, const pt_font *font,
     free(ellipsized);
 }
 
-void pt_canvas_draw_text_wrapped(pt_canvas *canvas, const pt_font *font, const char *text,
-                                 float x, float top, float max_width, float max_height,
-                                 pt_text_align align, pt_color color) {
+void pt_canvas_draw_text_wrapped_bidi(pt_canvas *canvas, const pt_font *font, const char *text,
+                                       float x, float top, float max_width, float max_height,
+                                       pt_text_align align, pt_color color, pt_bidi_base base,
+                                       bool rtl_default) {
     if (!canvas || !font || !text) {
         return;
     }
     size_t len = strlen(text);
     pt_text_line *lines = NULL;
-    int count = pt_font_wrap_lines(font, text, len, max_width * canvas->scale, &lines);
+    int count =
+        pt_font_wrap_lines_bidi(font, text, len, max_width * canvas->scale, base, rtl_default,
+                                &lines);
     float ascent_px = 0.0f;
     float descent_px = 0.0f;
-    pt_font_metrics_for_text(font, text, len, &ascent_px, &descent_px);
+    pt_font_metrics_for_text_bidi(font, text, len, base, &ascent_px, &descent_px);
     float ascent = ascent_px / canvas->scale;
     float line_height = pt_max_float(ascent_px + descent_px, font->line_height) / canvas->scale;
     for (int i = 0; i < count; ++i) {
@@ -2066,10 +2616,20 @@ void pt_canvas_draw_text_wrapped(pt_canvas *canvas, const pt_font *font, const c
             ++start;
         }
         if (end > start) {
-            pt_canvas_draw_text_line(canvas, font, text + start, end - start, x,
-                                     line_top + ascent, max_width, align, color, false);
+            pt_bidi_base line_base =
+                (lines[i].base_level & 1u) ? pt_bidi_base_rtl : pt_bidi_base_ltr;
+            pt_canvas_draw_text_line_bidi(canvas, font, text + start, end - start, x,
+                                          line_top + ascent, max_width, align, color, false,
+                                          line_base);
         }
     }
     free(lines);
+}
+
+void pt_canvas_draw_text_wrapped(pt_canvas *canvas, const pt_font *font, const char *text,
+                                 float x, float top, float max_width, float max_height,
+                                 pt_text_align align, pt_color color) {
+    pt_canvas_draw_text_wrapped_bidi(canvas, font, text, x, top, max_width, max_height, align,
+                                     color, pt_bidi_base_auto, false);
 }
 
