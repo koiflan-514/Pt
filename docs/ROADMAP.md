@@ -2026,7 +2026,7 @@ Decisions (researched 2026-11-22, kept as taken):
 | W6b | README/guides/rtl.md final, ROADMAP/release records, RTL examples | `b4bdf99` |
 | W7prep | Cross-version LTR byte-compatibility gate (`tools/ltr-compat.sh`, 10 scenes) | `43cfad6` |
 | W7 | Fuzz/perf hardening, live RTL consistency, ci.sh LTR stage, a11y bus isolation, CSD-title and entry-shaping fixes, final gate, ABI diff | `91176c2` (12 commits, `a361d5b` through `91176c2`) |
-| Integration | W0-W4 + W5a + W6a + W6b + W5b + W7prep on `m22/integration` | `a02a40e`, fast-forwarded to W7 tip `91176c2` |
+| Integration | W0-W4 + W5a + W6a + W6b + W5b + W7prep on `m22/integration` | `a02a40e`, fast-forwarded to W7 tip `91176c2`; final gate record backfilled at `a36b1c9` |
 
 Landed detail per wave:
 

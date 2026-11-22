@@ -1412,6 +1412,37 @@ transcript can be quoted. The artifact, the suite results, the live runs and
 the ABI comparison are final on this tree; the annotated tag is created by the
 owner from the frozen commit.
 
+### Committed-tree digest
+
+The gate-time digest above was measured on `91176c2` with this record still in
+its draft (pending) form, before the figures were backfilled; editing this file
+necessarily changes the archive. For a reproducible reference on the record
+itself, the committed tree that carries the backfilled figures (`a36b1c9`, the
+parent of the commit that adds this note) produced
+`66a3724a70e66bf2e1703be8cdefcb49d7302a29522bda8af420f596845bbc20` on two
+consecutive `dist` runs. Adding this digest note changes `docs/release.md` once
+more, so the tagged tree necessarily has a different digest; that is the
+self-reference of shipping the record inside the archive, not nondeterminism.
+`make dist` on the tagged tree reproduces its own digest exactly.
+
+All sha256 digests in this record — the gate-time
+`e9e436b974a3473727465289d27e6141c2cc0d116f830e1efa888a28ce95c513` and the
+committed-tree `66a3724a…` — were measured with
+`SOURCE_DATE_EPOCH=1767225600`, the reproducible-build epoch that
+`tools/ci.sh` fixes. A bare `make dist` derives its epoch from the last commit
+time instead, and that epoch lands in the mtime field of every tar header, so
+the same tree digests differently. Extracting both archives gives
+byte-identical trees; only the timestamp header differs. To reproduce a digest
+quoted here, run `SOURCE_DATE_EPOCH=1767225600 make dist`, not a bare
+`make dist`.
+
+The annotated tag is created from the final gate tree once the owner confirms
+the freeze. `tools/release-check.sh --full` reports every automated gate green;
+the two open items it always reports are the human ones (freeze commit/tag and
+live-suite sign-off), and the live suites above were run on this tree. The one
+gate-facility correction (`tools/install-check.sh` `$(ABI_MAJOR)` expansion)
+remains outside the artifact.
+
 ## 1.4.0 validation record (2026-11-22)
 
 Environment: the final gate tree `e1104c2` on `m21/integration` on the
