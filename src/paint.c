@@ -495,6 +495,85 @@ static void paint_preedit_hints(pt_canvas *canvas, const pt_widget *widget, cons
     }
 }
 
+/* ---------- bidi selection spans (2.0 wave 4) ---------- */
+
+typedef struct paint_x_span {
+    float x0;
+    float x1;
+} paint_x_span;
+
+static int compare_x_span(const void *a, const void *b) {
+    const paint_x_span *left = a;
+    const paint_x_span *right = b;
+    if (left->x0 < right->x0) {
+        return -1;
+    }
+    if (left->x0 > right->x0) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Fills one rectangle per contiguous visual run of a logical range. Clusters
+ * sorted by logical start still span disjoint visual intervals, so the union is
+ * merged by x after collection: an LTR or single RTL run collapses to exactly
+ * the one rectangle the pre-2.0 painter drew. */
+static void paint_map_range(pt_canvas *canvas, const pt_text_visual_map *map, size_t from,
+                            size_t to, float origin_x, float top, float height,
+                            pt_color color) {
+    if (!canvas || !map || to <= from || map->count == 0) {
+        return;
+    }
+    paint_x_span *spans = pt_alloc_zeroed(map->count, sizeof(*spans));
+    size_t span_count = 0;
+    for (size_t i = 0; i < map->count; ++i) {
+        const pt_text_visual_cluster *cluster = &map->clusters[i];
+        if (cluster->end <= from || cluster->start >= to || cluster->x1 <= cluster->x0) {
+            continue;
+        }
+        spans[span_count].x0 = cluster->x0;
+        spans[span_count].x1 = cluster->x1;
+        ++span_count;
+    }
+    if (span_count == 0) {
+        free(spans);
+        return;
+    }
+    qsort(spans, span_count, sizeof(*spans), compare_x_span);
+    size_t merged = 0;
+    for (size_t i = 1; i < span_count; ++i) {
+        if (spans[i].x0 <= spans[merged].x1 + 0.05f) {
+            if (spans[i].x1 > spans[merged].x1) {
+                spans[merged].x1 = spans[i].x1;
+            }
+        } else {
+            ++merged;
+            spans[merged] = spans[i];
+        }
+    }
+    for (size_t i = 0; i <= merged; ++i) {
+        if (spans[i].x1 > spans[i].x0) {
+            pt_canvas_fill_rect(canvas, origin_x + spans[i].x0, top,
+                                spans[i].x1 - spans[i].x0, height, color);
+        }
+    }
+    free(spans);
+}
+
+static pt_bidi_base entry_paint_base(const pt_widget *entry, const char *display,
+                                     size_t len) {
+    if (entry->password) {
+        const char *text = entry->text ? entry->text : "";
+        return pt_widget_text_base(entry, text, strlen(text));
+    }
+    return pt_widget_text_base(entry, display, len);
+}
+
+static bool entry_paint_needs_map(const pt_widget *entry, const char *display, size_t len) {
+    return entry_paint_base(entry, display, len) == pt_bidi_base_rtl ||
+           pt_bidi_text_may_reorder(display, len);
+}
+
 static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
     pt_color background = shape_background(entry, pt_theme_control);
     if (!entry->has_background && entry->hovered && !entry->focused) {
@@ -582,12 +661,28 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         display_pos += preedit_len;
     }
     pt_canvas_push_clip(canvas, area.x, area.y, area.w, area.h);
+    bool bidi_paint = entry_paint_needs_map(entry, combined, combined_len);
+    pt_text_visual_map *combined_map = NULL;
+    if (bidi_paint) {
+        pt_bidi_base base = entry_paint_base(entry, combined, combined_len);
+        if (!pt_text_visual_map_build_bidi(font, combined, combined_len, base,
+                                           &combined_map)) {
+            combined_map = NULL;
+        }
+    }
     if (has_selection && selection_end > selection_start) {
-        float start_x = measure_prefix_width(font, combined, selection_start, scale);
-        float end_x = measure_prefix_width(font, combined, selection_end, scale);
-        pt_canvas_fill_rect(canvas, area.x - entry->scroll_x + start_x, area.y + 2.0f,
-                            end_x - start_x, pt_max_float(0.0f, area.h - 4.0f),
-                            color_from_theme(entry, pt_theme_selection));
+        pt_color selection = color_from_theme(entry, pt_theme_selection);
+        if (combined_map) {
+            paint_map_range(canvas, combined_map, selection_start, selection_end,
+                            area.x - entry->scroll_x, area.y + 2.0f,
+                            pt_max_float(0.0f, area.h - 4.0f), selection);
+        } else {
+            float start_x = measure_prefix_width(font, combined, selection_start, scale);
+            float end_x = measure_prefix_width(font, combined, selection_end, scale);
+            pt_canvas_fill_rect(canvas, area.x - entry->scroll_x + start_x, area.y + 2.0f,
+                                end_x - start_x, pt_max_float(0.0f, area.h - 4.0f),
+                                selection);
+        }
     }
     if (combined_len == 0) {
         const char *placeholder = entry->placeholder ? entry->placeholder : "";
@@ -600,9 +695,8 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
                 paint_text_base(entry, placeholder, placeholder_len));
         }
     } else {
-        /* Single-line display follows the paragraph direction; caret,
-         * selection, preedit underline and scroll offsets below stay logical
-         * (W4 continues that work). */
+        /* Single-line display follows the paragraph direction; selection and
+         * preedit rectangles above use the same per-run visual map. */
         pt_canvas_draw_text_line_bidi(canvas, font, combined, combined_len,
                                       area.x - entry->scroll_x, baseline, 0.0f,
                                       pt_text_align_start, color, false,
@@ -612,6 +706,36 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
         float preedit_x = area.x - entry->scroll_x +
                           measure_prefix_width(font, combined, preedit_start, scale);
         float preedit_w = measure_prefix_width(font, entry->preedit, preedit_len, scale);
+        if (combined_map) {
+            paint_x_span *spans = pt_alloc_zeroed(combined_map->count, sizeof(*spans));
+            size_t span_count = 0;
+            for (size_t i = 0; i < combined_map->count; ++i) {
+                const pt_text_visual_cluster *cluster = &combined_map->clusters[i];
+                if (cluster->end <= preedit_start ||
+                    cluster->start >= preedit_start + preedit_len ||
+                    cluster->x1 <= cluster->x0) {
+                    continue;
+                }
+                spans[span_count].x0 = cluster->x0;
+                spans[span_count].x1 = cluster->x1;
+                ++span_count;
+            }
+            if (span_count > 0) {
+                float x0 = spans[0].x0;
+                float x1 = spans[0].x1;
+                for (size_t i = 1; i < span_count; ++i) {
+                    if (spans[i].x0 < x0) {
+                        x0 = spans[i].x0;
+                    }
+                    if (spans[i].x1 > x1) {
+                        x1 = spans[i].x1;
+                    }
+                }
+                preedit_x = area.x - entry->scroll_x + x0;
+                preedit_w = x1 - x0;
+            }
+            free(spans);
+        }
         pt_color underline = pt_color_alpha(color_from_theme(entry, pt_theme_accent), 0xB0u);
         pt_canvas_fill_rect(canvas, preedit_x, baseline + 2.0f, preedit_w, 1.5f, underline);
         paint_preedit_hints(canvas, entry, font, entry->preedit, preedit_len, preedit_x,
@@ -631,6 +755,7 @@ static void paint_entry(pt_canvas *canvas, pt_widget *entry) {
                             pt_max_float(6.0f, (float)caret_h - 2.0f), accent);
     }
     pt_canvas_pop_clip(canvas);
+    free(combined_map);
     free(combined);
     paint_focus_ring(canvas, entry);
 }
@@ -821,13 +946,21 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
                 a = line_start;
                 b = line_end;
             }
-            if (b > a || full) {
+            bool mapped = layout.maps && layout.maps[i] &&
+                          (((layout.lines[i].base_level & 1u) != 0) ||
+                           pt_bidi_text_may_reorder(layout.display + line_start,
+                                                    line_end - line_start));
+            if (full) {
+                pt_canvas_fill_rect(canvas, inner.x, line_top + 2.0f, inner.w,
+                                    pt_max_float(0.0f, layout.line_height - 4.0f),
+                                    color_from_theme(area, pt_theme_selection));
+            } else if (b > a && mapped) {
+                paint_map_range(canvas, layout.maps[i], a, b, inner.x, line_top + 2.0f,
+                                pt_max_float(0.0f, layout.line_height - 4.0f),
+                                color_from_theme(area, pt_theme_selection));
+            } else if (b > a) {
                 float x0 = inner.x + pt_text_layout_x_for_position(&layout, i, a);
                 float x1 = inner.x + pt_text_layout_x_for_position(&layout, i, b);
-                if (full) {
-                    x0 = inner.x;
-                    x1 = inner.x + inner.w;
-                }
                 if (x1 > x0) {
                     pt_canvas_fill_rect(canvas, x0, line_top + 2.0f, x1 - x0,
                                         pt_max_float(0.0f, layout.line_height - 4.0f),
@@ -858,24 +991,42 @@ static void paint_text_area(pt_canvas *canvas, pt_widget *area) {
             paint_text_base(area, area->placeholder, placeholder_len));
     }
     int caret_line = pt_text_layout_line_for_position(&layout, layout.caret);
-    float caret_x = inner.x + pt_text_layout_x_for_position(&layout, caret_line, layout.caret);
+    float caret_x = inner.x + pt_text_layout_x_for_position_bias(
+                                  &layout, caret_line, layout.caret,
+                                  (pt_text_bias)area->caret_affinity);
     float caret_top = top + (float)caret_line * layout.line_height;
     size_t preedit_len = area->preedit ? strlen(area->preedit) : 0;
     bool preedit_caret_visible = true;
     if (preedit_len > 0) {
-        pt_canvas_draw_text_line(canvas, font, area->preedit, preedit_len, caret_x,
-                                 caret_top + ascent, inner.w, pt_text_align_start, color,
-                                 false);
-        pt_color underline = pt_color_alpha(color_from_theme(area, pt_theme_accent), 0xB0u);
+        /* Shape the preedit with the insertion run's direction. An RTL run
+         * grows left from the caret, so its underline and composed caret sit
+         * before the insertion point. */
+        bool rtl_context =
+            (pt_text_layout_level_for_position(&layout, caret_line, layout.caret) & 1u) != 0;
+        pt_color preedit_color = color;
         float preedit_w = pt_font_measure(font, area->preedit, preedit_len) / scale;
-        pt_canvas_fill_rect(canvas, caret_x, caret_top + ascent + 2.0f, preedit_w, 1.5f,
+        float preedit_x = rtl_context ? caret_x - preedit_w : caret_x;
+        if (rtl_context) {
+            pt_canvas_draw_text_line_direction(canvas, font, area->preedit, preedit_len,
+                                               preedit_x, caret_top + ascent, inner.w,
+                                               pt_text_align_start, preedit_color, false,
+                                               HB_DIRECTION_RTL);
+        } else {
+            pt_canvas_draw_text_line(canvas, font, area->preedit, preedit_len, preedit_x,
+                                     caret_top + ascent, inner.w, pt_text_align_start,
+                                     preedit_color, false);
+        }
+        pt_color underline = pt_color_alpha(color_from_theme(area, pt_theme_accent), 0xB0u);
+        pt_canvas_fill_rect(canvas, preedit_x, caret_top + ascent + 2.0f, preedit_w, 1.5f,
                             underline);
-        paint_preedit_hints(canvas, area, font, area->preedit, preedit_len, caret_x,
+        paint_preedit_hints(canvas, area, font, area->preedit, preedit_len, preedit_x,
                             caret_top + ascent, scale);
         preedit_caret_visible =
             area->preedit_cursor_begin >= 0 && area->preedit_cursor_end >= 0;
         size_t preedit_caret = pt_widget_preedit_caret(area);
-        caret_x += pt_font_measure(font, area->preedit, preedit_caret) / scale;
+        float advance = pt_font_measure(font, area->preedit, preedit_caret) / scale;
+        caret_x = rtl_context ? preedit_x + (preedit_w - advance)
+                              : caret_x + advance;
     }
     if (area->focused && pt_widget_window(area) && pt_widget_window(area)->caret_visible &&
         !has_selection && preedit_caret_visible) {

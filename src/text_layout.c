@@ -299,6 +299,11 @@ int pt_text_layout_line_for_position(const pt_text_layout *layout, size_t positi
 }
 
 float pt_text_layout_x_for_position(const pt_text_layout *layout, int line, size_t position) {
+    return pt_text_layout_x_for_position_bias(layout, line, position, pt_text_bias_leading);
+}
+
+float pt_text_layout_x_for_position_bias(const pt_text_layout *layout, int line,
+                                         size_t position, pt_text_bias bias) {
     if (!layout || layout->line_count <= 0) {
         return 0.0f;
     }
@@ -316,8 +321,7 @@ float pt_text_layout_x_for_position(const pt_text_layout *layout, int line, size
         position = span.end;
     }
     if (layout->maps && layout->maps[line]) {
-        return pt_text_visual_map_x_for_position(layout->maps[line], position,
-                                                 pt_text_bias_leading);
+        return pt_text_visual_map_x_for_position(layout->maps[line], position, bias);
     }
     if (layout->has_runs) {
         return pt_text_runs_measure(&layout->runs, span.start, position);
@@ -408,6 +412,34 @@ void pt_text_area_ensure_caret_visible(pt_widget *area, const pt_layout_ctx *ctx
     pt_text_layout_free(&layout);
 }
 
+/* Embedding level of the cluster that a caret at `position` attaches to
+ * (leading affinity). Used for preedit shaping and caret composition. */
+uint8_t pt_text_layout_level_for_position(const pt_text_layout *layout, int line,
+                                          size_t position) {
+    if (!layout || layout->line_count <= 0) {
+        return 0;
+    }
+    if (line < 0) {
+        line = 0;
+    }
+    if (line >= layout->line_count) {
+        line = layout->line_count - 1;
+    }
+    const pt_text_visual_map *map = layout->maps ? layout->maps[line] : NULL;
+    if (map && map->count > 0) {
+        if (position <= map->start) {
+            return map->clusters[0].level;
+        }
+        for (size_t i = map->count; i > 0; --i) {
+            if (map->clusters[i - 1].start <= position) {
+                return map->clusters[i - 1].level;
+            }
+        }
+        return map->clusters[0].level;
+    }
+    return layout->lines[line].base_level;
+}
+
 void pt_text_area_caret_box(const pt_widget *area, const pt_layout_ctx *ctx, int *x, int *y,
                             int *w, int *h) {
     int out_x = 0;
@@ -417,11 +449,19 @@ void pt_text_area_caret_box(const pt_widget *area, const pt_layout_ctx *ctx, int
     pt_text_layout layout = {0};
     if (area && pt_text_layout_build(area, ctx, pt_text_area_content_width(area), &layout)) {
         int line = pt_text_layout_line_for_position(&layout, layout.caret);
-        float caret_x = pt_text_layout_x_for_position(&layout, line, layout.caret);
+        pt_text_bias bias = (pt_text_bias)area->caret_affinity;
+        float caret_x = pt_text_layout_x_for_position_bias(&layout, line, layout.caret, bias);
         if (area->preedit && *area->preedit) {
             size_t preedit_caret = pt_widget_preedit_caret(area);
-            caret_x += pt_font_measure(layout.font, area->preedit, preedit_caret) /
-                       layout.scale;
+            float preedit_width =
+                pt_font_measure(layout.font, area->preedit, preedit_caret) / layout.scale;
+            /* A preedit inserted inside an RTL run extends visually left from
+             * the insertion point, so the composed caret sits before it. */
+            if (pt_text_layout_level_for_position(&layout, line, layout.caret) & 1u) {
+                caret_x -= preedit_width;
+            } else {
+                caret_x += preedit_width;
+            }
         }
         out_x = (int)lroundf(area->x + area->padding_left + caret_x);
         out_y = (int)lroundf(area->y + area->padding_top +

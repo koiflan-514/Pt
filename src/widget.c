@@ -256,6 +256,7 @@ static void entry_set_cursor(pt_widget *entry, size_t cursor, bool extend) {
     cursor = entry_cursor_clamped(entry, cursor);
     entry->cursor = cursor;
     entry->caret_goal_x = -1.0f;
+    entry->caret_affinity = pt_text_bias_leading;
     if (!extend) {
         entry->selection_anchor = cursor;
     }
@@ -316,6 +317,7 @@ static void entry_ime_history_push(pt_widget *entry) {
 }
 
 static void entry_notify_restored(pt_widget *entry) {
+    entry->caret_affinity = pt_text_bias_leading;
     entry_reset_caret(entry);
     pt_widget_mark_dirty(entry, true);
     entry_notify_text(entry);
@@ -404,6 +406,7 @@ static void entry_select_word(pt_widget *entry, size_t position) {
 static void entry_select_all(pt_widget *entry) {
     entry->selection_anchor = 0;
     entry->cursor = entry_length(entry);
+    entry->caret_affinity = pt_text_bias_leading;
     entry_reset_caret(entry);
     pt_widget_mark_dirty(entry, false);
 }
@@ -502,6 +505,120 @@ static float measure_prefix(const pt_font *font, const char *text, size_t len, s
     return pt_font_measure(font, text, pos) / scale;
 }
 
+/* ---------- bidi caret helpers (2.0 wave 4) ---------- */
+
+/* Paragraph base for the *display* string. A password entry shows neutral
+ * bullets, so its direction must come from the stored (original) text; a
+ * preedit is part of the composed line for a plain entry. */
+static pt_bidi_base entry_display_base(const pt_widget *entry, const char *display,
+                                       size_t len) {
+    if (entry->password) {
+        const char *text = entry->text ? entry->text : "";
+        return pt_widget_text_base(entry, text, strlen(text));
+    }
+    return pt_widget_text_base(entry, display, len);
+}
+
+static bool entry_display_needs_map(const pt_widget *entry, const char *display,
+                                    size_t len) {
+    return entry_display_base(entry, display, len) == pt_bidi_base_rtl ||
+           pt_bidi_text_may_reorder(display, len);
+}
+
+/* Builds a per-call map over a single entry line. Entry drawing has no cached
+ * layout, so this is the only place that pays for it. */
+static pt_text_visual_map *entry_build_map(const pt_widget *entry, const pt_font *font,
+                                           const char *display, size_t len,
+                                           pt_bidi_base *base_out) {
+    pt_bidi_base base = entry_display_base(entry, display, len);
+    if (base_out) {
+        *base_out = base;
+    }
+    pt_text_visual_map *map = NULL;
+    if (!pt_text_visual_map_build_bidi(font, display, len, base, &map)) {
+        return NULL;
+    }
+    return map;
+}
+
+/* One visual caret step across a line. `bias` is the caret's current affinity.
+ * Interior cluster boundaries use the cluster edge on the direction of travel;
+ * at a boundary where two reordered runs meet, the run that owns the outgoing
+ * edge decides which logical offset is reported, so a run-level test cannot
+ * oscillate. Returns false at the visual line edge. */
+static bool visual_caret_step(const pt_text_visual_map *map, size_t position,
+                              pt_text_bias bias, bool right, size_t *out_position,
+                              pt_text_bias *out_bias) {
+    if (!map || map->count == 0) {
+        return false;
+    }
+    float current_x = pt_text_visual_map_x_for_position(map, position, bias);
+    bool found = false;
+    float best_edge = 0.0f;
+    size_t best_position = position;
+    pt_text_bias best_bias = bias;
+    for (size_t i = 0; i < map->count; ++i) {
+        const pt_text_visual_cluster *cluster = &map->clusters[i];
+        bool rtl = (cluster->level & 1u) != 0;
+        if (right) {
+            /* Right edge of the cluster (logical start for RTL). */
+            float edge = rtl ? cluster->start_x : cluster->end_x;
+            if (edge <= current_x + 0.01f || !(cluster->x0 + 0.01f < edge)) {
+                continue;
+            }
+            if (!found || edge < best_edge - 0.01f) {
+                found = true;
+                best_edge = edge;
+                best_position = rtl ? cluster->start : cluster->end;
+                best_bias = rtl ? pt_text_bias_leading : pt_text_bias_trailing;
+            }
+        } else {
+            /* Left edge of the cluster (logical end for RTL). */
+            float edge = rtl ? cluster->end_x : cluster->start_x;
+            if (edge >= current_x - 0.01f || !(cluster->x1 > edge + 0.01f)) {
+                continue;
+            }
+            if (!found || edge > best_edge + 0.01f) {
+                found = true;
+                best_edge = edge;
+                best_position = rtl ? cluster->end : cluster->start;
+                best_bias = rtl ? pt_text_bias_trailing : pt_text_bias_leading;
+            }
+        }
+    }
+    if (!found) {
+        return false;
+    }
+    *out_position = best_position;
+    *out_bias = best_bias;
+    return true;
+}
+
+/* Position of the visual line edge: left picks the cluster with the smallest
+ * x0, right the largest x1. The returned affinity renders at that edge. */
+static bool visual_line_edge(const pt_text_visual_map *map, bool left, size_t *out_position,
+                             pt_text_bias *out_bias) {
+    if (!map || map->count == 0) {
+        return false;
+    }
+    const pt_text_visual_cluster *best = &map->clusters[0];
+    for (size_t i = 1; i < map->count; ++i) {
+        const pt_text_visual_cluster *cluster = &map->clusters[i];
+        if (left) {
+            if (cluster->x0 < best->x0) {
+                best = cluster;
+            }
+        } else if (cluster->x1 > best->x1) {
+            best = cluster;
+        }
+    }
+    bool rtl = (best->level & 1u) != 0;
+    *out_position = left ? (rtl ? best->end : best->start)
+                         : (rtl ? best->start : best->end);
+    *out_bias = pt_text_bias_leading;
+    return true;
+}
+
 static char *entry_display_with_preedit(const pt_widget *entry, size_t *out_len,
                                         size_t *out_caret) {
     size_t len = 0;
@@ -539,7 +656,20 @@ static float entry_caret_offset(const pt_widget *entry, const pt_font *font, flo
     size_t len = 0;
     size_t caret = 0;
     char *display = entry_display_with_preedit(entry, &len, &caret);
-    float width = measure_prefix(font, display, len, caret, scale);
+    float width = 0.0f;
+    if (!entry_display_needs_map(entry, display, len)) {
+        width = measure_prefix(font, display, len, caret, scale);
+    } else {
+        pt_text_visual_map *map = entry_build_map(entry, font, display, len, NULL);
+        if (map) {
+            width = pt_text_visual_map_x_for_position(map, caret,
+                                                      (pt_text_bias)entry->caret_affinity) /
+                    scale;
+            pt_text_visual_map_free(map);
+        } else {
+            width = measure_prefix(font, display, len, caret, scale);
+        }
+    }
     free(display);
     return width;
 }
@@ -552,20 +682,34 @@ static size_t entry_position_from_x(const pt_widget *entry, const pt_font *font,
     }
     size_t len = 0;
     char *display = entry_display_text(entry, &len);
-    float best_distance = FLT_MAX;
-    size_t best_display = 0;
-    size_t scan = 0;
-    for (;;) {
-        float width = measure_prefix(font, display, len, scan, scale);
-        float distance = fabsf(width - target);
-        if (distance < best_distance) {
-            best_distance = distance;
-            best_display = scan;
+    if (!entry_display_needs_map(entry, display, len)) {
+        float best_distance = FLT_MAX;
+        size_t best_display = 0;
+        size_t scan = 0;
+        for (;;) {
+            float width = measure_prefix(font, display, len, scan, scale);
+            float distance = fabsf(width - target);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_display = scan;
+            }
+            if (scan >= len) {
+                break;
+            }
+            scan = pt_utf8_next_boundary(display, len, scan);
         }
-        if (scan >= len) {
-            break;
-        }
-        scan = pt_utf8_next_boundary(display, len, scan);
+        size_t position = entry_text_position_for_display(entry, best_display);
+        free(display);
+        return position;
+    }
+    pt_text_visual_map *map = entry_build_map(entry, font, display, len, NULL);
+    size_t best_display = len;
+    if (map) {
+        /* A click between two visual clusters lands on the near side; exact
+         * ties attach to the character starting on the visual right. */
+        best_display = pt_text_visual_map_position_for_x(map, target / scale,
+                                                         pt_text_bias_leading);
+        pt_text_visual_map_free(map);
     }
     size_t position = entry_text_position_for_display(entry, best_display);
     free(display);
@@ -576,6 +720,7 @@ static void entry_after_edit(pt_widget *entry) {
     entry->cursor = entry_cursor_clamped(entry, entry->cursor);
     entry->selection_anchor = entry->cursor;
     entry->caret_goal_x = -1.0f;
+    entry->caret_affinity = pt_text_bias_leading;
     entry_reset_caret(entry);
     pt_widget_mark_dirty(entry, true);
     entry_notify_text(entry);
@@ -1094,6 +1239,7 @@ bool pt_widget_text_selection_set(pt_widget *widget, uint32_t start, uint32_t en
     widget->cursor = b;
     widget->selecting = false;
     widget->caret_goal_x = -1.0f;
+    widget->caret_affinity = pt_text_bias_leading;
     entry_reset_caret(widget);
     pt_widget_mark_dirty(widget, false);
     return true;
@@ -2075,6 +2221,7 @@ void pt_widget_set_text(pt_widget *widget, const char *text) {
         widget->cursor = strlen(copy);
         widget->selection_anchor = widget->cursor;
         widget->caret_goal_x = -1.0f;
+        widget->caret_affinity = pt_text_bias_leading;
         widget->selecting = false;
         widget->scroll_y = 0.0f;
         free(widget->preedit);
@@ -3629,6 +3776,98 @@ static bool edit_shortcut(pt_widget *widget, uint32_t keysym, uint32_t modifiers
     }
 }
 
+static bool entry_horizontal(pt_widget *entry, bool right, bool shift) {
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    size_t display_len = 0;
+    char *display = entry_display_text(entry, &display_len);
+    bool mapped = font && entry_display_needs_map(entry, display, display_len);
+    if (!shift && entry_has_selection(entry)) {
+        size_t start = 0;
+        size_t end = 0;
+        entry_selection_range(entry, &start, &end);
+        size_t target = start;
+        if (mapped) {
+            pt_text_visual_map *map = entry_build_map(entry, font, display, display_len, NULL);
+            if (map) {
+                size_t left_display = entry_display_position(entry, start);
+                size_t right_display = entry_display_position(entry, end);
+                float left_x = pt_text_visual_map_x_for_position(map, left_display,
+                                                                 pt_text_bias_leading);
+                float right_x = pt_text_visual_map_x_for_position(map, right_display,
+                                                                  pt_text_bias_leading);
+                target = right ? (right_x > left_x ? end : start)
+                               : (left_x < right_x ? start : end);
+                pt_text_visual_map_free(map);
+            } else {
+                target = right ? end : start;
+            }
+        } else {
+            target = right ? end : start;
+        }
+        entry_set_cursor(entry, target, false);
+    } else if (!mapped) {
+        size_t cursor = entry->cursor;
+        if (right) {
+            if (cursor < entry_length(entry)) {
+                cursor = pt_utf8_next_boundary(entry->text, entry_length(entry), cursor);
+            }
+        } else if (cursor > 0) {
+            cursor = pt_utf8_prev_boundary(entry->text, entry_length(entry), cursor);
+        }
+        if (cursor != entry->cursor || shift) {
+            entry_set_cursor(entry, cursor, shift);
+        }
+    } else {
+        pt_text_visual_map *map = entry_build_map(entry, font, display, display_len, NULL);
+        if (map) {
+            size_t display_cursor = entry_display_position(entry, entry->cursor);
+            size_t display_target = display_cursor;
+            pt_text_bias bias = (pt_text_bias)entry->caret_affinity;
+            pt_text_bias target_bias = bias;
+            if (visual_caret_step(map, display_cursor, bias, right, &display_target,
+                                  &target_bias)) {
+                size_t target = entry_text_position_for_display(entry, display_target);
+                entry_set_cursor(entry, target, shift);
+                entry->caret_affinity = target_bias;
+            }
+            pt_text_visual_map_free(map);
+        }
+    }
+    free(display);
+    entry_reset_caret(entry);
+    return true;
+}
+
+static bool entry_line_edge(pt_widget *entry, bool end, bool shift) {
+    size_t len = entry_length(entry);
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    size_t display_len = 0;
+    char *display = entry_display_text(entry, &display_len);
+    size_t target = end ? len : 0;
+    if (font && entry_display_needs_map(entry, display, display_len)) {
+        pt_text_visual_map *map = entry_build_map(entry, font, display, display_len, NULL);
+        if (map) {
+            size_t display_target = 0;
+            pt_text_bias bias = pt_text_bias_leading;
+            if (visual_line_edge(map, !end, &display_target, &bias)) {
+                target = entry_text_position_for_display(entry, display_target);
+                entry_set_cursor(entry, target, shift);
+                entry->caret_affinity = bias;
+            }
+            pt_text_visual_map_free(map);
+            free(display);
+            entry_reset_caret(entry);
+            return true;
+        }
+    }
+    free(display);
+    entry_set_cursor(entry, target, shift);
+    entry_reset_caret(entry);
+    return true;
+}
+
 static bool entry_key(pt_widget *entry, uint32_t keysym, uint32_t modifiers) {
     size_t len = entry_length(entry);
     bool shift = (modifiers & (uint32_t)pt_key_modifier_shift) != 0;
@@ -3643,53 +3882,17 @@ static bool entry_key(pt_widget *entry, uint32_t keysym, uint32_t modifiers) {
         return false;
     }
     switch (keysym) {
-    case XKB_KEY_Left: {
-        if (!shift && entry_has_selection(entry)) {
-            size_t start = 0;
-            size_t end = 0;
-            entry_selection_range(entry, &start, &end);
-            entry_set_cursor(entry, start, false);
-        } else {
-            size_t cursor = entry->cursor;
-            if (cursor > 0) {
-                cursor = pt_utf8_prev_boundary(entry->text, len, cursor);
-            }
-            if (cursor != entry->cursor || shift) {
-                entry_set_cursor(entry, cursor, shift);
-            }
-        }
-        entry_reset_caret(entry);
-        handled = true;
+    case XKB_KEY_Left:
+        handled = entry_horizontal(entry, false, shift);
         break;
-    }
-    case XKB_KEY_Right: {
-        if (!shift && entry_has_selection(entry)) {
-            size_t start = 0;
-            size_t end = 0;
-            entry_selection_range(entry, &start, &end);
-            entry_set_cursor(entry, end, false);
-        } else {
-            size_t cursor = entry->cursor;
-            if (cursor < len) {
-                cursor = pt_utf8_next_boundary(entry->text, len, cursor);
-            }
-            if (cursor != entry->cursor || shift) {
-                entry_set_cursor(entry, cursor, shift);
-            }
-        }
-        entry_reset_caret(entry);
-        handled = true;
+    case XKB_KEY_Right:
+        handled = entry_horizontal(entry, true, shift);
         break;
-    }
     case XKB_KEY_Home:
-        entry_set_cursor(entry, 0, shift);
-        entry_reset_caret(entry);
-        handled = true;
+        handled = entry_line_edge(entry, false, shift);
         break;
     case XKB_KEY_End:
-        entry_set_cursor(entry, len, shift);
-        entry_reset_caret(entry);
-        handled = true;
+        handled = entry_line_edge(entry, true, shift);
         break;
     case XKB_KEY_BackSpace: {
         size_t start = entry->cursor;
@@ -3765,7 +3968,8 @@ static bool text_area_vertical(pt_widget *area, uint32_t keysym, bool shift) {
     int line = pt_text_layout_line_for_position(&layout, layout.caret);
     float goal = area->caret_goal_x >= 0.0f
                      ? area->caret_goal_x
-                     : pt_text_layout_x_for_position(&layout, line, layout.caret);
+                     : pt_text_layout_x_for_position_bias(&layout, line, layout.caret,
+                                                          (pt_text_bias)area->caret_affinity);
     int delta = keysym == XKB_KEY_Up || keysym == XKB_KEY_Page_Up ? -1 : 1;
     if (keysym == XKB_KEY_Page_Up || keysym == XKB_KEY_Page_Down) {
         float viewport = pt_max_float(0.0f, area->height - area->padding_top -
@@ -3780,43 +3984,126 @@ static bool text_area_vertical(pt_widget *area, uint32_t keysym, bool shift) {
     }
     int target = line + delta;
     size_t position = 0;
+    pt_text_bias bias = pt_text_bias_leading;
     if (target < 0) {
         position = 0;
     } else if (target >= layout.line_count) {
         position = layout.display_len;
+        bias = (pt_text_bias)area->caret_affinity;
     } else {
         position = pt_text_layout_position_for_x(&layout, target, goal);
+        /* Pick the affinity whose visual x is nearest the remembered goal so a
+         * vertical move through a reordered run does not drift. */
+        float leading_x = pt_text_layout_x_for_position_bias(&layout, target, position,
+                                                             pt_text_bias_leading);
+        float trailing_x = pt_text_layout_x_for_position_bias(&layout, target, position,
+                                                              pt_text_bias_trailing);
+        if (fabsf(trailing_x - goal) < fabsf(leading_x - goal)) {
+            bias = pt_text_bias_trailing;
+        }
     }
     pt_text_layout_free(&layout);
     entry_set_cursor(area, position, shift);
+    area->caret_affinity = bias;
     area->caret_goal_x = goal;
     text_area_after_caret_move(area);
     return true;
 }
 
+static bool text_area_line_is_mapped(const pt_text_layout *layout, int line) {
+    if (!layout->maps || line < 0 || line >= layout->line_count || !layout->maps[line]) {
+        return false;
+    }
+    size_t start = layout->lines[line].start;
+    size_t end = layout->lines[line].end;
+    return (layout->lines[line].base_level & 1u) != 0 ||
+           pt_bidi_text_may_reorder(layout->display + start, end - start);
+}
+
 static bool text_area_line_edge(pt_widget *area, bool end, bool shift, bool document) {
+    if (document) {
+        size_t position = end ? entry_length(area) : 0;
+        entry_set_cursor(area, position, shift);
+        text_area_after_caret_move(area);
+        return true;
+    }
     pt_layout_ctx ctx = {0};
     pt_text_layout layout = {0};
     if (!text_area_build_layout(area, &ctx, &layout)) {
         return false;
     }
-    size_t position = 0;
-    if (document) {
-        position = end ? layout.display_len : 0;
-    } else {
-        int line = pt_text_layout_line_for_position(&layout, layout.caret);
-        position = end ? layout.lines[line].end : layout.lines[line].start;
+    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    size_t position = end ? layout.lines[line].end : layout.lines[line].start;
+    pt_text_bias bias = pt_text_bias_leading;
+    if (text_area_line_is_mapped(&layout, line)) {
+        size_t mapped_position = position;
+        if (visual_line_edge(layout.maps[line], !end, &mapped_position, &bias)) {
+            position = mapped_position;
+        }
     }
     pt_text_layout_free(&layout);
     entry_set_cursor(area, position, shift);
+    area->caret_affinity = bias;
     text_area_after_caret_move(area);
     return true;
 }
 
 static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
     size_t len = entry_length(area);
+    pt_layout_ctx ctx = {0};
+    pt_text_layout layout = {0};
+    bool have_layout = text_area_build_layout(area, &ctx, &layout);
+    int line = have_layout ? pt_text_layout_line_for_position(&layout, layout.caret) : 0;
+    bool mapped = have_layout && text_area_line_is_mapped(&layout, line);
     size_t position = area->cursor;
-    if (!shift && entry_has_selection(area)) {
+    pt_text_bias bias = (pt_text_bias)area->caret_affinity;
+    if (mapped && !shift && entry_has_selection(area)) {
+        size_t start = 0;
+        size_t end = 0;
+        entry_selection_range(area, &start, &end);
+        int start_line = pt_text_layout_line_for_position(&layout, start);
+        int end_line = pt_text_layout_line_for_position(&layout, end);
+        if (start_line == end_line && text_area_line_is_mapped(&layout, start_line)) {
+            const pt_text_visual_map *map = layout.maps[start_line];
+            float start_x = pt_text_visual_map_x_for_position(map, start, pt_text_bias_leading);
+            float end_x = pt_text_visual_map_x_for_position(map, end, pt_text_bias_leading);
+            position = right ? (end_x > start_x ? end : start)
+                             : (start_x < end_x ? start : end);
+        } else {
+            /* Multi-line selections collapse by logical edge, matching the
+             * top-to-bottom visual order of wrapped lines. */
+            position = right ? end : start;
+        }
+        bias = pt_text_bias_leading;
+    } else if (mapped && !shift && !entry_has_selection(area)) {
+        size_t target = position;
+        pt_text_bias target_bias = bias;
+        if (visual_caret_step(layout.maps[line], position, bias, right, &target,
+                              &target_bias)) {
+            position = target;
+            bias = target_bias;
+        } else if ((layout.lines[line].base_level & 1u) == 0) {
+            /* Visual edge of a wrapped LTR line: continue through the line
+             * break so the caret reaches the adjacent line, as the pre-2.0
+             * editor did. An RTL line edge is the document edge and stays. */
+            if (right && position == layout.lines[line].end && position < len) {
+                position = pt_utf8_next_boundary(area->text, len, position);
+            } else if (!right && position == layout.lines[line].start &&
+                       position > 0) {
+                position = pt_utf8_prev_boundary(area->text, len, position);
+            }
+            bias = pt_text_bias_leading;
+        }
+    } else if (mapped) {
+        /* Shift extends the logical anchor; the caret still moves visually. */
+        size_t target = position;
+        pt_text_bias target_bias = bias;
+        if (visual_caret_step(layout.maps[line], position, bias, right, &target,
+                              &target_bias)) {
+            position = target;
+            bias = target_bias;
+        }
+    } else if (!shift && entry_has_selection(area)) {
         size_t start = 0;
         size_t end = 0;
         entry_selection_range(area, &start, &end);
@@ -3828,7 +4115,11 @@ static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
     } else if (position > 0) {
         position = pt_utf8_prev_boundary(area->text, len, position);
     }
+    if (have_layout) {
+        pt_text_layout_free(&layout);
+    }
     entry_set_cursor(area, position, shift);
+    area->caret_affinity = bias;
     text_area_after_caret_move(area);
     return true;
 }

@@ -1012,6 +1012,11 @@ typedef struct pt_widget {
     uint32_t list_index;
     bool row_selected;
     float caret_goal_x;
+    /* Visual affinity of the text caret (2.0 wave 4). A logical byte offset
+     * can sit at two visual positions when two reordered bidi runs meet; 0
+     * attaches it to the character starting at the offset, 1 to the character
+     * ending there. Logical edits reset it to leading. */
+    uint8_t caret_affinity;
 
     uint64_t selected_key;
     bool selected_key_valid;
@@ -1204,7 +1209,15 @@ void pt_text_area_caret_box(const pt_widget *area, const pt_layout_ctx *ctx, int
 size_t pt_text_area_position_at(const pt_widget *area, const pt_layout_ctx *ctx, float x,
                                 float y);
 int pt_text_layout_line_for_position(const pt_text_layout *layout, size_t position);
+/* Resolved embedding level of the cluster a caret at `position` attaches to
+ * (leading affinity), used for preedit direction and caret composition. */
+uint8_t pt_text_layout_level_for_position(const pt_text_layout *layout, int line,
+                                          size_t position);
 float pt_text_layout_x_for_position(const pt_text_layout *layout, int line, size_t position);
+/* Same lookup with an explicit caret affinity: at a reordered bidi run
+ * boundary the same byte offset has a leading and a trailing visual x. */
+float pt_text_layout_x_for_position_bias(const pt_text_layout *layout, int line,
+                                         size_t position, pt_text_bias bias);
 size_t pt_text_layout_position_for_x(const pt_text_layout *layout, int line, float local_x);
 
 bool pt_widget_text_selection_get(const pt_widget *widget, uint32_t *start, uint32_t *end);
