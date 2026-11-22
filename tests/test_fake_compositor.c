@@ -472,11 +472,105 @@ static void test_fd_cycles(void) {
     fake_compositor_stop(&fc);
 }
 
+/* ---------- decoration configure replay (M18 Q-DEC-001) ---------- */
+
+static void test_decoration_configure(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n",
+                fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.fake.decor");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_window *window = pt_window_create(app, "decor-wire", 400, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_window_show(window);
+    wait_configured(&fc, app, window);
+    pt_check(window->configured);
+    pt_check(fake_compositor_settle(&fc, app));
+
+    /* The client requested client-side decoration at mapping time. */
+    uint32_t decoration = fake_compositor_live_id(&fc, FC_K_DECORATION);
+    pt_check(decoration != 0);
+    fc_request set_mode = {0};
+    pt_check(fake_compositor_last_request(&fc, FC_K_DECORATION, 1, &set_mode));
+    pt_check(set_mode.nargs == 1);
+    pt_check(set_mode.args[0].u == fc_decoration_mode_client);
+    pt_check(window->effective_decoration == pt_decoration_client);
+    pt_check(window->csd);
+    pt_check(window->header_height > 0.0f);
+
+    /* Q-DEC-001: the compositor is authoritative. A tiling compositor answers
+     * the client-side request with a server-side configure and Pt drops its
+     * own header immediately. */
+    pt_check(fake_compositor_decoration_configure(&fc, fc_decoration_mode_server));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->effective_decoration == pt_decoration_server);
+    pt_check(!window->csd);
+    pt_check_near(window->header_height, 0.0f, 0.01);
+
+    /* A later client-side configure restores the Pt-drawn header without
+     * rewriting the requested decoration mode. */
+    pt_check(fake_compositor_decoration_configure(&fc, fc_decoration_mode_client));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->effective_decoration == pt_decoration_client);
+    pt_check(window->csd);
+    pt_check(window->header_height > 0.0f);
+    pt_check(pt_window_get_decoration_mode(window) == pt_decoration_client);
+
+    /* Tiled state arrives through xdg_toplevel.configure and disables the
+     * edge-resize affordances (the compositor owns the tile geometry). */
+    static const uint32_t tiled_states[] = {
+        XDG_TOPLEVEL_STATE_TILED_LEFT, XDG_TOPLEVEL_STATE_TILED_RIGHT,
+        XDG_TOPLEVEL_STATE_TILED_TOP, XDG_TOPLEVEL_STATE_TILED_BOTTOM,
+    };
+    fake_compositor_toplevel_configure(&fc, 400, 300, tiled_states, 4);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->tiled_left);
+    pt_check(window->tiled_right);
+    pt_check(window->tiled_top);
+    pt_check(window->tiled_bottom);
+    pt_window_input_pointer_enter(window, 1.0f, 120.0f);
+    pt_check(window->hovered_csd == pt_csd_part_none);
+    pt_window_input_pointer_leave(window);
+
+    /* Clearing the tiled states re-enables the edge affordance. */
+    fake_compositor_toplevel_configure(&fc, 400, 300, NULL, 0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(!window->tiled_left);
+    pt_check(!window->tiled_right);
+    pt_check(!window->tiled_top);
+    pt_check(!window->tiled_bottom);
+    pt_window_input_pointer_enter(window, 1.0f, 120.0f);
+    pt_check(window->hovered_csd == pt_csd_part_edge_left);
+    pt_window_input_pointer_leave(window);
+
+    pt_check(fake_compositor_error(&fc) == NULL);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
     unsetenv("PT_HEADLESS");
     test_handshake_and_events();
     test_icon_no_manager();
     test_icon_submission();
+    test_decoration_configure();
     test_fd_cycles();
     return pt_test_finish("fake_compositor");
 }
