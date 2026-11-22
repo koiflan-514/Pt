@@ -2001,6 +2001,50 @@ stays 1.4.0, no 2.0 tag yet); W3-W7 continue after the Lobster credit reset
 (2026-11-27) restores dual-provider parallelism. 2.0.0 is tagged only when the
 full rtl.md delivery order is complete and gated.
 
+### Staging checkpoint (2026-11-22)
+
+W0, W1 and W2 are delivered on `m22/integration` at `2098382` (fast-forward
+from `f9b3336`), with main held at 1.4.0 and no 2.0 tag. Evidence commits: W0
+engine + conformance `52d6034`, W1 direction API + bindings + baseline
+`25b5b6c`, integration fix-up `f9b3336`, W2 shaping + single-line rendering
+`2098382`.
+
+Gate results at this checkpoint:
+
+- `make clean && make -j8` builds with zero warnings; `make check` is green,
+  including `api-check`.
+- Conformance: Unicode 18.0.0 `BidiTest` 770,241 cases and
+  `BidiCharacterTest` 91,707 cases, 0 failures.
+- API: 564 functions / 924 frozen entries; binding parity 564/564 (100%) for
+  cpp, python and java, 0 missing, 0 allowlisted; the generated reference
+  matches at Version 2.0.0 · 564 functions.
+- LTR snapshots are byte-for-byte stable: `test_bidi`, `test_rich_text` and
+  `test_direction` each pass 20/20 consecutive runs with no visual regression.
+- ABI: SONAME `libpt.so.1`, decoupled from the 2.0.0 version through
+  `ABI_MAJOR`; 564 `pt_*` exports, no `SB_*` exports.
+- Sanitizer (ASan + UBSan, leak detection on) runs of `test_bidi`,
+  `test_bidi_conformance`, `test_direction` and `test_rich_text` report nothing;
+  `make perf-check` holds every ceiling.
+
+Intermediate state, recorded as-is:
+
+- Entry caret, selection, preedit, scroll and IME-rect positioning are still
+  logical (single-line assumption): W4.
+- Width-driven wrapping and per-line visual reordering with per-line base
+  alignment are not done: W3. This includes the `font.c` single-line shaping API
+  falling back for multiple paragraphs.
+- `pt_text_runs_position_for_x` is still a logical approximation: W3/W4.
+- UI mirroring has not started: W5.
+- Accessibility `direction` attribute, examples and bilingual doc wrap-up are
+  pending: W6.
+- LTR cross-version PNG comparison, live RTL, fuzz and bidi perf profiles are
+  pending: W7.
+- README still reports 1.4.0, so `tools/release-check.sh` shows 2 expected
+  README failures; closing this is part of the wrap-up.
+
+W3-W7 resume once the Lobster credit reset (2026-11-27) restores dual-provider
+parallelism. 2.0.0 is tagged only after all seven steps are complete and gated.
+
 ### Completion criteria
 
 `make check` (including `test_direction` / `test_bidi` /
