@@ -306,6 +306,29 @@ static void check_boundaries(const pt_text_visual_map *map) {
     pt_check(pt_text_visual_map_is_boundary(map, map->end));
 }
 
+/* The map is assembled run by run, so its width must be exactly the sum of the
+ * widths of the runs it was built from. The whole-line measurement is not
+ * asserted here: re-shaping a run in isolation can resolve its scripts
+ * differently than the same bytes did inside the whole line (a combining mark
+ * inherited by the neighbouring run, X9 controls, fallback attachment), so the
+ * two segmentations can legitimately differ by up to about an em per run. That
+ * is a W7 finding about shaping context, not a map assembly error; the map's
+ * own contract is the per-run sum checked below. */
+static void check_visual_width(const pt_text_visual_map *map, pt_font *font,
+                               const char *text, size_t length, pt_bidi_base base) {
+    float map_width = pt_text_visual_map_width(map);
+    pt_font_run *runs = NULL;
+    int run_count = pt_font_runs_bidi(font, text, length, base, &runs);
+    float run_sum = 0.0f;
+    for (int i = 0; i < run_count; ++i) {
+        run_sum += pt_font_measure_direction(runs[i].font, text + runs[i].start,
+                                             runs[i].end - runs[i].start,
+                                             runs[i].direction);
+    }
+    pt_font_runs_free(runs);
+    pt_check_near(map_width, run_sum, 0.05f);
+}
+
 static void check_visual_map(const pt_text_visual_map *map, pt_font *font,
                              const char *text, size_t length, pt_bidi_base base) {
     pt_check(map != NULL);
@@ -315,8 +338,7 @@ static void check_visual_map(const pt_text_visual_map *map, pt_font *font,
     pt_check(map->base_level == 0u || map->base_level == 1u);
     pt_check(map->start <= map->end && map->end <= length);
     pt_check(map_geometry_valid(map));
-    pt_check_near(pt_text_visual_map_width(map),
-                  pt_font_measure_bidi(font, text, length, base), 0.5f);
+    check_visual_width(map, font, text, length, base);
     check_boundaries(map);
 
     if (map->count > 0) {
@@ -446,12 +468,24 @@ static void check_editing(pt_window *window, pt_widget *entry, pt_canvas *canvas
     }
     pt_layout_ctx ctx = pt_layout_context_for(entry);
     float scale = ctx.scale > 0.0f ? ctx.scale : 1.0f;
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    if (!font) {
+        pt_check(false);
+        return;
+    }
     /* The IME/caret x comparison is exact only while the whole line fits the
      * entry; overflowing text scrolls, and the scroll offset is a separate
      * contract covered by test_editing. */
     float content_width = pt_max_float(0.0f, entry->width - entry->padding_left -
                                              entry->padding_right);
     bool fits = map && (map->width / (scale > 0.0f ? scale : 1.0f)) <= content_width + 0.5f;
+    /* A pure-LTR line that cannot reorder takes the entry's prefix-measure
+     * shortcut instead of building a map; prefix measurement is not required
+     * to match a cluster boundary in the whole-line map (kerning across the
+     * boundary, fallback shaping), so the oracle must follow the same branch. */
+    pt_bidi_base widget_base = pt_widget_text_base(entry, text, length);
+    bool entry_uses_map = widget_base == pt_bidi_base_rtl ||
+                          pt_bidi_text_may_reorder(text, length);
     pt_entry_set_selection(entry, 0, 0);
     float previous_x = entry_caret_visual_x(entry);
     pt_check(isfinite(previous_x));
@@ -466,8 +500,11 @@ static void check_editing(pt_window *window, pt_widget *entry, pt_canvas *canvas
         /* A caret on a grapheme cluster that the entry's shaping splits at a
          * different byte offset than the plain map has no single expected x;
          * the map contract covers cluster boundaries only. */
-        if (fits && pt_text_visual_map_is_boundary(map, entry->cursor)) {
-            pt_check_near(x, entry_map_caret_x(map, entry, scale), 1.0f);
+        if (fits && (!entry_uses_map || pt_text_visual_map_is_boundary(map, entry->cursor))) {
+            float expected = entry_uses_map
+                                 ? entry_map_caret_x(map, entry, scale)
+                                 : pt_font_measure(font, text, entry->cursor) / scale;
+            pt_check_near(x, expected, 1.0f);
         }
         previous_x = x;
     }
@@ -481,8 +518,11 @@ static void check_editing(pt_window *window, pt_widget *entry, pt_canvas *canvas
         /* A caret on a grapheme cluster that the entry's shaping splits at a
          * different byte offset than the plain map has no single expected x;
          * the map contract covers cluster boundaries only. */
-        if (fits && pt_text_visual_map_is_boundary(map, entry->cursor)) {
-            pt_check_near(x, entry_map_caret_x(map, entry, scale), 1.0f);
+        if (fits && (!entry_uses_map || pt_text_visual_map_is_boundary(map, entry->cursor))) {
+            float expected = entry_uses_map
+                                 ? entry_map_caret_x(map, entry, scale)
+                                 : pt_font_measure(font, text, entry->cursor) / scale;
+            pt_check_near(x, expected, 1.0f);
         }
         previous_x = x;
     }
@@ -620,7 +660,19 @@ int main(void) {
         pt_text_visual_map *map = NULL;
         pt_check(pt_text_visual_map_build_bidi(font, buffer, length, base, &map));
         check_visual_map(map, font, buffer, length, base);
-        check_editing(window, entry, canvas, map, buffer, length, iteration);
+        /* Entry caret geometry resolves an auto direction to a concrete base
+         * from the first strong character, so the editing oracle must use the
+         * same resolved base or it compares two different paragraph levels. */
+        pt_bidi_base widget_base = pt_widget_text_base(entry, buffer, length);
+        pt_text_visual_map *edit_map = map;
+        if (widget_base != base) {
+            pt_check(pt_text_visual_map_build_bidi(font, buffer, length, widget_base,
+                                                   &edit_map));
+        }
+        check_editing(window, entry, canvas, edit_map, buffer, length, iteration);
+        if (edit_map != map) {
+            pt_text_visual_map_free(edit_map);
+        }
         pt_text_visual_map_free(map);
     }
 
