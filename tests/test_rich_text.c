@@ -655,6 +655,124 @@ static void test_bidi_runs(pt_window *window) {
     }
 }
 
+/* Width-driven wrapping reorders each visible line independently and keeps the
+ * paragraph base, including the ellipsis placed at the RTL visual end. */
+static void test_wrapped_rtl(pt_window *window) {
+    static const char ellipsis[] = "\xE2\x80\xA6";
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "DejaVu Sans"};
+    pt_font *probe = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                     pt_font_slant_upright, 14.0f);
+    if (!probe || !pt_font_has_glyph(probe, 0x05D0u)) {
+        printf("skip rich_text: no Hebrew-capable frame font; wrapped RTL checks skipped\n");
+        return;
+    }
+    pt_widget *label = pt_label_create(
+        pt_window_root(window),
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E");
+    pt_widget_set_text_direction(label, pt_text_direction_rtl);
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_text_line *lines = NULL;
+    int count = pt_text_runs_wrap(&runs, 55.0f, &lines);
+    pt_check(count >= 2);
+    for (int i = 0; i < count && i < 4; ++i) {
+        pt_check(lines[i].base_level == 1);
+        float line_width = pt_text_runs_measure(&runs, lines[i].start, lines[i].end);
+        pt_check(line_width <= 56.0f);
+        if (lines[i].end <= lines[i].start) {
+            continue;
+        }
+        pt_text_visual_map *map = NULL;
+        pt_check(pt_text_visual_map_build_runs(&runs, lines[i].start, lines[i].end,
+                                               pt_bidi_base_rtl, &map));
+        if (map) {
+            pt_check_near(pt_text_visual_map_x_for_position(map, lines[i].start,
+                                                             pt_text_bias_leading),
+                          line_width, 0.5f);
+            pt_check_near(pt_text_visual_map_x_for_position(map, lines[i].end,
+                                                             pt_text_bias_trailing),
+                          0.0f, 0.5f);
+            pt_check(pt_text_visual_map_position_for_x(map, 0.0f, pt_text_bias_leading) ==
+                     lines[i].end);
+            pt_text_visual_map_free(map);
+        }
+    }
+    pt_canvas *canvas = pt_canvas_create(160, 120, 1.0f);
+    pt_check(canvas != NULL);
+    if (canvas) {
+        pt_canvas_clear(canvas, 0x000000FFu);
+        float y = 25.0f;
+        for (int i = 0; i < count && i < 4; ++i) {
+            pt_text_runs_draw_line_base(canvas, &runs, lines[i].start, lines[i].end,
+                                        lines[i].base_level, 0.0f, y, 0.0f,
+                                        pt_text_align_start, 0xFFFFFFFFu, false);
+            y += runs.line_height;
+        }
+        int painted = 0;
+        for (int py = 0; py < canvas->height; ++py) {
+            for (int px = 0; px < canvas->width; ++px) {
+                if (pt_canvas_get_pixel(canvas, px, py) != 0x000000FFu) {
+                    ++painted;
+                }
+            }
+        }
+        pt_check(painted > 50);
+        pt_canvas_destroy(canvas);
+    }
+
+    /* Per-line RTL ellipsis: truncating the first wrapped line keeps the
+     * logical prefix and puts the ellipsis at the visual left of that line. */
+    if (count >= 1 && lines[0].end > lines[0].start) {
+        size_t start = lines[0].start;
+        size_t end = lines[0].end;
+        float line_width = pt_text_runs_measure(&runs, start, end);
+        float ew = pt_font_measure_direction(runs.items[0].font, ellipsis,
+                                              sizeof(ellipsis) - 1, HB_DIRECTION_LTR) /
+                   runs.scale;
+        float max_width = line_width - ew - 1.0f;
+        float fit_width = 0.0f;
+        size_t fit = start;
+        size_t scan = start;
+        while (scan < end) {
+            size_t next = pt_utf8_next_boundary(runs.text, end, scan);
+            if (next <= scan) {
+                next = scan + 1;
+            }
+            if (pt_text_runs_measure(&runs, start, next) + ew > max_width) {
+                break;
+            }
+            fit = next;
+            fit_width = pt_text_runs_measure(&runs, start, next);
+            scan = next;
+        }
+        pt_check(fit > start && fit < end);
+        if (fit > start && fit < end) {
+            pt_canvas *actual = pt_canvas_create(160, 40, 1.0f);
+            pt_canvas *reference = pt_canvas_create(160, 40, 1.0f);
+            pt_check(actual != NULL && reference != NULL);
+            if (actual && reference) {
+                pt_text_runs_draw_line_base(actual, &runs, start, end, 1, 0.0f, 30.0f,
+                                            max_width, pt_text_align_start, 0xFFFFFFFFu,
+                                            true);
+                float text_x = max_width - fit_width;
+                pt_text_runs_draw_line_base(reference, &runs, start, fit, 1, text_x, 30.0f,
+                                            0.0f, pt_text_align_start, 0xFFFFFFFFu, false);
+                pt_canvas_draw_text_line_direction(reference, runs.items[0].font, ellipsis,
+                                                   sizeof(ellipsis) - 1, text_x - ew, 30.0f,
+                                                   0.0f, pt_text_align_start, 0xFFFFFFFFu,
+                                                   false, HB_DIRECTION_LTR);
+                pt_check(rich_pixels_hash(actual) == rich_pixels_hash(reference));
+            }
+            pt_canvas_destroy(actual);
+            pt_canvas_destroy(reference);
+        }
+    }
+    free(lines);
+    pt_text_runs_free(&runs);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.rich_text");
@@ -670,6 +788,7 @@ int main(void) {
     test_bidi_runs(window);
     test_ellipsis_placement(window);
     test_bidi_paragraphs(window);
+    test_wrapped_rtl(window);
     test_layout(window);
     test_edit_maintenance(window);
     test_font_cache();

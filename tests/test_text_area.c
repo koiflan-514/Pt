@@ -8,6 +8,7 @@
 #include "../src/internal.h"
 #include "harness.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -223,6 +224,181 @@ static void test_grow_to_content(pt_window *window, pt_canvas *canvas) {
     pt_check_near(area->height, 160.0, 0.01);
 }
 
+/* Finds the horizontal ink extent inside one line band. The area background is
+ * the dominant color in the band; antialiased text differs from it. */
+static void band_ink(pt_canvas *canvas, int x0, int x1, int y0, int y1, int *min_x,
+                     int *max_x) {
+    *min_x = -1;
+    *max_x = -1;
+    uint32_t best_color = 0;
+    int best_count = 0;
+    for (int x = x0; x < x1; ++x) {
+        for (int y = y0; y < y1; ++y) {
+            uint32_t color = pt_canvas_get_pixel(canvas, x, y);
+            int count = 0;
+            for (int sx = x0; sx < x1; ++sx) {
+                for (int sy = y0; sy < y1; ++sy) {
+                    if (pt_canvas_get_pixel(canvas, sx, sy) == color) {
+                        ++count;
+                    }
+                }
+            }
+            if (count > best_count) {
+                best_count = count;
+                best_color = color;
+            }
+        }
+    }
+    for (int x = x0; x < x1; ++x) {
+        for (int y = y0; y < y1; ++y) {
+            if (pt_canvas_get_pixel(canvas, x, y) != best_color) {
+                if (*min_x < 0) {
+                    *min_x = x;
+                }
+                *max_x = x;
+                break;
+            }
+        }
+    }
+}
+
+/* RTL multi-line display, per-paragraph alignment, width wrapping and the
+ * logical/visual map consumed by the layout accessors (2.0 wave 3). */
+static void test_rtl_layout(pt_app *app) {
+    pt_font *probe = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
+                                     pt_font_slant_upright, 14.0f);
+    if (!probe || !pt_font_has_glyph(probe, 0x05D0u)) {
+        printf("skip text_area: no Hebrew-capable frame font; RTL layout checks skipped\n");
+        return;
+    }
+    pt_window *window = pt_window_create(app, "rtl textarea", 360, 260);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget *area = pt_text_area_create(root, NULL);
+    pt_widget_set_size(area, 300.0f, 200.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    /* "abc" then alef bet gimel: auto resolves each paragraph separately. */
+    pt_widget_set_text(area, "abc\n\xD7\x90\xD7\x91\xD7\x92");
+    pt_canvas *canvas = pt_canvas_create(360, 260, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.line_count == 2);
+    if (layout.line_count == 2) {
+        size_t ltr_start = layout.lines[0].start;
+        size_t ltr_end = layout.lines[0].end;
+        size_t rtl_start = layout.lines[1].start;
+        size_t rtl_end = layout.lines[1].end;
+        pt_check(layout.lines[0].base_level == 0);
+        pt_check(layout.lines[1].base_level == 1);
+        /* LTR line grows right; the RTL line's logical start is its visual
+         * right edge and its logical end is the left edge. */
+        pt_check_near(pt_text_layout_x_for_position(&layout, 0, ltr_start), 0.0f, 0.01f);
+        pt_check(pt_text_layout_x_for_position(&layout, 0, ltr_end) > 0.0f);
+        float rtl_width = pt_text_layout_x_for_position(&layout, 1, rtl_start);
+        pt_check(rtl_width > 0.0f);
+        pt_check_near(pt_text_layout_x_for_position(&layout, 1, rtl_end), 0.0f, 0.01f);
+        pt_check(pt_text_layout_x_for_position(&layout, 1, rtl_start + 2) < rtl_width);
+        /* Cluster boundaries and visual hit testing through the line map. */
+        pt_check(pt_text_layout_position_for_x(&layout, 1, 0.0f) == rtl_end);
+        pt_check(pt_text_layout_position_for_x(&layout, 1, rtl_width) == rtl_start);
+        size_t boundary = pt_text_layout_position_for_x(&layout, 1, rtl_width);
+        pt_check(boundary == rtl_start);
+        float mid = (pt_text_layout_x_for_position(&layout, 1, rtl_start) +
+                     pt_text_layout_x_for_position(&layout, 1, rtl_start + 2)) *
+                    0.5f;
+        size_t hit = pt_text_layout_position_for_x(&layout, 1, mid);
+        pt_check(hit == rtl_start || hit == rtl_start + 2);
+    }
+
+    /* Wrapping is width-driven in logical order; each visible line carries the
+     * RTL paragraph base and stays inside the width. */
+    pt_widget_set_text(area,
+                       "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+                       "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E");
+    pt_text_layout_free(&layout);
+    memset(&layout, 0, sizeof(layout));
+    pt_check(pt_text_layout_build(area, &ctx, 70.0f, &layout));
+    pt_check(layout.line_count >= 2);
+    for (int i = 0; i < layout.line_count; ++i) {
+        pt_check(layout.lines[i].base_level == 1);
+        float width = pt_text_layout_x_for_position(&layout, i, layout.lines[i].start);
+        pt_check(width <= 71.0f);
+        pt_check(pt_text_layout_x_for_position(&layout, i, layout.lines[i].end) <= width + 0.01f);
+    }
+    pt_text_layout_free(&layout);
+
+    /* Per-paragraph alignment: align_start puts LTR left and RTL right;
+     * align_end swaps both. pt_widget_set_text_align now reaches the text
+     * area instead of the hard-coded start edge. */
+    pt_widget_set_text(area, "abc\n\xD7\x90\xD7\x91\xD7\x92");
+    pt_widget_set_text_align(area, pt_text_align_start);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    int inner_x = (int)lroundf(area->x + area->padding_left);
+    int inner_y = (int)lroundf(area->y + area->padding_top);
+    int inner_w = (int)lroundf(area->width - area->padding_left - area->padding_right);
+    int line_h = (int)lroundf(layout.line_height);
+    int ltr_min_start = -1;
+    int ltr_max_start = -1;
+    int rtl_min_start = -1;
+    int rtl_max_start = -1;
+    if (layout.line_count == 2 && line_h > 8) {
+        band_ink(canvas, inner_x, inner_x + inner_w, inner_y + 3, inner_y + line_h - 3,
+                 &ltr_min_start, &ltr_max_start);
+        band_ink(canvas, inner_x, inner_x + inner_w, inner_y + line_h + 3,
+                 inner_y + 2 * line_h - 3, &rtl_min_start, &rtl_max_start);
+        pt_check(ltr_min_start >= inner_x && ltr_min_start < inner_x + 20);
+        pt_check(rtl_min_start > inner_x + 40);
+    }
+    pt_text_layout_free(&layout);
+
+    pt_widget_set_text_align(area, pt_text_align_end);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    if (layout.line_count == 2 && line_h > 8) {
+        int ltr_min_end = -1;
+        int ltr_max_end = -1;
+        int rtl_min_end = -1;
+        int rtl_max_end = -1;
+        band_ink(canvas, inner_x, inner_x + inner_w, inner_y + 3, inner_y + line_h - 3,
+                 &ltr_min_end, &ltr_max_end);
+        band_ink(canvas, inner_x, inner_x + inner_w, inner_y + line_h + 3,
+                 inner_y + 2 * line_h - 3, &rtl_min_end, &rtl_max_end);
+        pt_check(ltr_min_end > inner_x + 40);
+        pt_check(rtl_min_end >= inner_x && rtl_min_end < inner_x + 20);
+        pt_check(ltr_min_end != ltr_min_start);
+        pt_check(rtl_min_end != rtl_min_start);
+    }
+    pt_text_layout_free(&layout);
+
+    /* Removed controls keep their logical bytes but collapse in the map. */
+    pt_widget_set_text(area, "a\xE2\x80\xAA" "b");
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    float before_control = pt_text_layout_x_for_position(&layout, 0, 1);
+    float inside_control = pt_text_layout_x_for_position(&layout, 0, 2);
+    float after_control = pt_text_layout_x_for_position(&layout, 0, 4);
+    pt_check_near(before_control, inside_control, 0.01f);
+    pt_check_near(inside_control, after_control, 0.01f);
+    pt_check(pt_text_layout_x_for_position(&layout, 0, 5) > after_control);
+    pt_text_layout_free(&layout);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.textarea");
@@ -245,6 +421,7 @@ int main(void) {
     test_editing(window, area, canvas);
     test_scrolling(window, area, canvas);
     test_grow_to_content(window, canvas);
+    test_rtl_layout(app);
 
     pt_canvas_destroy(canvas);
     pt_window_free(window);
