@@ -97,6 +97,11 @@ static void wire_count_click(pt_widget *widget, void *user_data) {
  * pre-1.4 kind value stays stable, and the inspected opcodes must match the
  * XML the client headers were generated from. */
 static void test_facility_tables(void) {
+    /* Touch is opt-in: FC_OPT_ALL keeps the keyboard|pointer seat that every
+     * pre-1.4 consumer was written against. */
+    pt_check((FC_OPT_ALL & FC_OPT_TOUCH) == 0);
+    pt_check(FC_OPT_TOUCH == (1u << 10));
+
     pt_check(FC_K_TABLET > FC_K_TABLET_SEAT);
     pt_check(FC_K_TABLET_TOOL > FC_K_TABLET);
     pt_check(FC_K_COUNT == FC_K_TABLET_TOOL + 1);
@@ -201,6 +206,14 @@ static void test_touch_wire(void) {
     pt_check(fake_compositor_touch_motion(&fc, 101u, 0, cx + 18.0, cy + 9.0));
     pt_check(fake_compositor_touch_frame(&fc));
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(window->pointer_x, cx + 18.0, 0.5);
+    pt_check_near(window->pointer_y, cy + 9.0, 0.5);
+
+    /* wl_touch.frame is a no-op in platform.c: touch_frame forwards nothing and
+     * down/motion apply immediately, so a lone frame must not change state. */
+    pt_check(fake_compositor_touch_frame(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->touch_count == 1);
     pt_check_near(window->pointer_x, cx + 18.0, 0.5);
     pt_check_near(window->pointer_y, cy + 9.0, 0.5);
 
@@ -511,6 +524,8 @@ typedef struct wire_drop {
     int drops;
     uint32_t mime_count;
     uint32_t actions;
+    bool has_plain;
+    bool has_html;
     char selected[64];
     char mime[64];
     char text[128];
@@ -528,8 +543,10 @@ static const char *wire_drop_enter(pt_widget *widget, pt_drop_offer *offer, void
     ++drop->enters;
     drop->mime_count = pt_drop_offer_mime_count(offer);
     drop->actions = pt_drop_offer_actions(offer);
+    drop->has_plain = pt_drop_offer_has_mime(offer, "text/plain;charset=utf-8");
+    drop->has_html = pt_drop_offer_has_mime(offer, "text/html");
 
-    if (pt_drop_offer_has_mime(offer, "text/plain;charset=utf-8")) {
+    if (drop->has_plain) {
         return "text/plain;charset=utf-8";
     }
     return pt_drop_offer_mime(offer, 0);
@@ -703,6 +720,23 @@ static void test_dnd_wire(void) {
     pt_check(source_size == (ssize_t)strlen("wire drag payload"));
     pt_check(strcmp(source_payload, "wire drag payload") == 0);
 
+    /* Repeating the SCM_RIGHTS send/payload cycle keeps the descriptor count
+     * stable; each pipe is closed by the facility after the read. */
+    int source_fds_before = fake_compositor_fd_count();
+    for (int i = 0; i < 8; ++i) {
+        pt_check(fake_compositor_drag_source_send(&fc, "text/plain;charset=utf-8"));
+        pt_check(fake_compositor_sync(&fc, app));
+        char loop_payload[64] = {0};
+        ssize_t loop_size = fake_compositor_drag_source_payload(&fc, loop_payload,
+                                                                sizeof(loop_payload));
+        pt_check(loop_size == (ssize_t)strlen("wire drag payload"));
+        pt_check(strcmp(loop_payload, "wire drag payload") == 0);
+        pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+    }
+    int source_fds_after = fake_compositor_fd_count();
+    pt_check(source_fds_before > 0 && source_fds_after > 0);
+    pt_check(source_fds_after <= source_fds_before);
+
     /* target/action arrive before the drop. */
     pt_check(fake_compositor_drag_source_target(&fc, "text/plain;charset=utf-8"));
     pt_check(fake_compositor_drag_source_action(&fc, 1u)); /* COPY */
@@ -723,6 +757,8 @@ static void test_dnd_wire(void) {
     pt_check(drop.enters == 1);
     pt_check(drop.mime_count == 2);
     pt_check(drop.actions == 3u); /* COPY | MOVE advertised by the source */
+    pt_check(drop.has_plain);
+    pt_check(drop.has_html);
     pt_check(app->platform->drag_mime != NULL);
     if (app->platform->drag_mime) {
         pt_check(strcmp(app->platform->drag_mime, "text/plain;charset=utf-8") == 0);
@@ -786,6 +822,25 @@ static void test_dnd_wire(void) {
     pt_check(app->platform->drag_source == NULL);
     pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 1) >= 1);
     pt_check(app->platform->drag_icon_surface != NULL);
+    pt_check(fake_compositor_pending_fd_count(&fc) == 0);
+
+    /* Leave without a drop: the target's leave callback fires, the client
+     * destroys the offer (wl_data_offer.destroy, opcode 2) and no drop is
+     * delivered. */
+    fake_compositor_clear(&fc);
+    static const char *const leave_mimes[] = {"text/plain;charset=utf-8"};
+    pt_check(fake_compositor_drag_offer(&fc, leave_mimes, 1, "leave payload", 1u));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_drag_enter(&fc, 8301u, surface, cx, cy));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(drop.enters == 2);
+    pt_check(drop.has_plain);
+    pt_check(!drop.has_html);
+    pt_check(fake_compositor_drag_leave(&fc));
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(drop.leaves == 1);
+    pt_check(drop.drops == 1);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_OFFER, 2, 1, 8));
     pt_check(fake_compositor_pending_fd_count(&fc) == 0);
 
     /* Cancellation path: a new grab, a new source, then wl_data_source.cancelled
