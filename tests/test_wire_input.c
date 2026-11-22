@@ -16,10 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* wl_touch geometry is float on the client side; the wire is wl_fixed_t. */
-#define wire_touch_x 120.0
-#define wire_touch_y 90.0
-
 /* tablet-unstable-v2 tool types / capabilities / button codes. */
 #define wire_tablet_type_pen 0x140u
 #define wire_tablet_type_eraser 0x141u
@@ -170,6 +166,7 @@ static void test_touch_wire(void) {
     }
     pt_check(fake_compositor_settle(&fc, app));
     pt_check(fake_compositor_global_bound(&fc, FC_K_SEAT));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TOUCH, true, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TOUCH) != 0);
 
     pt_window *window = wire_open_window(&fc, app, "touch-wire", 400, 300);
@@ -286,6 +283,7 @@ static void test_touch_wire(void) {
      * multi-contact, but only the first up is delivered. */
     pt_check(fake_compositor_seat_capabilities(&fc, 7u)); /* touch back */
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TOUCH, true, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TOUCH) != 0);
     pt_check(fake_compositor_touch_down(&fc, 9401u, 500u, surface, 0, 100.0, 100.0));
     pt_check(fake_compositor_touch_down(&fc, 9402u, 501u, surface, 1, 200.0, 100.0));
@@ -337,7 +335,9 @@ static void test_tablet_wire(void) {
     }
     pt_check(fake_compositor_settle(&fc, app));
     pt_check(fake_compositor_global_bound(&fc, FC_K_TABLET_MANAGER));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TABLET_SEAT, true, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TABLET_SEAT) != 0);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TABLET_MANAGER, 0, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_TABLET_MANAGER, 0) >= 1);
     fc_request tablet_seat_request = {0};
     pt_check(fake_compositor_last_request(&fc, FC_K_TABLET_MANAGER, 0, &tablet_seat_request));
@@ -371,6 +371,7 @@ static void test_tablet_wire(void) {
     pt_check(fake_compositor_tablet_add(&fc, &tablet));
     pt_check(tablet != 0);
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TABLET, true, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TABLET) == tablet);
     pt_check(fake_compositor_tablet_name(&fc, "Fake Intuos"));
     pt_check(fake_compositor_tablet_id(&fc, 0x056au, 0x0002u));
@@ -382,6 +383,7 @@ static void test_tablet_wire(void) {
     pt_check(fake_compositor_tablet_add_tool(&fc, &tool));
     pt_check(tool != 0);
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TABLET_TOOL, true, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TABLET_TOOL) == tool);
     pt_check(app->platform->tablet_tool_count == 1);
     pt_check(fake_compositor_tablet_tool_type(&fc, wire_tablet_type_pen));
@@ -480,8 +482,10 @@ static void test_tablet_wire(void) {
     fake_compositor_clear(&fc);
     pt_check(fake_compositor_tablet_tool_removed(&fc));
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TABLET_TOOL, false, 8));
     pt_check(app->platform->tablet_tool_count == 0);
     pt_check(fake_compositor_live_id(&fc, FC_K_TABLET_TOOL) == 0);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TABLET_TOOL, 1, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_TABLET_TOOL, 1) >= 1);
 
     /* A second tool maps a different type and follows the same lifecycle. */
@@ -508,7 +512,9 @@ static void test_tablet_wire(void) {
     fake_compositor_clear(&fc);
     pt_check(fake_compositor_tablet_removed(&fc));
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_object(&fc, app, FC_K_TABLET, false, 8));
     pt_check(fake_compositor_live_id(&fc, FC_K_TABLET) == 0);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_TABLET, 0, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_TABLET, 0) >= 1);
 
     pt_check(!fake_compositor_request_overflowed(&fc));
@@ -692,10 +698,12 @@ static void test_dnd_wire(void) {
 
     /* Source setup requests: one data source, the offer list including every
      * text alias, a copy-only action mask and start_drag with the grab serial. */
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_MANAGER, 0, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_MANAGER, 0) >= 1);
     fc_request create_source = {0};
     pt_check(fake_compositor_last_request(&fc, FC_K_DATA_MANAGER, 0, &create_source));
     pt_check(create_source.new_id != 0);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_SOURCE, 0, 5, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 0) >= 5);
     bool offered_plain = false;
     size_t offer_count = fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 0);
@@ -709,9 +717,11 @@ static void test_dnd_wire(void) {
     }
     pt_check(offered_plain);
     fc_request set_actions = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_SOURCE, 2, 1, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_DATA_SOURCE, 2, &set_actions));
     pt_check(set_actions.args[0].u == 1u); /* COPY */
     fc_request start_drag = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_DEVICE, 0, 1, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_DATA_DEVICE, 0, &start_drag));
     pt_check(start_drag.nargs == 4);
     pt_check(start_drag.args[0].u == create_source.new_id);
@@ -810,11 +820,13 @@ static void test_dnd_wire(void) {
     pt_check_near(drop.x, 62.0, 0.5);
     pt_check_near(drop.y, 47.0, 0.5);
     fc_request receive = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_OFFER, 1, 1, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_DATA_OFFER, 1, &receive));
     pt_check(receive.nargs == 2);
     pt_check(receive.args[0].has_text);
     pt_check(strcmp(receive.args[0].text, "text/plain;charset=utf-8") == 0);
     pt_check((receive.flags & FC_FLAG_FD) != 0u);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_OFFER, 3, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_OFFER, 3) >= 1);
 
     /* Source completion: dnd_drop_performed then dnd_finished with the
@@ -828,6 +840,7 @@ static void test_dnd_wire(void) {
     pt_check(!pt_window_get_drag_active(window));
     pt_check(pt_window_get_drag_result(window) == pt_drag_action_copy);
     pt_check(app->platform->drag_source == NULL);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_DATA_SOURCE, 1, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_DATA_SOURCE, 1) >= 1);
     pt_check(app->platform->drag_icon_surface != NULL);
     pt_check(fake_compositor_pending_fd_count(&fc) == 0);
@@ -919,11 +932,14 @@ static void test_primary_wire(void) {
     pt_check(pt_window_primary_set_serial(window, "wire primary text", 9001u));
     pt_check(fake_compositor_sync(&fc, app));
     fc_request create_source = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_MANAGER, 0, 1, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_MANAGER, 0, &create_source));
     pt_check(create_source.new_id != 0);
     pt_check(app->platform->primary_source != NULL);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_SOURCE, 0, 4, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_PRIMARY_SOURCE, 0) >= 4);
     fc_request selection = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_DEVICE, 0, 1, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_DEVICE, 0, &selection));
     pt_check(selection.nargs == 2);
     pt_check(selection.args[0].u == create_source.new_id);
@@ -932,9 +948,11 @@ static void test_primary_wire(void) {
     /* Clearing the owner sends set_selection(NULL) and destroys the source. */
     pt_check(pt_window_primary_set_serial(window, NULL, 9002u));
     pt_check(fake_compositor_sync(&fc, app));
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_DEVICE, 0, 2, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_DEVICE, 0, &selection));
     pt_check(selection.args[0].u == 0u);
     pt_check(selection.args[1].u == 9002u);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_SOURCE, 1, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_PRIMARY_SOURCE, 1) >= 1);
     pt_check(app->platform->primary_source == NULL);
 
@@ -957,6 +975,7 @@ static void test_primary_wire(void) {
         free(text);
     }
     fc_request receive = {0};
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_OFFER, 0, 1, 8));
     pt_check(fake_compositor_last_request(&fc, FC_K_PRIMARY_OFFER, 0, &receive));
     pt_check(receive.nargs == 2);
     pt_check(receive.args[0].has_text);
@@ -972,6 +991,7 @@ static void test_primary_wire(void) {
     pt_check(fake_compositor_primary_source_cancelled(&fc));
     pt_check(fake_compositor_sync(&fc, app));
     pt_check(app->platform->primary_source == NULL);
+    pt_check(fake_compositor_wait_request(&fc, app, FC_K_PRIMARY_SOURCE, 1, 1, 8));
     pt_check(fake_compositor_count_requests(&fc, FC_K_PRIMARY_SOURCE, 1) >= 1);
 
     /* Repeated offer/read cycles keep the descriptor count stable. */

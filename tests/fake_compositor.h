@@ -3338,6 +3338,29 @@ static inline bool fake_compositor_wait_request(fake_compositor *fc, pt_app *app
     return fake_compositor_count_requests(fc, kind, opcode) >= min_count;
 }
 
+/* Roundtrips until the server's live object table has (present=true) or no
+ * longer has (present=false) an object of `kind`, or `max_roundtrips` is
+ * exhausted. Object creation and destruction both ride on client requests that
+ * may only be queued while a roundtrip dispatches server events (for example
+ * seat.capabilities -> get_touch, or tool.removed -> tool.destroy), so one
+ * sync is not enough to observe the resulting server-side state. */
+static inline bool fake_compositor_wait_object(fake_compositor *fc, pt_app *app,
+                                               uint32_t kind, bool present,
+                                               int max_roundtrips) {
+    if (!fc || !app) {
+        return false;
+    }
+    for (int i = 0; i < max_roundtrips; ++i) {
+        if ((fake_compositor_live_id(fc, kind) != 0) == present) {
+            return true;
+        }
+        if (!fake_compositor_sync(fc, app)) {
+            return false;
+        }
+    }
+    return (fake_compositor_live_id(fc, kind) != 0) == present;
+}
+
 /* Dispatches for up to timeout_ms, processing frames and configured events. */
 static inline void fake_compositor_pump(fake_compositor *fc, pt_app *app, int timeout_ms) {
     struct timespec start;
