@@ -845,6 +845,121 @@ static void test_wire_input_panel_v1(void) {
     fake_compositor_stop(&fc);
 }
 
+#define HE_BET "\xD7\x90\xD7\x91\xD7\x92"
+
+static float entry_visual_caret_x(pt_widget *entry) {
+    const char *text = entry->text ? entry->text : "";
+    size_t len = strlen(text);
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    pt_bidi_base base = pt_widget_text_base(entry, text, len);
+    pt_text_visual_map *map = NULL;
+    float x = 0.0f;
+    if (font && pt_text_visual_map_build_bidi(font, text, len, base, &map)) {
+        x = pt_text_visual_map_x_for_position(map, entry->cursor,
+                                              (pt_text_bias)entry->caret_affinity) /
+            (ctx.scale > 0.0f ? ctx.scale : 1.0f);
+    }
+    pt_text_visual_map_free(map);
+    return x;
+}
+
+/* IME rectangles are visual: they follow the mapped caret, not the logical
+ * byte prefix, and an RTL-context preedit pushes the composed caret left. */
+static void test_rtl_geometry(pt_app *app) {
+    pt_window *window = pt_window_create(app, "ime-rtl", 520, 220);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_widget_set_text(entry, "abc " HE_BET " 123");
+    pt_widget_set_size(entry, 480.0f, 34.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_widget_set_text(area, "abc " HE_BET " 123");
+    pt_widget_set_size(area, 480.0f, 100.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 220, 1.0f);
+    pt_check(canvas && pt_window_paint(window, canvas));
+
+    pt_check(pt_widget_focus(entry));
+    pt_entry_set_selection(entry, 4, 4);
+    int x = 0;
+    pt_widget_ime_rect(entry, &x, NULL, NULL, NULL);
+    float expected = entry->x + entry->padding_left + entry_visual_caret_x(entry) -
+                     entry->scroll_x;
+    pt_check_near((float)x, expected, 1.0f);
+    /* The visual right edge of an LTR paragraph is byte 4, not byte 14. */
+    int end_x = 0;
+    int start_byte_x = 0;
+    pt_entry_set_selection(entry, 0, 0);
+    pt_widget_ime_rect(entry, &start_byte_x, NULL, NULL, NULL);
+    pt_entry_set_selection(entry, 14, 14);
+    pt_widget_ime_rect(entry, &end_x, NULL, NULL, NULL);
+    pt_check(x > start_byte_x + 4);
+    pt_check(x > end_x + 4);
+
+    /* RTL entry: Home (visual left) sits at the far left, End at the far
+     * right, and the preedit rides to the left of the insertion point. */
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_text(entry, HE_BET " abc");
+    pt_entry_set_selection(entry, 6, 6);
+    int rtl_home_x = 0;
+    pt_widget_ime_rect(entry, &rtl_home_x, NULL, NULL, NULL);
+    pt_entry_set_selection(entry, 0, 0);
+    int rtl_end_x = 0;
+    pt_widget_ime_rect(entry, &rtl_end_x, NULL, NULL, NULL);
+    pt_check(rtl_end_x > rtl_home_x + 4);
+    pt_entry_set_selection(entry, 6, 6);
+    pt_check(pt_widget_preedit(entry, "xy"));
+    int with_preedit_x = 0;
+    pt_widget_ime_rect(entry, &with_preedit_x, NULL, NULL, NULL);
+    pt_check(with_preedit_x < rtl_home_x - 4);
+    pt_widget_preedit(entry, "");
+
+    pt_check(pt_widget_focus(area));
+    pt_text_area_set_selection(area, 4, 4);
+    int area_x = 0;
+    pt_widget_ime_rect(area, &area_x, NULL, NULL, NULL);
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    float area_expected = area->x + area->padding_left +
+                          pt_text_layout_x_for_position_bias(&layout, line, layout.caret,
+                                                             (pt_text_bias)area->caret_affinity);
+    pt_check_near((float)area_x, area_expected, 1.0f);
+    pt_text_layout_free(&layout);
+
+    pt_text_area_set_selection(area, 0, 0);
+    int area_start_x = 0;
+    pt_widget_ime_rect(area, &area_start_x, NULL, NULL, NULL);
+    int area_rtl_x = 0;
+    pt_text_area_set_selection(area, 14, 14);
+    pt_widget_ime_rect(area, &area_rtl_x, NULL, NULL, NULL);
+    pt_check(area_x > area_start_x + 4);
+    pt_check(area_x > area_rtl_x + 4);
+
+    /* An RTL run preedit composes to the left of its insertion point. */
+    pt_widget_set_text_direction(area, pt_text_direction_rtl);
+    pt_widget_set_text(area, HE_BET);
+    pt_text_area_set_selection(area, 4, 4);
+    int area_home_x = 0;
+    pt_widget_ime_rect(area, &area_home_x, NULL, NULL, NULL);
+    pt_check(pt_widget_preedit(area, "xy"));
+    int area_preedit_x = 0;
+    pt_widget_ime_rect(area, &area_preedit_x, NULL, NULL, NULL);
+    pt_check(area_preedit_x < area_home_x - 4);
+    pt_widget_preedit(area, "");
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.ime");
@@ -867,6 +982,8 @@ int main(void) {
     test_text_area_hints(app);
     test_input_panel(app, window);
     test_custom_surface(app);
+
+    test_rtl_geometry(app);
 
     test_wire_ime_composition();
     test_wire_input_panel();

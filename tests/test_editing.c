@@ -13,6 +13,9 @@
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 
+#define HE_BET "\xD7\x90\xD7\x91\xD7\x92"
+#define HE_GIMEL_DALET_HE "\xD7\x93\xD7\x94\xD7\x95"
+
 typedef struct edit_log {
     int binds;
     int edits;
@@ -321,6 +324,213 @@ static void test_tree_rename(pt_app *app) {
     pt_window_free(window);
 }
 
+static float entry_caret_visual_x(pt_widget *entry) {
+    int x = 0;
+    int y = 0;
+    int w = 0;
+    int h = 0;
+    pt_widget_ime_rect(entry, &x, &y, &w, &h);
+    pt_unused(y);
+    pt_unused(w);
+    pt_unused(h);
+    return (float)x - entry->x - entry->padding_left + entry->scroll_x;
+}
+
+static float entry_expected_caret_x(pt_widget *entry) {
+    const char *text = entry->text ? entry->text : "";
+    size_t len = strlen(text);
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    pt_bidi_base base = pt_widget_text_base(entry, text, len);
+    pt_text_visual_map *map = NULL;
+    float x = 0.0f;
+    if (font && pt_text_visual_map_build_bidi(font, text, len, base, &map)) {
+        x = pt_text_visual_map_x_for_position(map, entry->cursor,
+                                              (pt_text_bias)entry->caret_affinity) /
+            (ctx.scale > 0.0f ? ctx.scale : 1.0f);
+    }
+    pt_text_visual_map_free(map);
+    return x;
+}
+
+static void expect_entry_caret(pt_window *window, pt_widget *entry, size_t cursor,
+                               const char *label) {
+    pt_unused(window);
+    if (entry->cursor != cursor) {
+        fprintf(stderr, "caret %s: cursor %zu expected %zu\n", label, entry->cursor, cursor);
+    }
+    pt_check(entry->cursor == cursor);
+    pt_check_near(entry_caret_visual_x(entry), entry_expected_caret_x(entry), 1.0f);
+}
+
+static float text_area_expected_caret_x(pt_widget *area) {
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    if (!pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout)) {
+        return 0.0f;
+    }
+    int line = pt_text_layout_line_for_position(&layout, layout.caret);
+    float x = pt_text_layout_x_for_position_bias(&layout, line, layout.caret,
+                                                 (pt_text_bias)area->caret_affinity);
+    pt_text_layout_free(&layout);
+    return x;
+}
+
+static void test_bidi_entry_editing(pt_app *app) {
+    pt_window *window = pt_window_create(app, "bidi-editing", 640, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget_set_gap(root, 8.0f);
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_check(entry != NULL);
+    const char *mixed = "abc " HE_BET " 123";
+    pt_widget_set_text(entry, mixed);
+    pt_widget_set_size(entry, 600.0f, 32.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(640, 240, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(entry));
+    window->caret_visible = true;
+
+    /* Visual Right: Latin prefix first, then the level-2 digits in the middle,
+     * then the RTL run backwards (logical offsets fall while x grows), and the
+     * caret stops at both affinities of the shared byte-4 boundary. */
+    pt_entry_set_selection(entry, 0, 0);
+    expect_entry_caret(window, entry, 0, "home");
+    const size_t right_path[] = {1, 2, 3, 4, 12, 13, 14, 10, 8, 6, 4};
+    for (size_t i = 0; i < sizeof(right_path) / sizeof(right_path[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+        expect_entry_caret(window, entry, right_path[i], "right");
+    }
+    /* End: visual right edge for an LTR paragraph is logical byte 4 here. */
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    expect_entry_caret(window, entry, 4, "end");
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    expect_entry_caret(window, entry, 0, "home2");
+
+    /* Visual Left walks the same line in reverse, including the trailing
+     * affinity of the run boundary. */
+    const size_t left_path[] = {6, 8, 10, 11, 13, 12, 11, 3, 2, 1, 0};
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    for (size_t i = 0; i < sizeof(left_path) / sizeof(left_path[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+        expect_entry_caret(window, entry, left_path[i], "left");
+    }
+
+    /* Shift keeps a logical anchor while the caret moves visually. */
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_key(window, XKB_KEY_Right, 1u, NULL, true);
+    pt_window_input_key(window, XKB_KEY_Right, 1u, NULL, true);
+    pt_check(entry->selection_anchor == 0 && entry->cursor == 2);
+    pt_window_input_key(window, XKB_KEY_Left, 1u, NULL, true);
+    pt_check(entry->selection_anchor == 0 && entry->cursor == 1);
+    uint32_t sel_start = 99;
+    uint32_t sel_end = 99;
+    pt_check(pt_entry_get_selection(entry, &sel_start, &sel_end));
+    pt_check(sel_start == 0 && sel_end == 1);
+
+    /* Backspace and Delete remove the logical predecessor/successor. */
+    pt_widget_set_text(entry, mixed);
+    pt_entry_set_selection(entry, 4, 4);
+    pt_window_input_key(window, XKB_KEY_BackSpace, 0, NULL, true);
+    pt_check(strcmp(pt_widget_get_text(entry), "abc" HE_BET " 123") == 0);
+    pt_widget_set_text(entry, mixed);
+    pt_entry_set_selection(entry, 4, 4);
+    pt_window_input_key(window, XKB_KEY_Delete, 0, NULL, true);
+    pt_check(strcmp(pt_widget_get_text(entry), "abc \xD7\x91\xD7\x92 123") == 0);
+
+    /* A combining cluster never splits: e + U+0301 moves as one stop. */
+    pt_widget_set_text(entry, "abc e\xCC\x81 " HE_BET);
+    pt_entry_set_selection(entry, 4, 4);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(entry->cursor == 7);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(entry->cursor == 4);
+
+    /* X9 removed controls keep their bytes but are not a caret stop. A forced
+     * RTL base keeps the map path so the zero-width cluster is exercised. */
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_text(entry, "\xD7\x90\xE2\x80\x8B\xD7\x91");
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(entry->cursor == 2);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(entry->cursor == 7);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(entry->cursor == 7);
+
+    /* RTL paragraph: Home is the visual left (logical end), End the visual
+     * right (logical start), and Right raises x by lowering the offset. */
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_text(entry, HE_BET " abc " HE_GIMEL_DALET_HE);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    expect_entry_caret(window, entry, 0, "rtl end");
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    expect_entry_caret(window, entry, 0, "rtl right edge");
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    expect_entry_caret(window, entry, strlen(pt_widget_get_text(entry)), "rtl home");
+    const size_t rtl_right[] = {15, 13, 11, 10, 8, 9, 10, 6, 4, 2, 0};
+    for (size_t i = 0; i < sizeof(rtl_right) / sizeof(rtl_right[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+        expect_entry_caret(window, entry, rtl_right[i], "rtl right");
+    }
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    expect_entry_caret(window, entry, 2, "rtl left");
+
+    /* Password bullets follow the stored text's direction but expose nothing. */
+    pt_widget_set_text(entry, HE_BET " abc");
+    pt_entry_set_password(entry, true);
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(entry->cursor == 0);
+    pt_check(pt_entry_get_selection(entry, &sel_start, &sel_end) == false);
+    pt_check(strcmp(pt_widget_get_text(entry), HE_BET " abc") == 0);
+
+    /* The text area shares the visual map: one line of the same mixed text
+     * moves identically, and Home/End are visual edges. */
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_check(area != NULL);
+    pt_widget_set_text(area, mixed);
+    pt_widget_set_size(area, 600.0f, 120.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_window_paint(window, canvas);
+    pt_check(pt_widget_focus(area));
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == 1);
+    int caret_x = 0;
+    pt_widget_ime_rect(area, &caret_x, NULL, NULL, NULL);
+    pt_check_near((float)caret_x,
+                  area->x + area->padding_left + text_area_expected_caret_x(area), 1.0f);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == 4);
+    pt_text_area_set_selection(area, 4, 4);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    for (int i = 0; i < 4; ++i) {
+        pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    }
+    pt_check(area->cursor == 4);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == 12);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == 0);
+    pt_widget_ime_rect(area, &caret_x, NULL, NULL, NULL);
+    pt_check_near((float)caret_x,
+                  area->x + area->padding_left + text_area_expected_caret_x(area), 1.0f);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.editing");
@@ -330,6 +540,7 @@ int main(void) {
     }
     test_table_editing(app);
     test_tree_rename(app);
+    test_bidi_entry_editing(app);
     pt_app_destroy(app);
     return pt_test_finish("editing");
 }

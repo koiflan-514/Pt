@@ -622,6 +622,80 @@ static void test_snapshot_rtl_wrapped(pt_app *app) {
     pt_window_free(window);
 }
 
+/* RTL editing goldens (2.0 wave 4): a focused mixed-direction entry and a
+ * wrapped RTL text area, each with the caret at a mapped visual position.
+ * Repainting the same state hashes identically; forcing the opposite base
+ * changes pixels, so the golden really carries bidi caret geometry. */
+static void test_snapshot_rtl_editing(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "rtl-editing-snapshots", 520, 260);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_gap(root, 10.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_widget_set_text(entry, "abc \xD7\x90\xD7\x91\xD7\x92 123");
+    pt_widget_set_size(entry, 440.0f, 34.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 440.0f, 150.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_widget_set_text(area,
+                       "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+                       "\xD7\x99\xD7\x9A\xD7\x9B abc \xD7\x9C\xD7\x9D\xD7\x9E \xD7\xA0\xD7\xA1\xD7\xA2 "
+                       "\xD7\xA3\xD7\xA4\xD7\xA5");
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(520, 260, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+
+    pt_check(pt_widget_focus(entry));
+    pt_entry_set_selection(entry, 4, 4);
+    window->caret_visible = true;
+    uint64_t entry_hash = 0;
+    snapshot_paint(window, canvas, directory, "rtl-editing-entry", &entry_hash);
+    uint64_t entry_repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-editing-entry-repeat", &entry_repeat);
+    pt_check(entry_hash == entry_repeat);
+
+    /* The caret in the text area sits inside the level-2 Latin run of its
+     * wrapped RTL line, a position only the map can place. */
+    pt_check(pt_widget_focus(area));
+    size_t latin = 0;
+    const char *latin_at = strstr(pt_widget_get_text(area), "abc");
+    pt_check(latin_at != NULL);
+    if (latin_at) {
+        latin = (size_t)(latin_at - pt_widget_get_text(area)) + 1;
+    }
+    pt_text_area_set_selection(area, latin, latin);
+    window->caret_visible = true;
+    uint64_t area_hash = 0;
+    snapshot_paint(window, canvas, directory, "rtl-editing-area", &area_hash);
+    uint64_t area_repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-editing-area-repeat", &area_repeat);
+    pt_check(area_hash == area_repeat);
+
+    pt_widget_set_text_direction(entry, pt_text_direction_ltr);
+    pt_widget_set_text_direction(area, pt_text_direction_ltr);
+    pt_check(pt_widget_focus(entry));
+    pt_entry_set_selection(entry, 4, 4);
+    window->caret_visible = true;
+    uint64_t flipped = 0;
+    snapshot_paint(window, canvas, directory, "rtl-editing-entry-ltr-base", &flipped);
+    pt_check(flipped != entry_hash);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -636,6 +710,7 @@ int main(void) {
     test_snapshot_icon(app);
     test_snapshot_rtl(app);
     test_snapshot_rtl_wrapped(app);
+    test_snapshot_rtl_editing(app);
     pt_app_destroy(app);
     return pt_test_finish("visuals");
 }

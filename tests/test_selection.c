@@ -8,6 +8,7 @@
 #include "../src/internal.h"
 #include "harness.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -666,6 +667,145 @@ static void test_tree_model(pt_window *window, pt_canvas **canvas) {
     pt_widget_destroy(tree);
 }
 
+#define HE_BET "\xD7\x90\xD7\x91\xD7\x92"
+
+static int row_diff_runs(const pt_canvas *a, const pt_canvas *b, int y, int *starts,
+                         int *ends, int max_runs) {
+    int runs = 0;
+    bool inside = false;
+    int start = 0;
+    for (int x = 0; x < a->width && x < b->width; ++x) {
+        uint32_t pa = a->pixels[(size_t)y * (size_t)a->stride + (size_t)x];
+        uint32_t pb = b->pixels[(size_t)y * (size_t)b->stride + (size_t)x];
+        bool differs = pa != pb;
+        if (differs && !inside) {
+            inside = true;
+            start = x;
+        } else if (!differs && inside) {
+            inside = false;
+            if (runs < max_runs) {
+                /* Glyph antialiasing can leave a two-pixel hole inside one
+                 * translucent rectangle; join runs closer than four pixels. */
+                if (runs > 0 && start - ends[runs - 1] <= 4) {
+                    ends[runs - 1] = x;
+                } else {
+                    starts[runs] = start;
+                    ends[runs] = x;
+                    ++runs;
+                }
+            }
+        }
+    }
+    if (inside && runs < max_runs) {
+        starts[runs] = start;
+        ends[runs] = a->width;
+        ++runs;
+    }
+    return runs;
+}
+
+/* Entry selection splits a logical byte range into one rectangle per visual
+ * run. The text is "abc " + Hebrew + " 123" under an LTR base: the Latin prefix
+ * and the RTL run sit at opposite visual ends with the level-2 digits between
+ * them, so selecting bytes [0,10) yields two disjoint rectangles. */
+static void test_text_selection_runs(pt_app *app) {
+    pt_window *window = pt_window_create(app, "text-selection", 480, 220);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_check(entry != NULL);
+    const char *mixed = "abc " HE_BET " 123";
+    pt_widget_set_text(entry, mixed);
+    pt_widget_set_size(entry, 440.0f, 34.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_window_show(window);
+    pt_check(pt_widget_focus(entry));
+    window->caret_visible = false;
+
+    pt_canvas *plain = pt_canvas_create(480, 220, 1.0f);
+    pt_canvas *selected = pt_canvas_create(480, 220, 1.0f);
+    pt_check(plain && selected);
+    if (!plain || !selected) {
+        pt_canvas_destroy(plain);
+        pt_canvas_destroy(selected);
+        pt_window_free(window);
+        return;
+    }
+    pt_entry_set_selection(entry, 4, 4);
+    window->caret_visible = false;
+    pt_check(pt_window_paint(window, plain));
+    pt_entry_set_selection(entry, 0, 10);
+    window->caret_visible = false;
+    pt_check(pt_window_paint(window, selected));
+
+    int starts[8] = {0};
+    int ends[8] = {0};
+    int y = (int)lroundf(entry->y + entry->padding_top + 4.0f);
+    int runs = row_diff_runs(plain, selected, y, starts, ends, 8);
+    pt_check(runs == 2);
+
+    pt_layout_ctx ctx = pt_layout_context_for(entry);
+    pt_font *font = pt_widget_font_for(entry, &ctx);
+    pt_text_visual_map *map = NULL;
+    pt_bidi_base base = pt_widget_text_base(entry, mixed, strlen(mixed));
+    pt_check(font && pt_text_visual_map_build_bidi(font, mixed, strlen(mixed), base, &map));
+    if (map && runs == 2) {
+        float origin = entry->x + entry->padding_left;
+        float latin_start = pt_text_visual_map_x_for_position(map, 0, pt_text_bias_leading);
+        float latin_end = pt_text_visual_map_x_for_position(map, 4, pt_text_bias_trailing);
+        float rtl_start = pt_text_visual_map_x_for_position(map, 4, pt_text_bias_leading);
+        float rtl_end = pt_text_visual_map_x_for_position(map, 10, pt_text_bias_trailing);
+        pt_check_near((float)starts[0], origin + latin_start, 2.0f);
+        pt_check_near((float)ends[0], origin + latin_end, 2.0f);
+        pt_check(rtl_start > rtl_end);
+        pt_check_near((float)starts[1], origin + rtl_end, 3.0f);
+        pt_check_near((float)ends[1], origin + rtl_start, 3.0f);
+        pt_check(starts[1] > ends[0] + 5);
+    }
+    pt_text_visual_map_free(map);
+
+    /* Dragging from the visual left to the Hebrew run reports a logical range
+     * that spans both runs, keeping the multi-rectangle selection. */
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_pointer_button(window, 0x110u, true, entry->x + entry->padding_left + 1.0f,
+                                   entry->y + entry->height * 0.5f, 1, 10);
+    pt_window_input_pointer_motion(window, entry->x + entry->padding_left + 66.0f,
+                                   entry->y + entry->height * 0.5f, 15);
+    pt_window_input_pointer_button(window, 0x110u, false,
+                                   entry->x + entry->padding_left + 66.0f,
+                                   entry->y + entry->height * 0.5f, 2, 20);
+    uint32_t start = 99;
+    uint32_t end = 0;
+    pt_check(pt_entry_get_selection(entry, &start, &end));
+    pt_check(start == 0);
+    pt_check(end >= 6);
+
+    /* Double-click inside the Hebrew run selects that word and paints one
+     * rectangle at the RTL run's visual position. */
+    pt_entry_set_selection(entry, 0, 0);
+    window->caret_visible = false;
+    pt_check(pt_window_paint(window, plain));
+    pt_widget_pointer_multi_click(entry, entry->x + entry->padding_left + 70.0f,
+                                  entry->y + entry->height * 0.5f, 2);
+    pt_check(pt_entry_get_selection(entry, &start, &end));
+    pt_check(start == 4 && end == 10);
+    window->caret_visible = false;
+    pt_check(pt_window_paint(window, selected));
+    runs = row_diff_runs(plain, selected, y, starts, ends, 8);
+    pt_check(runs == 1);
+    if (runs == 1) {
+        pt_check(starts[0] > (int)(entry->x + entry->padding_left + 30.0f));
+    }
+
+    pt_canvas_destroy(plain);
+    pt_canvas_destroy(selected);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.selection");
@@ -683,6 +823,7 @@ int main(void) {
         test_list_model(window, &canvas);
         test_table_model(window, &canvas);
         test_tree_model(window, &canvas);
+        test_text_selection_runs(app);
         pt_canvas_destroy(canvas);
         pt_window_free(window);
     }

@@ -1102,11 +1102,98 @@ static void test_primary_wire(void) {
     fake_compositor_stop(&fc);
 }
 
+/* Keyboard wire path: keysym mapping from the compositor keymap drives the
+ * visual caret. The RTL paragraph uses an xkb keycode sequence, not a direct
+ * keysym call, and Shift+Right keeps the logical anchor. */
+static void test_wire_rtl_editing(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n", fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.wire.rtl-editing");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_window *window = wire_open_window(&fc, app, "rtl-editing-wire", 480, 220);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_widget *entry = pt_entry_create(pt_window_root(window), "");
+    pt_check(entry != NULL);
+    pt_widget_set_text(entry, "\xD7\x90\xD7\x91\xD7\x92 abc \xD7\x93\xD7\x94\xD7\x95");
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_size(entry, 440.0f, 34.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_check(pt_widget_focus(entry));
+    pt_canvas *canvas = wire_paint(window, 480, 220);
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+    fake_compositor_keyboard_enter(&fc, 9100u, surface);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(window->focused == entry);
+
+    /* KEY_END (107 + 8) is the visual right edge: logical byte 0. */
+    uint32_t serial = 9101u;
+    fake_compositor_keyboard_key(&fc, serial++, 30u, 107u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 31u, 107u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->cursor == 0);
+
+    /* Right at the visual right edge stays; KEY_HOME (evdev 102) is the
+     * visual left, the logical end of the RTL paragraph. */
+    fake_compositor_keyboard_key(&fc, serial++, 32u, 106u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 33u, 106u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->cursor == 0);
+    fake_compositor_keyboard_key(&fc, serial++, 34u, 102u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 35u, 102u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->cursor == 17);
+
+    /* KEY_RIGHT walks the RTL run backwards while x grows. */
+    fake_compositor_keyboard_key(&fc, serial++, 36u, 106u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 37u, 106u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->cursor == 15);
+    fake_compositor_keyboard_key(&fc, serial++, 40u, 106u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 41u, 106u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->cursor == 13);
+    fake_compositor_keyboard_key(&fc, serial++, 42u, 102u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 43u, 102u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->cursor == 17);
+
+    /* Shift+Right: the anchor stays at the visual left while the caret moves
+     * visually right, so the logical range is [15,17). */
+    fake_compositor_keyboard_modifiers(&fc, serial++, 1u, 0u, 0u, 0u);
+    fake_compositor_keyboard_key(&fc, serial++, 38u, 106u, true);
+    fake_compositor_keyboard_key(&fc, serial++, 39u, 106u, false);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check(entry->selection_anchor == 17);
+    pt_check(entry->cursor == 15);
+    fake_compositor_keyboard_modifiers(&fc, serial++, 0u, 0u, 0u, 0u);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
     test_facility_tables();
     test_touch_wire();
     test_tablet_wire();
     test_dnd_wire();
     test_primary_wire();
+    test_wire_rtl_editing();
     return pt_test_finish("wire_input");
 }

@@ -440,6 +440,114 @@ static void test_rtl_layout(pt_app *app) {
     pt_window_free(window);
 }
 
+/* W3 x W5a interaction: an RTL shell (inherited UI direction) with a wrapped
+ * RTL paragraph edits through the visual map, and the caret box follows the
+ * line and the visual edge on the wrapped lines. */
+static void test_rtl_editing(pt_app *app) {
+    pt_window *window = pt_window_create(app, "rtl-editing", 420, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 12.0f, 12.0f, 12.0f, 12.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 220.0f, 180.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    const char *wrapped =
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E \xD7\xA0\xD7\xA1\xD7\xA2 "
+        "\xD7\xA3\xD7\xA4\xD7\xA5 \xD7\xA6\xD7\xA7\xD7\xA8 "
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E";
+    pt_widget_set_text(area, wrapped);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(420, 300, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.line_count >= 2);
+    pt_text_layout_free(&layout);
+
+    size_t line0_end = 0;
+    int line_h = 0;
+    pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout);
+    if (layout.line_count > 0) {
+        line0_end = layout.lines[0].end;
+        line_h = (int)lroundf(layout.line_height);
+    }
+    pt_text_layout_free(&layout);
+    pt_check(line0_end > 0 && line_h > 6);
+
+    /* Within the first line, End is the visual right (logical byte 0) and Home
+     * is the visual left (that line's logical end). */
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == 0);
+    int end_x = 0;
+    int end_y = 0;
+    pt_widget_ime_rect(area, &end_x, &end_y, NULL, NULL);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == line0_end);
+    int home_x = 0;
+    int home_y = 0;
+    pt_widget_ime_rect(area, &home_x, &home_y, NULL, NULL);
+    pt_check(home_x < end_x);
+    pt_check(home_y == end_y);
+
+    /* Right from the visual left of the RTL line walks the run while x
+     * grows and the logical offset falls by one cluster. */
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor < line0_end && area->cursor + 4 >= line0_end);
+    int next_x = 0;
+    pt_widget_ime_rect(area, &next_x, NULL, NULL, NULL);
+    pt_check(next_x > home_x);
+
+    /* Vertical motion keeps a visual goal x and reports a caret on the
+     * adjacent wrapped line. */
+    pt_text_area_set_selection(area, 4, 4);
+    int top_y = 0;
+    int top_x = 0;
+    pt_widget_ime_rect(area, &top_x, &top_y, NULL, NULL);
+    pt_window_input_key(window, XKB_KEY_Down, 0, NULL, true);
+    int down_x = 0;
+    int down_y = 0;
+    pt_widget_ime_rect(area, &down_x, &down_y, NULL, NULL);
+    pt_check(down_x <= top_x);
+    pt_check(down_y >= top_y);
+    pt_window_input_key(window, XKB_KEY_Up, 0, NULL, true);
+    int up_x = 0;
+    int up_y = 0;
+    pt_widget_ime_rect(area, &up_x, &up_y, NULL, NULL);
+    pt_check(up_y <= down_y);
+    pt_check(up_x >= down_x);
+    pt_check(area->caret_goal_x >= 0.0f);
+
+    /* Shift+Left extends a logical range from the fixed visual-right anchor
+     * even though the caret moves to the visual left (the logical successor). */
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_window_input_key(window, XKB_KEY_Left, 1u, NULL, true);
+    pt_check(area->selection_anchor == 0);
+    size_t caret_after_shift = area->cursor;
+    pt_check(caret_after_shift > 0);
+    uint32_t sel_start = 99;
+    uint32_t sel_end = 0;
+    pt_check(pt_text_area_get_selection(area, &sel_start, &sel_end));
+    pt_check(sel_start == 0 && sel_end == caret_after_shift);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.textarea");
@@ -463,6 +571,7 @@ int main(void) {
     test_scrolling(window, area, canvas);
     test_grow_to_content(window, canvas);
     test_rtl_layout(app);
+    test_rtl_editing(app);
 
     pt_canvas_destroy(canvas);
     pt_window_free(window);
