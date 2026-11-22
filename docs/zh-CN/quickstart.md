@@ -433,14 +433,17 @@ Alt+Down/Alt+Up 打开列表，Enter 提交，Escape 恢复已提交值，空查
 Delete 清除。日期字段解析所选图式（始终接受 ISO），弹出层是固定的六周日历。
 数字字段会钳制到其范围，并以 `.` 作为提交的小数分隔符。颜色字段接受
 `#RRGGBB` 和 `#RRGGBBAA`，调色板以 24 种常用颜色开始。无障碍值分别是
-选中索引、`YYYYMMDD`、数字或归一化 RGB。
+选中索引、`YYYYMMDD`、数字或归一化 RGB。数字选择器报告步进按钮角色
+（`pt_a11y_role_spin_button`），没有展开状态；而三个带弹出层的选择器在关闭时
+是组合框，在打开时是列表框。
 
 ## 媒体、图标与持久化
 
 ### 图标图像
 
-`pt_icon_image` 是引用计数的栅格图像，可从 PNG 文件、内存或 hicolor 主题名
-加载。控件会持有自己的引用，因此加载句柄可以立即释放。
+`pt_icon_image` 是引用计数的栅格图像，可从 PNG 或 SVG 文件、内存或 hicolor
+主题名加载。控件会持有自己的引用，因此加载句柄可以立即释放。加载器嗅探内容：
+`<svg` 或 `<?xml` 前缀选择 SVG 路径，其余字节流仍走 PNG。
 
 ```c
 pt_icon_image *image = pt_icon_image_from_name("document-open", 18);
@@ -453,8 +456,31 @@ if (image) {
 }
 ```
 
+同一槽位也接受 SVG 源；当主题只提供矢量图标时，hicolor 查找优先使用
+`scalable/*.svg`：
+
+```c
+const char *mark = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+                   "<path d=\"M4 12l6 6 10-12\" fill=\"none\" stroke=\"#fff\" "
+                   "stroke-width=\"2\"/></svg>";
+pt_icon_image *vector = pt_icon_image_load_memory(mark, strlen(mark), 24);
+if (vector) {
+    pt_widget *done = pt_icon_button_create(card, pt_icon_none, "Done");
+    pt_button_set_icon_image(done, vector);
+    pt_icon_image_destroy(vector);
+}
+```
+
+SVG 支持包括路径（含弧）、基本形状、组、变换、带宽度/端点/连接/虚线的
+填充和描边、不透明度、填充规则、线性/径向渐变、`defs`、内联 `style`
+和简单 class 规则。不支持文本、图像、滤镜、遮罩、`clipPath`、
+`use`/`symbol`、标记、动画以及完整 CSS 级联：解析器会忽略该元素，但仍会访问
+其后代。没有可绘制形状的文档会通过 `pt_get_last_error` 报告并被拒绝。
+光栅化保留固有宽高比并在请求的像素框中居中；结果进入与 PNG 相同的按尺寸和
+缩放缓存。
+
 窗口图标通过 `xdg-toplevel-icon-v1` 尽力而为；没有该全局的合成器会忽略它，
-且不记录错误。SVG 源不属于 1.2。
+且不记录错误。
 
 ### 剪贴板图像与 URI 列表
 
@@ -665,6 +691,9 @@ static void on_ime_preedit(pt_window *window, const char *text, int32_t begin,
 pt_window_set_ime_callbacks(window, on_ime_commit, on_ime_preedit, state);
 pt_window_set_ime_enabled(window, true);
 pt_window_set_ime_cursor_rect(window, caret_x, caret_y, 1, 18);
+
+pt_window_show_input_panel(window);  /* ask for an on-screen keyboard */
+pt_window_hide_input_panel(window);  /* withdraw the request */
 ```
 
 Pt 不会替你插入文本：提交回调负责插入，预编辑回调替换当前组合内容。光标
@@ -674,6 +703,14 @@ Pt 不会替你插入文本：提交回调负责插入，预编辑回调替换�
 增量确认，这正是避免 KWin/fcitx5 和 sway 焦点失步丢提交的手段。调用
 `pt_window_set_ime_enabled(window, false)` 可再次关闭自定义路径；之后输入框
 获得焦点时会自行启用文本输入。
+
+`pt_window_show_input_panel` 和 `pt_window_hide_input_panel` 为窗口的活跃
+text-input 表面转发 text-input-v3 v2 请求，并在记录的期望状态改变时返回 true。
+它们只是提示：合成器决定是否显示面板，Pt 无法观察结果。当窗口没有活跃的
+text-input 对象、合成器仅支持 v1 或窗口处于无头模式时，请求不会立即发送；
+期望状态会被记住，并在 IME 下次激活时（包括焦点变化之后）转发一次。协议将
+与当前状态相同的重复请求视为无害，因此重放没有副作用。对 NULL 窗口调用任一
+函数返回 false。
 
 ## 主选区
 
