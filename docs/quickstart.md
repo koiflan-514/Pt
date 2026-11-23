@@ -212,11 +212,64 @@ visually adjacent cluster boundary (which can raise or lower the logical byte
 offset inside an RTL run), Home/End go to the visual line ends, Shift keeps a
 logical anchor, and Backspace/Delete stay logical. The caret rectangle sent to
 the IME and to accessibility is visual. A `pt_table` and a `pt_tree` keep their
-columns in logical order and mirror only the horizontal start edge; padding and
-margin stay physical. To request logical arrow movement, intercept the key in
+columns in logical order and mirror only the horizontal start edge. To request
+logical arrow movement, set the caret policy below or intercept the key in
 `pt_window_set_key_callback` and consume it. The complete direction model, the
 conformance numbers and the known limits are in the
 [RTL and bidi guide](rtl.md).
+
+### Caret policy, locale and logical padding (2.1)
+
+Three 2.1 features make the common RTL applications shorter without changing
+any default:
+
+```c
+/* Logical caret movement for a source editor, visual everywhere else. */
+pt_widget_set_caret_movement(editor, pt_caret_movement_logical);
+
+/* A locale hint selects the default shell direction; an explicit setter wins. */
+pt_app_set_locale(app, "he_IL.UTF-8");          /* app fallback becomes RTL */
+pt_ui_direction guess = pt_locale_ui_direction("az-Arab"); /* rtl: script wins */
+
+/* Padding that follows the resolved UI direction: start is the right edge in
+ * RTL and the left edge in LTR, and it re-resolves when the direction changes. */
+pt_widget_set_padding_logical(card, 12.0f, 24.0f, 12.0f, 8.0f);
+```
+
+The caret policy resolves widget → nearest explicit ancestor → window → app →
+visual, so `pt_caret_movement_inherit` (zero) is the 2.0 behavior. Logical mode
+changes Left/Right and Home/End only; vertical movement, Shift, Backspace and
+Delete keep their 2.0 rules. `pt_locale_ui_direction` is a bounded,
+ICU-free lookup of a BCP-47 or POSIX locale that never reads the environment:
+the script subtag wins (`az-Arab` is RTL, `az-Latn` is LTR), and NULL, empty,
+`C` and `POSIX` are LTR. `pt_widget_set_padding_logical` takes
+top/start/bottom/end, `pt_widget_set_padding` stays physical and the last call
+wins, and margin stays physical.
+
+### Sanitizing untrusted text (2.1)
+
+Bidi control characters can reorder what a reader sees without changing the
+bytes — the Trojan-Source trick. Nothing is sanitized automatically, so an
+application that accepts untrusted text decides:
+
+```c
+/* Count first: byte-exact, allocation-free, capacity-truncating. */
+size_t count = pt_bidi_control_inventory(untrusted, untrusted_length, NULL, 0);
+
+/* Then mitigate: strip, or neutralize each control to a visible U+FFFD. */
+size_t clean_length = 0;
+char *clean = pt_bidi_sanitize(untrusted, untrusted_length,
+                               pt_bidi_sanitize_neutralize, &clean_length);
+if (clean) {
+    pt_widget_set_text(preview, clean);   /* shown length is clean_length */
+    pt_free(clean);
+}
+```
+
+`pt_bidi_control_inventory` reports the nine explicit controls
+(U+202A–U+202E, U+2066–U+2069) with byte offsets, lengths and kinds;
+`pt_bidi_sanitize` returns a caller-owned buffer (worst case `3n+1` bytes). The
+declarations live in `pt/bidi.h`, which `pt/pt.h` includes.
 
 ## Widgets and callbacks
 

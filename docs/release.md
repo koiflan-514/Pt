@@ -1158,6 +1158,130 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
+## 2.1.0 validation record (2026-11-23, draft — final gate run pending)
+
+Status: **draft**. This section records the scope and the additive contract of
+2.1.0 while the release tree is still being landed. Every figure below comes
+from the W1–W4 wave trees and is reproducible there; each row marked
+`pending final gate run` is filled in by W5 on the frozen 2.1.0 tree, in the
+same shape as the 2.0.0 record above it. The annotated `2.1.0` tag is created
+and pushed by the owner after that run, as in 2.0.
+
+### Scope
+
+2.1.0 is the RTL ergonomics and safety release. It closes the four gaps that
+2.0 documented as deliberate limitations (`rtl.md`, "Editing", "Direction
+model" and "Known limitations") and is **purely additive**: it adds **12 public
+functions, 3 enums (15 values) and 1 public struct**, and the baseline becomes
+**576 functions / 952 entries** (576 `func`, 303 `enum`, 43 `callback`, 11
+`struct`, 12 `opaque`, 6 `define`, 1 `type`), with 0 removed and 0 changed
+against 2.0.0. SONAME stays `libpt.so.1`; `ABI_MAJOR` stays `1`.
+
+| Feature | Functions | Enums (values) | Structs |
+| --- | --- | --- | --- |
+| Caret movement policy (app/window/widget) | 6 | 1 (3) | 0 |
+| Locale helper | 3 | 0 | 0 |
+| Bidi control inventory and sanitizer | 2 | 2 (12) | 1 |
+| Logical start/end padding | 1 | 0 | 0 |
+| **Total** | **12** | **3 (15)** | **1** |
+
+- **Caret movement policy.** `pt_caret_movement` (`inherit=0`/`visual=1`/
+  `logical=2`) with app, window and widget setters/getters. Resolution is
+  widget → nearest explicit ancestor → window → application → visual; the
+  default is visual, which is the 2.0 behavior. In logical mode Left/Right move
+  by UTF-8 character boundary in the stored string and Home/End go to the
+  logical line ends; vertical movement, Shift selection, Backspace/Delete and
+  the IME caret rectangle are unchanged in both modes. A change does not
+  invalidate layout or repaint; it affects the next key event.
+- **Locale helper.** `pt_locale_ui_direction(const char *locale)` is a bounded,
+  ICU-free, thread-safe BCP-47/POSIX language-and-script lookup; the resolution
+  chain becomes widget → ancestor → window → app explicit → app locale hint →
+  LTR, so `pt_app_set_locale`/`pt_app_get_locale` never override an explicit
+  application direction, in either call order. No environment variable is read
+  and an unset locale resolves to LTR.
+- **Bidi control inventory and sanitization.** The new `include/pt/bidi.h`
+  adds `pt_bidi_control_inventory` (nine explicit controls U+202A–U+202E and
+  U+2066–U+2069, byte-exact decoding, allocation-free, capacity-truncating but
+  count-preserving), `pt_bidi_sanitize` (strip or neutralize to U+FFFD,
+  caller-owned `pt_free` buffer, worst case `3n+1` bytes),
+  `pt_bidi_control_span` and the two enums. Both are opt-in: no text setter,
+  entry, text area, clipboard, drag or accessibility path calls them, so stored
+  bytes and offsets never move. The public inventory is narrower than the
+  internal `pt_bidi_is_removed` X9 paint predicate.
+- **Logical start/end padding.** `pt_widget_set_padding_logical(top, start,
+  bottom, end)` stores the logical edges and a layout/measure prepass resolves
+  them from the widget's UI direction on every layout and measure. Physical
+  `pt_widget_set_padding` stays and the last call wins; margins stay physical;
+  a widget that never calls the setter lays out exactly as in 2.0.
+- **Examples.** `examples/c/ergonomics_gallery.c`,
+  `examples/cpp/ergonomics.cpp`, `examples/python/ergonomics.py` and
+  `examples/java/Ergonomics.java`, each wired to a `run-*` target at the end of
+  the Makefile.
+
+### Behaviour changes
+
+None by default. These are the points an upgrading application must read:
+
+- **Every new default is the 2.0 behavior.** `pt_caret_movement_inherit`
+  resolves to visual, an unset locale resolves to LTR, no path sanitizes text,
+  and `padding_logical` is false. A zero-initialized application produces the
+  2.0 pixels, caret movement, padding and stored bytes.
+- **No existing declaration, enum value, struct layout or offset unit moved.**
+  The public byte-offset and AT-SPI character-offset contracts are unchanged.
+- **The 2.0 window key callback is no longer the only logical-key answer.** It
+  still runs before the focused widget and still wins; the caret policy is the
+  declarative alternative for applications that only want logical arrows.
+- **The locale hint only selects a default direction.** It does not localize
+  text, dates, numbers, pickers or the colour field; those stay explicit.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pending final gate run (W5 sets `VERSION` and the `pt_version_*` macros to 2.1.0; SONAME stays `libpt.so.1` through `ABI_MAJOR := 1`) |
+| API baseline | pass on the W3 tree: `api/pt.api` reads 576 functions / 952 entries; W4 re-runs `tools/gen-api-reference.py --check` |
+| Since audit | pending final gate run: 12 declarations carry `Since 2.1.`; the tree-wide count is recorded with the final gate |
+| Binding parity | pass on the W3 tree: 576/576 (C++, Python and Java), 0 missing, 0 allowlisted |
+| Unicode conformance | unchanged: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| LTR byte stability | pass on the W3 tree: 2.0 snapshots byte-identical and `tools/ltr-compat.sh 1.4.0 HEAD` at 11/11 `SAME` (W3 ran the cross-version gate; W5 re-runs it) |
+| `make check` / `make check-bindings` | pending final gate run (W1–W3 each ran `make check` and `make check-bindings` green with the new suites) |
+| `make perf-check` | pending final gate run (W3 ran the layout-sensitive profiles) |
+| Sanitizers, staged install, reproducible tarball | pending final gate run (`tools/ci.sh` stages) |
+| Four live suites | pending final gate run (`check-wayland`, `check-typing`, `check-ime-live`, `check-rtl-live`) |
+| Bilingual documentation | pass on W4: 9 public guides with byte-identical code blocks, including the rewritten `rtl.md` pair |
+| Examples | pass on W4: C/C++/Python/Java 2.1 examples build under `werror=1`, exit 0 with `PT_HEADLESS=1` and exit 124 under the nested niri smoke timeout |
+| ABI diff against 2.0.0 | pending final gate run: expected symbol-level 564 → 576 with 0 removed, 0 changed and 12 added, no `SB_*` export, SONAME `libpt.so.1` on both |
+| `tools/release-check.sh --full` | pending final gate run |
+
+### ABI statement
+
+2.1.0 adds twelve declarations, three enums, one struct and no removal or
+signature change. The release minor is not an ABI change: `ABI_MAJOR := 1`
+keeps SONAME `libpt.so.1`, and the new struct `pt_bidi_control_span` is a new
+public struct rather than an extension of an existing one, so no existing
+layout moves. `readelf -d` on the 2.0.0 and 2.1.0 libraries reports the same
+SONAME; the final symbol diff is recorded above with the gate run.
+
+### Known issues
+
+- **Carried from 2.0 and unchanged:** table horizontal scrolling needs the
+  scrollbar or keyboard on the tested Wayland compositors; Shift+arrow across
+  a soft wrap in RTL stays an in-line visual move; a multi-line mapped
+  selection collapses toward its logical edge at the mapped boundary while the
+  painted rectangles stay correct; `pt_text_span` has no direction field and
+  stays frozen; missing Arabic/Hebrew glyphs are fallback/tofu reported by
+  `pt_app_font_uncovered_count`.
+- **Sanitization is opt-in.** `pt_bidi_sanitize` and
+  `pt_bidi_control_inventory` are the toolkit, not a policy: an application
+  that accepts untrusted text still has to call one of them before display,
+  logging or storage.
+- **The locale table is small and CLDR-derived on purpose.** A language or
+  script that is missing resolves to LTR; the table can grow in a future minor
+  without an ABI change.
+- **Registered for W5, no correctness impact:** unsetting the locale when the
+  application direction is inherited can mark one extra repaint, and
+  `src/bidi.c` is missing a trailing newline.
+
 ## 2.0.0 validation record (2026-11-23, final — published)
 
 Environment: the final gate tree `91176c2` on `m22/integration` on the

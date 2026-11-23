@@ -36,8 +36,8 @@ application code (C / C++ / Python / Java)
 `void *user_data`，颜色是打包整数。这使 ctypes 和 Java Foreign Function &
 Memory API 绑定保持小巧。库以 `-fvisibility=hidden` 构建；只有标记为
 `pt_api` 的函数会被导出（冻结的 1.0 ABI 为 412 个，1.1 为 448 个，
-1.2 为 554 个，1.3 和 1.4 为 556 个，2.0 为 564 个；后续版本向同一 SONAME
-追加，除非删除或更改声明）。内部头文件位于 `src/`，不会被安装。
+1.2 为 554 个，1.3 和 1.4 为 556 个，2.0 为 564 个，2.1 为 576 个；后续版本
+向同一 SONAME 追加，除非删除或更改声明）。内部头文件位于 `src/`，不会被安装。
 
 ## 设计决策
 
@@ -109,7 +109,10 @@ UTF-8 入口存在 L1 行末空白缺陷。`PROVENANCE.md` 记录标签、摘要
 方向属性在 `src/widget.c` 中解析：UI 方向为控件的显式值、最近显式祖先、窗口、
 应用，最后是 LTR；文本方向为控件的显式值、最近祖先，然后是自动。自动按段落
 使用 UBA P2/P3，跳过隔离区内的字符，并对仅含中性字符或空的段落回退到解析后的
-UI 方向。`inherit` 和 `auto` 都是零值，因此 1.x 路径无需迁移。
+UI 方向。`inherit` 和 `auto` 都是零值，因此 1.x 路径无需迁移。自 2.1 起，应用
+这一步本身分为两级——显式的 `pt_app_set_ui_direction` 值和由
+`pt_locale_ui_direction` 推导的区域设置提示——因此显式 setter 无论调用顺序如何
+都优先，而提示是存储的回退值，不是环境读取。
 
 对每个段落，管线解析层级，应用规则 X9（双向控制字符保留在字符串和整形输入中，
 但绘制时跳过），重排序文本段，在层级/文字系统/字体边界处拆分，并使用显式的
@@ -127,6 +130,45 @@ LTR 快速路径是数据驱动的：`pt_bidi_text_may_reorder` 使用引擎的�
 层级为键，因此相同字节按 LTR 和 RTL 整形是独立且有界的条目。每次重建的分析为
 O(n)，文本段和映射分配受行长度限制，并随文本布局释放；2.0 不声称逐帧分配自由，
 因为 1.4 本就每次绘制都重建行布局。
+
+### 插入符号策略与区域设置（2.1）
+
+插入符号移动是按方向同样方式解析的策略：
+`pt_widget_resolved_caret_movement` 依次走控件 → 最近显式祖先 → 窗口 → 应用 →
+视觉，`src/widget.c` 的编辑分支（`entry_horizontal`、`entry_line_edge`、
+`text_area_horizontal`、`text_area_line_edge`）只有在解析后的策略为
+`pt_caret_movement_logical` 时才走逻辑分支。逻辑分支对存储文本（绝不是密码圆点）
+使用 UTF-8 边界辅助函数以及行的逻辑起始/结束；纵向移动、选择、Backspace/Delete
+和输入法矩形路径由两种模式共享，因此该策略不会让它们回归。策略变更不触碰布局和
+绘制：它只影响下一次按键事件。
+
+`pt_locale_ui_direction` 是与方向枚举相邻的纯代码（位于 `src/app.c`）：它统一
+ASCII 大小写，在代码集和修饰符后缀处停止，并最多把 64 字节的语言和脚本子标签与一
+张小表匹配。`pt_app_set_locale` 复制字符串并一次性推导回退值，不依赖 ICU、没有
+区域设置数据库、不调用 `setlocale`；上面的解析链只读取存储的字节。
+
+### 双向控制字符安全（2.1）
+
+`include/pt/bidi.h` 是公共安全表面，在 `src/bidi.c` 中与引擎适配层并列实现。
+`pt_bidi_control_inventory` 逐字节精确扫描九个显式控制符（`E2 80 AA`–`E2 80 AE`
+和 `E2 81 A6`–`E2 81 A9`），不分配内存并始终返回总数，因此仅计数的调用可用于确定
+调用方缓冲大小。`pt_bidi_sanitize` 做一次有界分配（最坏情况 `3 * length + 1`），
+原样复制每个非控制符字节，返回可用 `pt_free` 释放的缓冲。两者从构造上就是可选的：
+没有任何 setter、输入框、文本区域、剪贴板、拖动或无障碍路径调用它们，因此存储
+字节和逻辑/视觉映射绝不移动。公共清单按设计比内部 `pt_bidi_is_removed` 的 X9
+谓词范围更窄，后者保持其针对整形和绘制的“显式控制符加 BN”含义。
+
+### 逻辑内边距（2.1）
+
+`pt_widget_set_padding_logical` 存储 `top/start/bottom/end` 和
+`padding_logical` 标志；`pt_widget_set_padding` 保持物理语义并清除该标志
+（last-call-wins）。`src/layout.c` 在 `pt_widget_layout`、
+`pt_widget_layout_child`、`pt_widget_measure` 和 `pt_widget_measure_child`
+的入口运行一个有副作用边界的前置过程 `pt_widget_resolve_logical_padding`：它计算
+每个控件解析后的 UI 方向，按 start/end 写入 `padding_left` 和 `padding_right`，
+不分配内存，对于没有逻辑内边距的子树立即返回。因此测量与布局报告相同几何，方向
+变化在下一次过程中重新解析，而每个现有布局调用点继续读取物理字段。外边距没有逻辑
+写法。
 
 ### 多行编辑
 

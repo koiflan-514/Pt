@@ -202,9 +202,58 @@ P2/P3，因此希伯来语句子和英文句子可以共享一个文本区域，
 （在 RTL 文本段内可能增大或减小逻辑字节偏移），Home/End 前往视觉行末，
 Shift 保持逻辑锚点，Backspace/Delete 保持逻辑语义。发送给输入法和无障碍的
 插入符号矩形是视觉的。`pt_table` 和 `pt_tree` 的列保持逻辑顺序，仅镜像水平
-起始边缘；内边距和外边距保持物理方向。如需逻辑方向键移动，在
+起始边缘。如需逻辑方向键移动，可设置下方的插入符号策略，或在
 `pt_window_set_key_callback` 中拦截并消费按键。完整方向模型、一致性数字和
 已知限制见 [RTL 与双向文本指南](rtl.md)。
+
+### 插入符号策略、区域设置与逻辑内边距（2.1）
+
+三个 2.1 特性让常见 RTL 应用更短，同时不改变任何默认值：
+
+```c
+/* Logical caret movement for a source editor, visual everywhere else. */
+pt_widget_set_caret_movement(editor, pt_caret_movement_logical);
+
+/* A locale hint selects the default shell direction; an explicit setter wins. */
+pt_app_set_locale(app, "he_IL.UTF-8");          /* app fallback becomes RTL */
+pt_ui_direction guess = pt_locale_ui_direction("az-Arab"); /* rtl: script wins */
+
+/* Padding that follows the resolved UI direction: start is the right edge in
+ * RTL and the left edge in LTR, and it re-resolves when the direction changes. */
+pt_widget_set_padding_logical(card, 12.0f, 24.0f, 12.0f, 8.0f);
+```
+
+插入符号策略的解析顺序为控件 → 最近显式祖先 → 窗口 → 应用 → 视觉，因此
+`pt_caret_movement_inherit`（零值）就是 2.0 行为。逻辑模式只改变左/右方向键和
+Home/End；纵向移动、Shift、Backspace 和 Delete 保持 2.0 规则。
+`pt_locale_ui_direction` 是对 BCP-47 或 POSIX 区域设置的有界、不依赖 ICU 的
+查找，从不读取环境：脚本子标签优先（`az-Arab` 为 RTL，`az-Latn` 为 LTR），
+且 NULL、空字符串、`C` 和 `POSIX` 都是 LTR。`pt_widget_set_padding_logical`
+接收 top/start/bottom/end，`pt_widget_set_padding` 保持物理语义且
+last-call-wins，外边距保持物理。
+
+### 清理不可信文本（2.1）
+
+双向控制字符可以在不改变字节的情况下重排读者看到的内容——即 Trojan Source
+手法。没有任何内容会被自动清理，因此接受不可信文本的应用自行决策：
+
+```c
+/* Count first: byte-exact, allocation-free, capacity-truncating. */
+size_t count = pt_bidi_control_inventory(untrusted, untrusted_length, NULL, 0);
+
+/* Then mitigate: strip, or neutralize each control to a visible U+FFFD. */
+size_t clean_length = 0;
+char *clean = pt_bidi_sanitize(untrusted, untrusted_length,
+                               pt_bidi_sanitize_neutralize, &clean_length);
+if (clean) {
+    pt_widget_set_text(preview, clean);   /* shown length is clean_length */
+    pt_free(clean);
+}
+```
+
+`pt_bidi_control_inventory` 报告九个显式控制符（U+202A–U+202E、U+2066–U+2069）
+的字节偏移、长度和类别；`pt_bidi_sanitize` 返回调用方拥有的缓冲（最坏情况
+`3n+1` 字节）。声明位于 `pt/bidi.h`，由 `pt/pt.h` 包含。
 
 ## 控件与回调
 

@@ -344,7 +344,7 @@ minimum contract is:
   accessibility bus; `tools/release-check.sh` reports the bridge as a live
   check rather than as part of `make check`.
 
-## Limitations in 2.0
+## Limitations in 2.1
 
 - The bridge is opt-in and requires a build with `dbus-1`. Without a reachable
   accessibility bus, `pt_app_enable_a11y` returns `false` and the app runs
@@ -363,6 +363,17 @@ minimum contract is:
   caret and hit testing. The bridge publishes the object `direction` attribute
   and the `GetAttributes`/`GetDefaultAttributes` direction entry; password
   entries report direction without text. See [rtl.md](rtl.md).
+- The 2.1 additions leave assistive technology unchanged by default. The caret
+  policy only changes which logical offset Left/Right and Home/End land on, and
+  the reported caret rectangle stays the visual rectangle at the logical caret,
+  so a screen reader never sees a different offset unit or order. A locale hint
+  changes the resolved UI direction — and therefore the published `direction`
+  attribute — only when no explicit application direction is set, and it never
+  changes a role, name or state. Sanitization is the application's step: the
+  bridge reports the stored bytes, so untrusted text should be sanitized before
+  `pt_widget_set_text` if a reader must not be reordered by it. Logical
+  start/end padding is geometry only and changes no exposed value. See
+  [rtl.md](rtl.md) and [quickstart.md](quickstart.md).
 - The bridge publishes `TableCell` for body cells, not for header cells.
   Header cells appear through `Table` header queries and the `column_header`
   role, not as `TableCell` implementations.

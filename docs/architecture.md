@@ -39,8 +39,8 @@ exposed, callbacks carry `void *user_data`, and colors are packed integers.
 This keeps ctypes and the Java Foreign Function & Memory API bindings small.
 The library is built with `-fvisibility=hidden`; only functions marked `pt_api`
 are exported (412 in the frozen 1.0 ABI, 448 in 1.1, 554 in 1.2, 556 in 1.3 and
-1.4, and 564 in 2.0; later releases append to the same SONAME unless a
-declaration is removed or changed). Internal headers live in `src/` and are not
+1.4, 564 in 2.0 and 576 in 2.1; later releases append to the same SONAME unless
+a declaration is removed or changed). Internal headers live in `src/` and are not
 installed.
 
 ## Design decisions
@@ -126,7 +126,11 @@ upstream UTF-8 entry point has an L1 line-end whitespace defect.
 The direction properties resolve in `src/widget.c`: UI direction is the
 widget's explicit value, the nearest explicit ancestor, the window, the
 application, then LTR; text direction is the widget's explicit value, the
-nearest ancestor, then auto. Auto uses UBA P2/P3 per paragraph, skipping
+nearest ancestor, then auto. Since 2.1 the application step itself has two
+levels — the explicit `pt_app_set_ui_direction` value and the locale hint
+derived by `pt_locale_ui_direction` — so an explicit setter wins regardless of
+call order, and the hint is a plain stored fallback rather than an environment
+read. Auto uses UBA P2/P3 per paragraph, skipping
 characters inside isolates, and falls back to the resolved UI direction for a
 neutral-only or empty paragraph. Both `inherit` and `auto` are zero, so the
 1.x path needs no migration.
@@ -154,6 +158,54 @@ are distinct bounded entries. Analysis is O(n) per rebuild, and the run and map
 allocations are bounded by line length and released with the text layout; 2.0
 does not claim per-frame allocation freedom, because 1.4 already rebuilt line
 layout on every paint.
+
+### Caret policy and locale (2.1)
+
+Caret movement is a policy resolved like a direction: `pt_widget_resolved_caret_movement`
+walks widget → nearest explicit ancestor → window → application → visual, and
+the editing branches in `src/widget.c` (`entry_horizontal`, `entry_line_edge`,
+`text_area_horizontal`, `text_area_line_edge`) take the logical branch only
+when the resolved policy is `pt_caret_movement_logical`. The logical branch
+uses the UTF-8 boundary helpers on the stored text (never on password bullets)
+and the line's logical start/end; the vertical, selection, Backspace/Delete and
+IME-rectangle paths are shared by both modes, which is why the policy cannot
+regress them. A policy change touches no layout and no paint: it affects the
+next key event.
+
+`pt_locale_ui_direction` is pure code next to the direction enums in
+`src/app.c`: it normalizes ASCII case, stops at codeset and modifier suffixes,
+and matches at most 64 bytes of language and script subtags against a small
+table. `pt_app_set_locale` copies the string and derives the fallback once,
+with no ICU, no locale database and no `setlocale`; the resolution chain above
+only reads the stored byte.
+
+### Bidi control safety (2.1)
+
+`include/pt/bidi.h` is the public safety surface, implemented in `src/bidi.c`
+beside the engine adapter. `pt_bidi_control_inventory` is a byte-exact scan for
+the nine explicit controls (`E2 80 AA`–`E2 80 AE` and `E2 81 A6`–`E2 81 A9`)
+that allocates nothing and always returns the total count, so a count-only call
+sizes the caller's buffer. `pt_bidi_sanitize` makes one bounded allocation
+(`3 * length + 1` worst case), copies every non-control byte unchanged and
+returns a `pt_free` buffer. Both are opt-in by construction: no setter, entry,
+text area, clipboard, drag or accessibility path calls them, so stored bytes
+and the logical/visual map never move. The public inventory is deliberately
+narrower than the internal `pt_bidi_is_removed` X9 predicate, which keeps its
+explicit-control-plus-BN meaning for shaping and painting.
+
+### Logical padding (2.1)
+
+`pt_widget_set_padding_logical` stores `top/start/bottom/end` and a
+`padding_logical` flag; `pt_widget_set_padding` stays physical and clears the
+flag (last call wins). `src/layout.c` runs a side-effect-bounded prepass
+`pt_widget_resolve_logical_padding` at the entry of `pt_widget_layout`,
+`pt_widget_layout_child`, `pt_widget_measure` and `pt_widget_measure_child`:
+it computes each widget's resolved UI direction, writes `padding_left` and
+`padding_right` from start/end, allocates nothing and returns immediately for a
+subtree with no logical padding. Measure therefore reports the same geometry as
+layout, a direction change re-resolves on the next pass, and every existing
+layout call site keeps reading the physical fields. Margin has no logical
+spelling.
 
 ### Multiline editing
 

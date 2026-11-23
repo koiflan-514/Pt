@@ -1175,6 +1175,42 @@ Python 既暴露属性也暴露链式 `set_*` 方法，因此
 
 <a id="binding-coverage"></a>
 
+## 2.1 人体工学与安全表面
+
+2.1 新增十二个函数、三个枚举和一个结构体。插入符号策略是三个层面上的普通值，
+未设置时解析为视觉，因此不设置任何内容的应用保持 2.0 的移动方式。
+`pt_locale_ui_direction` 是自由函数（无需 app），双向文本安全两件套也是自由函数，
+并在每种语言中返回拥有所有权的值。
+
+| C 函数 | C++23 | Python | Java |
+| --- | --- | --- | --- |
+| `pt_app_set_caret_movement` | `app::set_caret_movement` | `App.caret_movement =` / `set_caret_movement` | `Pt.app_set_caret_movement` |
+| `pt_app_get_caret_movement` | `app::caret_movement` | `App.caret_movement` | `Pt.app_get_caret_movement` |
+| `pt_window_set_caret_movement` | `window::set_caret_movement` | `Window.caret_movement =` / `set_caret_movement` | `Pt.window_set_caret_movement` |
+| `pt_window_get_caret_movement` | `window::caret_movement` | `Window.caret_movement` | `Pt.window_get_caret_movement` |
+| `pt_widget_set_caret_movement` | `widget::set_caret_movement` | `Widget.caret_movement =` / `set_caret_movement` | `Pt.widget_set_caret_movement` |
+| `pt_widget_get_caret_movement` | `widget::caret_movement` | `Widget.caret_movement` | `Pt.widget_get_caret_movement` |
+| `pt_locale_ui_direction` | `pt::locale_ui_direction` | `pt.locale_ui_direction` | `Pt.locale_ui_direction` |
+| `pt_app_set_locale` | `app::set_locale` | `App.locale =` / `set_locale` | `Pt.app_set_locale` |
+| `pt_app_get_locale` | `app::locale` | `App.locale` | `Pt.app_get_locale` |
+| `pt_bidi_control_inventory` | `pt::bidi_control_inventory` | `pt.bidi_control_inventory` | `Pt.bidi_control_inventory` |
+| `pt_bidi_sanitize` | `pt::bidi_sanitize` | `pt.bidi_sanitize` | `Pt.bidi_sanitize` |
+| `pt_widget_set_padding_logical` | `widget::set_padding_logical` | `Widget.set_padding_logical` | `Pt.widget_set_padding_logical` |
+
+C 枚举为 `pt_caret_movement`（`inherit`/`visual`/`logical`）、
+`pt_bidi_control_kind`（九个控制符加 `none`）和 `pt_bidi_sanitize_mode`
+（`strip`/`neutralize`）。Python 把它们暴露为模块常量
+（`pt.caret_movement_logical`、`pt.bidi_control_lro`、
+`pt.bidi_sanitize_neutralize`）；Java 使用 C 名称作为常量
+（`Pt.caret_movement_logical`、`Pt.BIDI_CONTROL_LRO`、`Pt.BIDI_SANITIZE_NEUTRALIZE`），
+并返回 `BidiControlSpan` 记录数组加 `String`。C++ 返回
+`std::vector<pt_bidi_control_span>` 和 `std::string`（`bidi_sanitize` 的第二个
+参数是 `neutralize` 标志），Python 返回 `BidiControlSpan` 结构列表和 `str`。
+
+| C 结构体 | C++23 | Python | Java |
+| --- | --- | --- | --- |
+| `pt_bidi_control_span` | `pt_bidi_control_span` | `pt.BidiControlSpan` | `Pt.BidiControlSpan` 记录 |
+
 ## 绑定覆盖范围
 
 自 1.3 起，公共 C ABI 中的每个函数都已在 C++、Python 和 Java 中封装。

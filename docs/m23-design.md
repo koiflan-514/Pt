@@ -1,9 +1,12 @@
-# M23 design proposal — 2.1.0 RTL ergonomics and safety
+# M23 design — 2.1.0 RTL ergonomics and safety (delivered)
 
-Status: **proposed**, 2026-11-23. This document is the design input for the
-M23 implementation waves. It contains no shipped API; every signature below is
-a proposal to be reviewed before W1 starts. The delivered record belongs in
-[release.md](release.md) once 2.1.0 is tagged.
+Status: **delivered (W1-W4)**, 2026-11-23; W5 landing pending. This document
+started as the design input for the M23 implementation waves and is kept as the
+record of what they built. The signatures below are the shipped C declarations
+(see `include/pt/base.h`, `app.h`, `window.h`, `widget.h` and `bidi.h`); the
+four open questions are answered in "Open questions" at the end. The release
+record is in [release.md](release.md) and the milestone plan in
+[ROADMAP.md](ROADMAP.md#m23---210-rtl-ergonomics-and-safety-delivered-w5-landing-pending).
 
 2.0 delivered the bidi engine, the direction properties and visual editing.
 M23 is a minor release that closes four ergonomic gaps that 2.0 documented as
@@ -20,22 +23,25 @@ layout, byte offset or default changes. A zero-initialized application keeps
 2.0 behavior: visual caret, no locale hint, no sanitization, physical padding.
 SONAME stays `libpt.so.1` (`ABI_MAJOR := 1`).
 
-## Baseline projection
+## Baseline
 
 The 2.0 baseline is **564 functions / 924 entries** (`func` 564, `enum` 288,
 `callback` 43, `struct` 10, `opaque` 12, `define` 6, `type` 1).
 
 | Feature | Functions | Enums (values) | Structs |
 | --- | --- | --- | --- |
-| 1. Caret movement | 4 | 1 (3) | 0 |
+| 1. Caret movement | 6 | 1 (3) | 0 |
 | 2. Locale helper | 3 | 0 | 0 |
 | 3. Bidi safety | 2 | 2 (12) | 1 |
 | 4. Logical padding | 1 | 0 | 0 |
-| **Total** | **10** | **3 (15)** | **1** |
+| **Total** | **12** | **3 (15)** | **1** |
 
-Projected baseline: **574 functions / 950 entries** — 574 `func`, 303 `enum`,
-43 `callback`, 11 `struct`, 12 `opaque`, 6 `define`, 1 `type`. All ten
-functions carry a `Since 2.1.` marker. No function is removed or changed.
+The design projected 10 functions / 574 / 950 with the caret policy at app and
+widget level only. Review added the window pair (open question 1), so the
+delivered baseline is **576 functions / 952 entries** — 576 `func`, 303 `enum`,
+43 `callback`, 11 `struct`, 12 `opaque`, 6 `define`, 1 `type`, as `api/pt.api`
+reads it. All twelve functions carry a `Since 2.1.` marker. No function is
+removed or changed.
 
 ## Feature 1 — caret movement policy
 
@@ -47,16 +53,16 @@ identifiers wants logical arrows. The only 2.0 answer is to intercept
 Left/Right/Home/End in `pt_window_set_key_callback` and reproduce the movement
 logic. That is a full editor responsibility, not a policy switch.
 
-### Proposed surface
+### Delivered surface
 
 ```c
 /* Caret movement policy (since 2.1). The zero value inherits: a widget takes
- * the nearest explicit ancestor's value, then the application's, then visual.
- * visual moves Left/Right to the visually adjacent cluster boundary and
- * Home/End to the visual line ends; logical moves Left/Right by UTF-8
- * character boundary and Home/End to the logical line ends. Vertical movement,
- * Shift selection, Backspace/Delete and the IME caret rectangle are unchanged
- * in both modes. */
+ * the nearest explicit ancestor's value, then the window's, then the
+ * application's, then visual. visual moves Left/Right to the visually adjacent
+ * cluster boundary and Home/End to the visual line ends; logical moves
+ * Left/Right by UTF-8 character boundary and Home/End to the logical line
+ * ends. Vertical movement, Shift selection, Backspace/Delete and the IME caret
+ * rectangle are unchanged in both modes. */
 typedef enum pt_caret_movement {
     pt_caret_movement_inherit = 0,
     pt_caret_movement_visual,
@@ -65,6 +71,8 @@ typedef enum pt_caret_movement {
 
 pt_api void pt_app_set_caret_movement(pt_app *app, pt_caret_movement movement);
 pt_api pt_caret_movement pt_app_get_caret_movement(const pt_app *app);
+pt_api void pt_window_set_caret_movement(pt_window *window, pt_caret_movement movement);
+pt_api pt_caret_movement pt_window_get_caret_movement(const pt_window *window);
 pt_api void pt_widget_set_caret_movement(pt_widget *widget, pt_caret_movement movement);
 pt_api pt_caret_movement pt_widget_get_caret_movement(const pt_widget *widget);
 ```
@@ -75,12 +83,12 @@ the 2.0 visual behavior. The resolved default is visual, exactly like
 
 ### Resolution and override scope
 
-The chain is **widget explicit → nearest explicit ancestor → application →
-visual**. A window-level override is deliberately not added: setting the
-policy on a window's root widget has the same effect for every widget in that
-window, and it keeps one fewer inherited level to document and test. This
-matches the direction chain minus the window step; the rationale is recorded
-here so it is not later mistaken for an omission.
+The chain is **widget explicit → nearest explicit ancestor → window →
+application → visual**, the same shape as the UI direction chain. The design
+first omitted the window level in favour of a root-widget override; review
+added it for exact symmetry with `pt_ui_direction` and so a second window can
+change policy without touching its root widget (open question 1). That is the
+two functions and one field the design priced at 576 / 952.
 
 Setters ignore NULL and out-of-range values. Getters return the stored
 explicit value (`inherit` when unset). A change does not invalidate layout and
@@ -90,9 +98,10 @@ does not repaint: it affects the next key event only.
 
 - `include/pt/base.h`: the enum.
 - `include/pt/app.h`, `include/pt/widget.h`: declarations and contract text.
-- `src/internal.h`: `uint8_t caret_movement` in `struct pt_app` and
-  `struct pt_widget`; `pt_caret_movement pt_widget_resolved_caret_movement(
-  const pt_widget *widget);`.
+- `src/internal.h`: `uint8_t caret_movement` in `struct pt_app`,
+  `struct pt_window` and `struct pt_widget`; `pt_caret_movement
+  pt_widget_resolved_caret_movement(const pt_widget *widget);` which walks the
+  window between the ancestor and app steps.
 - `src/app.c`: the app setter/getter, mirroring `pt_app_set_ui_direction`
   without the repaint loop.
 - `src/widget.c`: the widget setter/getter and the resolver; branch in
@@ -133,7 +142,7 @@ unaffected because no layout or paint code changes.
 
 C++ returns the builder from setters and exposes `caret_movement()`;
 Python exposes a property plus `set_caret_movement`; Java takes the C enum as
-an `int` and returns an `int`. Four functions, one enum.
+an `int` and returns an `int`. Six functions, one enum.
 
 ## Feature 2 — locale to default UI direction
 
@@ -145,7 +154,7 @@ application that wants the common behavior must currently parse `LC_ALL`,
 `LC_MESSAGES` and `LANG` itself and call `pt_app_set_ui_direction`. M23 adds a
 bounded, opt-in helper rather than reading the environment implicitly.
 
-### Proposed surface
+### Delivered surface
 
 ```c
 /* Maps a locale name to a default interface direction (since 2.1). This is a
@@ -245,7 +254,7 @@ also covers BN characters). It does not sanitize, and `rtl.md:296-299` records
 that an application accepting untrusted text must handle them itself. M23
 provides the missing primitives; it does not change any existing text path.
 
-### Proposed surface
+### Delivered surface
 
 A new public header `include/pt/bidi.h` (included from `pt.h`) owns the
 surface. It includes `pt/base.h` and follows the base header contract.
@@ -268,9 +277,10 @@ typedef enum pt_bidi_control_kind {
 } pt_bidi_control_kind;
 
 typedef struct pt_bidi_control_span {
-    uint32_t offset;   /* UTF-8 byte offset in the input */
-    uint32_t length;   /* bytes occupied (2 or 3) */
+    size_t offset;                /* UTF-8 byte offset in the input */
+    size_t length;                /* bytes occupied (2 or 3) */
     pt_bidi_control_kind kind;
+    uint32_t codepoint;           /* the control itself, U+202A..U+2069 */
 } pt_bidi_control_span;
 
 /* Reports every explicit control in text in logical order. The return value is
@@ -296,6 +306,12 @@ typedef enum pt_bidi_sanitize_mode {
 pt_api char *pt_bidi_sanitize(const char *text, size_t length,
                               pt_bidi_sanitize_mode mode, size_t *out_length);
 ```
+
+The span fields are `size_t` offsets and lengths — the type every byte length
+in the public API already uses — plus the kind and the code point, so an
+application can print or log the control it found. Review added the code point
+in W2; offsets and lengths are never `uint32_t`, so a span can describe a
+control in any input the API accepts.
 
 The byte scanner matches the exact UTF-8 encodings: U+202A–U+202E are
 `E2 80 AA`–`E2 80 AE`, U+2066–U+2069 are `E2 81 A6`–`E2 81 A9`. This is O(n)
@@ -344,10 +360,10 @@ path, conformance suite and paint output are untouched.
 ### Bindings
 
 Two functions and two enums. C++ returns `std::vector<pt_bidi_control_span>`
-for the inventory and `std::string` for sanitize; Python returns a list of
-`(kind, offset, length)` tuples and a `str`; Java returns an array of a small
-record-like holder and a `String`. The parity scanner checks the C names; the
-wrappers must not allocate hidden global state.
+for the inventory and `std::string` for sanitize (the `neutralize` flag picks
+the mode); Python returns a list of `BidiControlSpan` structures and a `str`;
+Java returns a `BidiControlSpan` record array and a `String`. The parity
+scanner checks the C names; the wrappers hold no hidden global state.
 
 ## Feature 4 — logical start/end padding
 
@@ -359,7 +375,7 @@ padding values. An RTL card that wants 16 px at the start and 8 px at the end
 must know the resolved direction and swap the values itself — and re-swap when
 an ancestor direction changes.
 
-### Proposed surface
+### Delivered surface
 
 ```c
 /* Sets padding in logical order (since 2.1). top and bottom are physical;
@@ -458,13 +474,14 @@ after W1's to keep the merge clean.
 
 | Wave | Scope | Files owned | Exit gate |
 | --- | --- | --- | --- |
-| **W1** | Caret movement policy + locale helper (4 + 3 functions, 1 enum) | `include/pt/base.h`, `include/pt/app.h`, `include/pt/widget.h`, `src/app.c`, `src/widget.c`, `src/internal.h`, three bindings, `tests/test_direction.c`, `tests/test_editing.c`, `tests/test_text_area.c`, `tests/test_abi.c`, `api/pt.api`, `docs/api-reference.md` | `make check`, `make check-bindings`, 571/934 baseline with full parity, LTR snapshots unchanged |
-| **W2** | Bidi control inventory + sanitizer (2 functions, 2 enums, 1 struct) | `include/pt/bidi.h` (new), `include/pt/pt.h`, `src/bidi.c`, `tools/gen-api-reference.py`, three bindings, `tests/test_bidi.c`, `api/pt.api`, `docs/api-reference.md` | `make check` (conformance still 770,241 + 91,707), sanitizer tests, ASan clean; 573/949 cumulative |
-| **W3** | Logical start/end padding (1 function) | `include/pt/widget.h`, `src/widget.c`, `src/internal.h`, `src/layout.c`, three bindings, `tests/test_layout.c`, `tests/test_flex_grid.c`, `tests/test_visuals.c`, `api/pt.api`, `docs/api-reference.md` | `make check`, `make perf-check`, 17 LTR snapshots and 11/11 LTR gate unchanged; 574/950 cumulative |
-| **W4** | Public guides, examples, generated reference | `docs/rtl.md`, `docs/zh-CN/rtl.md`, `docs/api-reference.md` (regen only), `examples/c/rtl_gallery.c`, `examples/cpp/rtl_direction.cpp`, `examples/python/rtl_direction.py`, `examples/java/RtlDirection.java`, `Makefile` example targets, `docs/m23-design.md` (status) | `tools/check-bilingual-docs.py`, `tools/gen-api-reference.py --check`, four-language example smoke |
+| **W1** | Caret movement policy + locale helper (6 + 3 functions, 1 enum) | `include/pt/base.h`, `include/pt/app.h`, `include/pt/widget.h`, `src/app.c`, `src/widget.c`, `src/internal.h`, three bindings, `tests/test_direction.c`, `tests/test_editing.c`, `tests/test_text_area.c`, `tests/test_abi.c`, `api/pt.api`, `docs/api-reference.md` | `make check`, `make check-bindings`, 571/934 at the code commit with full parity, LTR snapshots unchanged; delivered and reviewed on `cd8e63b`/`825a227` |
+| **W2** | Bidi control inventory + sanitizer (2 functions, 2 enums, 1 struct) | `include/pt/bidi.h` (new), `include/pt/pt.h`, `src/bidi.c`, `tools/gen-api-reference.py`, three bindings, `tests/test_bidi.c`, `api/pt.api`, `docs/api-reference.md` | `make check` (conformance still 770,241 + 91,707), sanitizer tests, ASan clean; delivered on `423d9da`/`ce6730a`/`e99b1a6`/`56e3904` |
+| **W3** | Logical start/end padding (1 function) | `include/pt/widget.h`, `src/widget.c`, `src/internal.h`, `src/layout.c`, three bindings, `tests/test_layout.c`, `tests/test_flex_grid.c`, `tests/test_visuals.c`, `api/pt.api`, `docs/api-reference.md` | `make check`, `make perf-check`, 17 LTR snapshots and 11/11 LTR gate unchanged; delivered on `4af041c`/`34108f1`, baseline 576/952 after the window-level review |
+| **W4** | Public guides, examples, generated reference | `docs/rtl.md`, `docs/zh-CN/rtl.md`, `docs/api-reference.md` (regen only), `examples/c/ergonomics_gallery.c`, `examples/cpp/ergonomics.cpp`, `examples/python/ergonomics.py`, `examples/java/Ergonomics.java`, `README.md`/`README.zh-CN.md`, the five guide pairs, `Makefile` example targets (end of file only), `docs/m23-design.md` (status) | delivered on `43a1f7f`/`279291d`; `tools/check-bilingual-docs.py`, `tools/gen-api-reference.py --check`, four-language example smoke |
 | **W5** | Hardening, 2.1.0 landing | `include/pt/base.h` (version macros), `Makefile` (`VERSION`), `README.md`, `docs/release.md`, `docs/ROADMAP.md`, `docs/standards.md` (if needed) | `werror=1`, `make check`, `check-bindings`, `perf-check`, sanitizers, staged install, reproducible tarball, four live suites, `tools/ci.sh`, `tools/release-check.sh --full`, tag `2.1.0` |
 
-W4 and W5 are documentation/landing waves and must not add behavior. W5 is the
+W1-W4 are delivered and reviewed; W5 is pending. W4 and W5 are
+documentation/landing waves and must not add behavior. W5 is the
 only wave that changes the version and the release record; the tag itself is
 the owner's step, as in 2.0.
 
@@ -506,9 +523,9 @@ conformance, 564/564 parity) to make room for a 2.1 feature.
 
 ## Completion criteria for 2.1.0
 
-- **574 functions / 950 entries** in `api/pt.api`; all 574 have a since marker
+- **576 functions / 952 entries** in `api/pt.api`; all 576 have a since marker
   and are covered by the generated reference.
-- 574/574 binding parity in C++, Python and Java with an empty allowlist.
+- 576/576 binding parity in C++, Python and Java with an empty allowlist.
 - Caret movement defaults to visual; locale is unset; padding is physical;
   sanitization is opt-in. LTR output is byte-identical to 2.0 (17 snapshots and
   11/11 `ltr-compat.sh`), and the Unicode conformance counts are unchanged.
@@ -523,19 +540,33 @@ conformance, 564/564 parity) to make room for a 2.1 feature.
 - The release record is published in `release.md`, the ROADMAP M23 section is
   closed, and the annotated `2.1.0` tag is created and pushed by the owner.
 
-## Open questions for review
+## Open questions for review — closed
 
-1. **Window-level caret movement.** This proposal omits it in favour of a
-   root-widget override. If review prefers exact symmetry with
-   `pt_ui_direction`, adding the window pair costs two functions and one field;
-   the baseline becomes 576 / 952.
-2. **Neutralize replacement.** U+FFFD is visible and length-changing. A
-   zero-width replacement (for example U+2060 WORD JOINER) would preserve
-   columns but hide the removal; the security argument favours U+FFFD.
-3. **Locale table ownership.** The list is deliberately small and CLDR-derived.
-   A future release can extend it without an ABI change; the pure helper's
-   return contract is stable.
-4. **Logical padding and table/tree internal containers.** The prepass applies
-   to every widget, including the table/tree column containers that opt out of
-   row mirroring. Their padding is internal and currently symmetric, so the
-   observable result is unchanged; W3 should add a regression test.
+The design listed four questions. All four were decided during W1-W3 and are
+recorded here with the outcome, so the next reader does not reopen them:
+
+1. **Window-level caret movement — added.** Exact symmetry with
+   `pt_ui_direction` won over the root-widget shortcut: four functions became
+   six and the baseline became **576 / 952**, which is the figure this design
+   itself priced for that choice. A window policy is per-window by
+   construction, and it keeps one resolution step per inherited property
+   instead of one for direction and none for caret movement.
+2. **Neutralize replacement — U+FFFD.** The security argument wins: a removal
+   the reader cannot see is a removal the reader cannot audit. A zero-width
+   replacement would preserve columns but hide the mitigation, and column
+   stability is not worth an invisible strip. `pt_bidi_sanitize_strip` is still
+   the zero value for callers that want the shorter result.
+3. **Locale table ownership — a small CLDR-derived table inside the library.**
+   No ICU, no locale database, no `setlocale` call and no global state. A
+   language or script that is missing resolves to LTR, which is the safe
+   default, and the table can grow in a future minor without an ABI change
+   because the helper's return contract is stable.
+4. **Logical padding and the table/tree internal containers — covered by a
+   regression test.** The prepass still runs for every widget, but W3 added the
+   table/tree logical-padding and `rtl_logical_order` opt-out cases to the
+   layout and flex/grid suites, so the interaction is asserted rather than
+   assumed.
+
+Two follow-ups are registered for W5, neither with a correctness impact: an
+unset locale under an inherited application direction can mark one extra
+repaint, and `src/bidi.c` is missing a trailing newline.

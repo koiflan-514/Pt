@@ -13,7 +13,7 @@ Java: the wrappers cover every declared name, and the parity audit treats a
 missing name as a `make check` failure rather than reporting a percentage. The
 1.2 surface shipped 554/554; 1.3 adds the two IME input-panel functions and the
 spin-button role for 556/556. 2.0 adds the eight direction functions for
-564/564. The 0.10 combobox and multi-row selection surface, and
+564/564, and 2.1 adds twelve functions for 576/576. The 0.10 combobox and multi-row selection surface, and
 the 0.9 theme, chip/skeleton, data-view editing and per-run typography surface,
 remain wrapped in full.
 
@@ -1657,12 +1657,51 @@ Python exposes these as properties as well as fluent `set_*` methods, so
 enum value as an `int` and returns an `int`. C++ setters return the wrapper for
 chaining, and the getters are `[[nodiscard]]`.
 
+## 2.1 ergonomics and safety surface
+
+2.1 adds twelve functions, three enums and one struct. The caret policy is a
+plain value on three levels and resolves to visual when unset, so an
+application that sets nothing keeps the 2.0 arrows. `pt_locale_ui_direction` is
+a free function (it needs no app), and the bidi safety pair is free as well and
+returns owned values in each language.
+
+| C function | C++23 | Python | Java |
+| --- | --- | --- | --- |
+| `pt_app_set_caret_movement` | `app::set_caret_movement` | `App.caret_movement =` / `set_caret_movement` | `Pt.app_set_caret_movement` |
+| `pt_app_get_caret_movement` | `app::caret_movement` | `App.caret_movement` | `Pt.app_get_caret_movement` |
+| `pt_window_set_caret_movement` | `window::set_caret_movement` | `Window.caret_movement =` / `set_caret_movement` | `Pt.window_set_caret_movement` |
+| `pt_window_get_caret_movement` | `window::caret_movement` | `Window.caret_movement` | `Pt.window_get_caret_movement` |
+| `pt_widget_set_caret_movement` | `widget::set_caret_movement` | `Widget.caret_movement =` / `set_caret_movement` | `Pt.widget_set_caret_movement` |
+| `pt_widget_get_caret_movement` | `widget::caret_movement` | `Widget.caret_movement` | `Pt.widget_get_caret_movement` |
+| `pt_locale_ui_direction` | `pt::locale_ui_direction` | `pt.locale_ui_direction` | `Pt.locale_ui_direction` |
+| `pt_app_set_locale` | `app::set_locale` | `App.locale =` / `set_locale` | `Pt.app_set_locale` |
+| `pt_app_get_locale` | `app::locale` | `App.locale` | `Pt.app_get_locale` |
+| `pt_bidi_control_inventory` | `pt::bidi_control_inventory` | `pt.bidi_control_inventory` | `Pt.bidi_control_inventory` |
+| `pt_bidi_sanitize` | `pt::bidi_sanitize` | `pt.bidi_sanitize` | `Pt.bidi_sanitize` |
+| `pt_widget_set_padding_logical` | `widget::set_padding_logical` | `Widget.set_padding_logical` | `Pt.widget_set_padding_logical` |
+
+The C enums are `pt_caret_movement` (`inherit`/`visual`/`logical`),
+`pt_bidi_control_kind` (nine controls plus `none`) and
+`pt_bidi_sanitize_mode` (`strip`/`neutralize`). Python exposes them as module
+constants (`pt.caret_movement_logical`, `pt.bidi_control_lro`,
+`pt.bidi_sanitize_neutralize`); Java uses the C names as constants
+(`Pt.caret_movement_logical`, `Pt.BIDI_CONTROL_LRO`, `Pt.BIDI_SANITIZE_NEUTRALIZE`)
+and returns a `BidiControlSpan` record array plus a `String`. C++ returns
+`std::vector<pt_bidi_control_span>` and `std::string` (the second argument of
+`bidi_sanitize` is the `neutralize` flag), and Python returns a list of
+`BidiControlSpan` structures and a `str`.
+
+| C struct | C++23 | Python | Java |
+| --- | --- | --- | --- |
+| `pt_bidi_control_span` | `pt_bidi_control_span` | `pt.BidiControlSpan` | `Pt.BidiControlSpan` record |
+
 ## Binding coverage
 
 From 1.3 every function in the public C ABI was wrapped in C++, Python and
 Java. 1.4 added no function and kept 556/556. 2.0 adds the eight direction
 functions and brings the surface to **564 functions, wrapped 564/564 in every
-language with an empty allowlist**. The 1.2 surface shipped 554/554; 1.3 added
+language with an empty allowlist**; 2.1 adds twelve functions for **576/576**
+in every language with the same empty allowlist. The 1.2 surface shipped 554/554; 1.3 added
 the two IME input-panel entry points. The parity audit is a hard `make check`
 gate: it scans the
 comment-stripped binding sources for every declared function name and allows

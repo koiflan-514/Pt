@@ -311,7 +311,7 @@ Toast 使用 AT-SPI 公告信号，礼貌级别由 Toast 公布（polite 或 ass
   `dbus-daemon` 和无障碍总线；`tools/release-check.sh` 将桥接层报告为
   实时检查，而不是 `make check` 的一部分。
 
-## 2.0 中的限制
+## 2.1 中的限制
 
 - 桥接层需要显式启用，且要求构建中包含 `dbus-1`。没有可访问的无障碍总线
   时，`pt_app_enable_a11y` 返回 `false`，应用将在没有辅助技术暴露的情况下
@@ -327,6 +327,13 @@ Toast 使用 AT-SPI 公告信号，礼貌级别由 Toast 公布（polite 或 ass
   视觉映射是插入符号和命中测试的内部实现。桥接层发布对象 `direction` 属性和
   `GetAttributes`/`GetDefaultAttributes` 方向条目；密码输入框报告方向但不报告
   文本。参见 [rtl.md](rtl.md)。
+- 2.1 的新增内容默认不改变辅助技术。插入符号策略只改变左/右方向键和 Home/End
+  落到的逻辑偏移，报告的插入符号矩形仍是逻辑插入符号处的视觉矩形，因此屏幕阅读器
+  看到的偏移单位和顺序都不会改变。区域设置提示仅在未设置显式应用方向时才改变
+  解析后的 UI 方向（因而改变发布的 `direction` 属性），并且绝不改变角色、名称或
+  状态。清理是应用自己的步骤：桥接层报告存储的字节，因此如果读者不能被重排，
+  不可信文本应在 `pt_widget_set_text` 之前清理。逻辑起始/结束内边距只是几何，
+  不改变任何暴露的值。参见 [rtl.md](rtl.md) 和 [quickstart.md](quickstart.md)。
 - 桥接层为正文单元格发布 `TableCell`，而不是为表头单元格。表头单元格通过
   `Table` 表头查询和 `column_header` 角色出现，而不是作为 `TableCell`
   实现。
