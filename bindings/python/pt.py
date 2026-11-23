@@ -35,6 +35,7 @@ __all__ = [
     "PopupAnchor",
     "IconImage",
     "Date",
+    "BidiControlSpan",
     "PaintContext",
     "PointerEvent",
     "PaintPixelsDesc",
@@ -72,6 +73,18 @@ __all__ = [
     "caret_movement_inherit",
     "caret_movement_visual",
     "caret_movement_logical",
+    "bidi_control_none",
+    "bidi_control_lre",
+    "bidi_control_rle",
+    "bidi_control_pdf",
+    "bidi_control_lro",
+    "bidi_control_rlo",
+    "bidi_control_lri",
+    "bidi_control_rli",
+    "bidi_control_fsi",
+    "bidi_control_pdi",
+    "bidi_sanitize_strip",
+    "bidi_sanitize_neutralize",
     "justify_start",
     "justify_center",
     "justify_end",
@@ -321,6 +334,8 @@ __all__ = [
     "uri_list",
     "uri_list_count",
     "uri_list_get",
+    "bidi_control_inventory",
+    "bidi_sanitize",
     "date_today",
     "date_is_valid",
     "locale_ui_direction",
@@ -383,6 +398,20 @@ text_direction_rtl = 2
 caret_movement_inherit = 0
 caret_movement_visual = 1
 caret_movement_logical = 2
+
+bidi_control_none = 0
+bidi_control_lre = 1
+bidi_control_rle = 2
+bidi_control_pdf = 3
+bidi_control_lro = 4
+bidi_control_rlo = 5
+bidi_control_lri = 6
+bidi_control_rli = 7
+bidi_control_fsi = 8
+bidi_control_pdi = 9
+
+bidi_sanitize_strip = 0
+bidi_sanitize_neutralize = 1
 
 justify_start = 0
 justify_center = 1
@@ -1022,6 +1051,22 @@ class DragData(_ctypes.Structure):
         ("mime_type", _ctypes.c_char_p),
         ("data", _ctypes.c_char_p),
         ("size", _ctypes.c_size_t),
+    ]
+
+
+class BidiControlSpan(_ctypes.Structure):
+    """One explicit bidi control found by :func:`bidi_control_inventory`.
+
+    ``offset`` and ``length`` are UTF-8 byte positions in the scanned string,
+    ``kind`` is a ``bidi_control_*`` constant and ``codepoint`` is the
+    control itself. A zero-initialized span has ``kind`` ``bidi_control_none``.
+    """
+
+    _fields_ = [
+        ("offset", _ctypes.c_size_t),
+        ("length", _ctypes.c_size_t),
+        ("kind", _ctypes.c_int),
+        ("codepoint", _ctypes.c_uint32),
     ]
 
 
@@ -2347,6 +2392,14 @@ _pt_sidebar_set_on_select = _proto(
 _pt_ease = _proto("pt_ease", _c_float, _c_int, _c_float)
 _pt_ease_value = _proto("pt_ease_value", _c_float, _c_int, _c_float, _c_float, _c_float)
 _pt_locale_ui_direction = _proto("pt_locale_ui_direction", _c_int, _c_char_p)
+_pt_bidi_control_inventory = _proto(
+    "pt_bidi_control_inventory", _c_size_t, _c_char_p, _c_size_t,
+    _ctypes.POINTER(BidiControlSpan), _c_size_t,
+)
+_pt_bidi_sanitize = _proto(
+    "pt_bidi_sanitize", _c_void_p, _c_char_p, _c_size_t, _c_int,
+    _ctypes.POINTER(_c_size_t),
+)
 _pt_transition_init = _proto(
     "pt_transition_init", None, _ctypes.POINTER(_TransitionState), _c_float
 )
@@ -2753,6 +2806,41 @@ def uri_list(text: str) -> list[str]:
     """Parses a text/uri-list payload into a list of URI strings."""
     return [uri for index in range(uri_list_count(text))
             if (uri := uri_list_get(text, index)) is not None]
+
+
+def bidi_control_inventory(text: str) -> list[BidiControlSpan]:
+    """Lists the nine explicit bidi controls in ``text`` in byte order.
+
+    Only the directional formatting characters are reported; ZWJ, ZWNJ, the
+    zero-width space and the soft hyphen are ordinary text here. An empty
+    string returns an empty list. See :func:`bidi_sanitize` for the mitigation.
+    """
+    raw = _string(text)
+    count = int(_pt_bidi_control_inventory(raw, len(raw), None, 0))
+    if count == 0:
+        return []
+    spans = (BidiControlSpan * count)()
+    written = int(_pt_bidi_control_inventory(raw, len(raw), spans, count))
+    return [spans[index] for index in range(min(written, count))]
+
+
+def bidi_sanitize(text: str, mode: int = bidi_sanitize_strip) -> str:
+    """Removes the explicit bidi controls, or replaces each with U+FFFD.
+
+    ``mode`` is ``bidi_sanitize_strip`` (the default, zero value) or
+    ``bidi_sanitize_neutralize``. The result is a new Python string; the native
+    buffer is released before returning. Nothing calls this automatically, so
+    text reaches a widget unchanged unless the application sanitizes it.
+    """
+    raw = _string(text)
+    length = _c_size_t(0)
+    pointer = _pt_bidi_sanitize(raw, len(raw), int(mode), _ctypes.byref(length))
+    if not pointer:
+        raise ValueError(f"invalid bidi sanitize mode {mode}")
+    try:
+        return _ctypes.string_at(pointer, length.value).decode("utf-8", "surrogateescape")
+    finally:
+        _pt_free(pointer)
 
 
 def date_today() -> "Date":

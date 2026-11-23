@@ -2587,6 +2587,35 @@ inline std::string tree_text(const tree_node *node) {
     const char *value = pt_tree_node_get_text(node);
     return value ? value : "";
 }
+/* Reports the explicit bidi controls in text in byte order; empty when there
+ * are none. */
+inline std::vector<pt_bidi_control_span> bidi_control_inventory(std::string_view text) {
+    std::string value = copy_string(text);
+    size_t count = pt_bidi_control_inventory(value.data(), value.size(), nullptr, 0);
+    if (count == 0) {
+        return {};
+    }
+    std::vector<pt_bidi_control_span> spans(count);
+    size_t written = pt_bidi_control_inventory(value.data(), value.size(), spans.data(), count);
+    spans.resize(written < count ? written : count);
+    return spans;
+}
+
+/* Removes the explicit bidi controls, or replaces each with U+FFFD when
+ * neutralize is true. The native buffer is released here. */
+inline std::string bidi_sanitize(std::string_view text, bool neutralize = false) {
+    std::string value = copy_string(text);
+    size_t length = 0;
+    char *result = pt_bidi_sanitize(value.data(), value.size(),
+                                    neutralize ? pt_bidi_sanitize_neutralize
+                                               : pt_bidi_sanitize_strip,
+                                    &length);
+    detail::owned_pt_memory<char> owned(result);
+    if (!result) {
+        return {};
+    }
+    return std::string(result, length);
+}
 
 inline void set_tree_text(tree_node *node, std::string_view text) {
     std::string value = copy_string(text);

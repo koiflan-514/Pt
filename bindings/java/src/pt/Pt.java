@@ -339,6 +339,14 @@ public final class Pt {
     }
 
     /**
+     * One explicit bidi control found by {@link #bidi_control_inventory}.
+     * {@code offset} and {@code length} are UTF-8 byte positions in the scanned
+     * string, {@code kind} is one of the {@code BIDI_CONTROL_*} constants and
+     * {@code codepoint} is the control itself.
+     */
+    public record BidiControlSpan(long offset, long length, int kind, int codepoint) {}
+
+    /**
      * Premultiplied 0xAARRGGBB pixels of a clipboard image and its dimensions.
      * {@code pixels} has {@code width * height} entries, row-major.
      */
@@ -967,6 +975,10 @@ public final class Pt {
     private static final MethodHandle uri_list_get = bind("pt_uri_list_get", desc(ptr, ptr, i32));
     private static final MethodHandle locale_ui_direction = bind("pt_locale_ui_direction",
             desc(i32, ptr));
+    private static final MethodHandle bidi_control_inventory = bind("pt_bidi_control_inventory",
+            desc(i64, ptr, i64, ptr, i64));
+    private static final MethodHandle bidi_sanitize = bind("pt_bidi_sanitize",
+            desc(ptr, ptr, i64, i32, ptr));
     private static final MethodHandle window_set_stylus_callback = bind(
             "pt_window_set_stylus_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle app_set_a11y_callback = bind(
@@ -3512,6 +3524,99 @@ public final class Pt {
         }
         return uris;
     }
+
+    /** Bidi control kinds reported by {@link #bidi_control_inventory}. */
+    public static final int BIDI_CONTROL_NONE = 0;
+    public static final int BIDI_CONTROL_LRE = 1;
+    public static final int BIDI_CONTROL_RLE = 2;
+    public static final int BIDI_CONTROL_PDF = 3;
+    public static final int BIDI_CONTROL_LRO = 4;
+    public static final int BIDI_CONTROL_RLO = 5;
+    public static final int BIDI_CONTROL_LRI = 6;
+    public static final int BIDI_CONTROL_RLI = 7;
+    public static final int BIDI_CONTROL_FSI = 8;
+    public static final int BIDI_CONTROL_PDI = 9;
+
+    /** Sanitize modes accepted by {@link #bidi_sanitize}. */
+    public static final int BIDI_SANITIZE_STRIP = 0;
+    public static final int BIDI_SANITIZE_NEUTRALIZE = 1;
+
+    /**
+     * Lists the nine explicit bidi controls in {@code text} in byte order.
+     * ZWJ, ZWNJ, the zero-width space and the soft hyphen are ordinary text
+     * here and are not reported. An empty string returns an empty array.
+     */
+    public static BidiControlSpan[] bidi_control_inventory(String text) {
+        Objects.requireNonNull(text, "text");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = arena.allocate(text.length() * 4L + 1);
+            byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
+            data.asSlice(0, utf8.length).copyFrom(MemorySegment.ofArray(utf8));
+            long count = (long) invoke(bidi_control_inventory, data, (long) utf8.length,
+                    MemorySegment.NULL, 0L);
+            if (count <= 0) {
+                return new BidiControlSpan[0];
+            }
+            MemorySegment spans = arena.allocate(BIDI_SPAN_SIZE * count);
+            long written = (long) invoke(bidi_control_inventory, data, (long) utf8.length,
+                    spans, count);
+            int total = (int) Math.min(Math.max(written, 0L), count);
+            BidiControlSpan[] result = new BidiControlSpan[total];
+            for (int index = 0; index < total; ++index) {
+                result[index] = readBidiSpan(spans.asSlice(BIDI_SPAN_SIZE * index));
+            }
+            return result;
+        }
+    }
+
+    /**
+     * Removes the explicit bidi controls, or replaces each with U+FFFD when
+     * {@code mode} is {@link #BIDI_SANITIZE_NEUTRALIZE}. The native buffer is
+     * released before returning. Nothing calls this automatically.
+     */
+    public static String bidi_sanitize(String text, int mode) {
+        Objects.requireNonNull(text, "text");
+        if (mode != BIDI_SANITIZE_STRIP && mode != BIDI_SANITIZE_NEUTRALIZE) {
+            throw new IllegalArgumentException("invalid bidi sanitize mode " + mode);
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
+            MemorySegment data = arena.allocate(utf8.length + 1L);
+            data.asSlice(0, utf8.length).copyFrom(MemorySegment.ofArray(utf8));
+            MemorySegment lengthSlot = arena.allocate(ValueLayout.JAVA_LONG);
+            lengthSlot.set(ValueLayout.JAVA_LONG, 0, 0L);
+            MemorySegment result = (MemorySegment) invoke(bidi_sanitize, data, (long) utf8.length,
+                    mode, lengthSlot);
+            if (result.address() == 0) {
+                return null;
+            }
+            try {
+                long length = lengthSlot.get(ValueLayout.JAVA_LONG, 0);
+                return new String(result.reinterpret(length).toArray(ValueLayout.JAVA_BYTE),
+                        StandardCharsets.UTF_8);
+            } finally {
+                invoke(free, result);
+            }
+        }
+    }
+
+    /** Removes the explicit bidi controls; the zero mode. */
+    public static String bidi_sanitize(String text) {
+        return bidi_sanitize(text, BIDI_SANITIZE_STRIP);
+    }
+
+    private static BidiControlSpan readBidiSpan(MemorySegment segment) {
+        return new BidiControlSpan(segment.get(ValueLayout.JAVA_LONG, 0),
+                segment.get(ValueLayout.JAVA_LONG, 8),
+                segment.get(ValueLayout.JAVA_INT, 16),
+                segment.get(ValueLayout.JAVA_INT, 20));
+    }
+
+    /**
+     * pt_bidi_control_span is size_t offset, size_t length, i32 kind and u32
+     * codepoint, 24 bytes on a 64-bit host.
+     */
+    private static final long BIDI_SPAN_SIZE = 24L;
 
     public static MemorySegment menu_create(MemorySegment window) {
         return (MemorySegment) invoke(menu_create, window);
