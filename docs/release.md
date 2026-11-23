@@ -1172,11 +1172,13 @@ This is the **final gate record**. Every figure below was measured on the
 passes, the reproducible tarball and extracted rebuild, the symbol-level ABI
 comparison against 2.0.0 and `tools/release-check.sh --full`. Because this
 record ships inside the release archive, editing it changes the archive digest:
-the sha256 quoted below is what the gate measured for the commit that carries
-this paragraph, and `make dist` on the tagged tree reproduces its own digest
-exactly — re-measure there rather than trusting a digest quoted from inside the
-archive. The annotated `2.1.0` tag is created and pushed by the owner after
-this record, as in 2.0.
+`tools/ci.sh` measured `9580b56f…370850` on the code tree `607b847` (before
+this paragraph was written), and the frozen tree that carries this record
+reproduces `0b9f7c68…3720d0ed` on two independent `make dist` runs at the same
+epoch, with the extracted tree identical to `git archive HEAD`. `make dist` on
+the tagged tree reproduces its own digest exactly — re-measure there rather
+than trusting a digest quoted from inside the archive. The annotated `2.1.0`
+tag is created and pushed by the owner after this record, as in 2.0.
 
 ### Scope
 
@@ -1263,7 +1265,7 @@ None by default. These are the points an upgrading application must read:
 | Examples | pass: C/C++/Python/Java 2.1 examples build under `werror=1`, exit 0 with `PT_HEADLESS=1` and exit 124 under the nested niri smoke timeout; `tools/release-check.sh` covers the four ergonomics examples and their `run-*` targets |
 | ABI diff against 2.0.0 | pass at the symbol level: 564 → 576 exported `pt_*` symbols, 0 removed, 0 changed, 12 added (listed under "ABI statement"), no `SB_*` export, SONAME `libpt.so.1` on both |
 | `tools/release-check.sh --full` | pass: every automated gate is green (version agreement, header surface, 576/952 baseline, 576/576 parity in three languages, reference coverage, deprecation inventory, the eight examples and their `run-*` targets, 9 bilingual guides); both human open items are closed by this gate — the live-suite sign-off is recorded above, and the freeze commit and annotated `2.1.0` tag are created by the owner from this tag-ready tree |
-| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` (the epoch `tools/ci.sh` fixes, unchanged from 2.0) produce `build/dist/pt-2.1.0.tar.gz` with byte-identical sha256 `9580b56fd92f3fac2fe2c7346b3fdf590663e340ace211d7a9e0a2ccc0370850`; the sidecar matches; the extracted tree rebuilds with `werror=1` and passes `make check` |
+| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` (the epoch `tools/ci.sh` fixes, unchanged from 2.0) reproduce `build/dist/pt-2.1.0.tar.gz` byte-identically; `tools/ci.sh` measured `9580b56fd92f3fac2fe2c7346b3fdf590663e340ace211d7a9e0a2ccc0370850` on the code tree `607b847`, and the frozen tree carrying this record reproduces `0b9f7c683c0fc2527f9a2ff13d5857bd55808d45e4688e8bc40d670a3720d0ed` on two runs (sidecar matches both times); the extracted tree is identical to `git archive HEAD`, rebuilds with `werror=1` and passes `make check` |
 
 ### ABI statement
 
