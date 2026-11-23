@@ -69,6 +69,9 @@ __all__ = [
     "text_direction_auto",
     "text_direction_ltr",
     "text_direction_rtl",
+    "caret_movement_inherit",
+    "caret_movement_visual",
+    "caret_movement_logical",
     "justify_start",
     "justify_center",
     "justify_end",
@@ -320,6 +323,7 @@ __all__ = [
     "uri_list_get",
     "date_today",
     "date_is_valid",
+    "locale_ui_direction",
     "box",
     "row",
     "column",
@@ -375,6 +379,10 @@ ui_direction_rtl = 2
 text_direction_auto = 0
 text_direction_ltr = 1
 text_direction_rtl = 2
+
+caret_movement_inherit = 0
+caret_movement_visual = 1
+caret_movement_logical = 2
 
 justify_start = 0
 justify_center = 1
@@ -1382,6 +1390,10 @@ _pt_app_set_color_scheme = _proto("pt_app_set_color_scheme", None, _c_void_p, _c
 _pt_app_get_color_scheme = _proto("pt_app_get_color_scheme", _c_int, _c_void_p)
 _pt_app_set_ui_direction = _proto("pt_app_set_ui_direction", None, _c_void_p, _c_int)
 _pt_app_get_ui_direction = _proto("pt_app_get_ui_direction", _c_int, _c_void_p)
+_pt_app_set_caret_movement = _proto("pt_app_set_caret_movement", None, _c_void_p, _c_int)
+_pt_app_get_caret_movement = _proto("pt_app_get_caret_movement", _c_int, _c_void_p)
+_pt_app_set_locale = _proto("pt_app_set_locale", None, _c_void_p, _c_char_p)
+_pt_app_get_locale = _proto("pt_app_get_locale", _c_char_p, _c_void_p)
 _pt_app_set_accent_color = _proto("pt_app_set_accent_color", None, _c_void_p, _c_uint32)
 _pt_app_set_theme_color = _proto("pt_app_set_theme_color", None, _c_void_p, _c_int, _c_uint32)
 _pt_app_get_theme_color = _proto("pt_app_get_theme_color", _c_uint32, _c_void_p, _c_int)
@@ -1422,6 +1434,10 @@ _pt_window_get_scale = _proto("pt_window_get_scale", _c_float, _c_void_p)
 _pt_window_set_title = _proto("pt_window_set_title", None, _c_void_p, _c_char_p)
 _pt_window_set_ui_direction = _proto("pt_window_set_ui_direction", None, _c_void_p, _c_int)
 _pt_window_get_ui_direction = _proto("pt_window_get_ui_direction", _c_int, _c_void_p)
+_pt_window_set_caret_movement = _proto(
+    "pt_window_set_caret_movement", None, _c_void_p, _c_int
+)
+_pt_window_get_caret_movement = _proto("pt_window_get_caret_movement", _c_int, _c_void_p)
 _pt_window_set_size = _proto("pt_window_set_size", None, _c_void_p, _c_int, _c_int)
 _pt_window_set_min_size = _proto("pt_window_set_min_size", None, _c_void_p, _c_int, _c_int)
 _pt_window_set_resizable = _proto("pt_window_set_resizable", None, _c_void_p, _c_bool)
@@ -1787,6 +1803,10 @@ _pt_widget_set_font_weight = _proto("pt_widget_set_font_weight", None, _c_void_p
 _pt_widget_set_text_align = _proto("pt_widget_set_text_align", None, _c_void_p, _c_int)
 _pt_widget_set_ui_direction = _proto("pt_widget_set_ui_direction", None, _c_void_p, _c_int)
 _pt_widget_get_ui_direction = _proto("pt_widget_get_ui_direction", _c_int, _c_void_p)
+_pt_widget_set_caret_movement = _proto(
+    "pt_widget_set_caret_movement", None, _c_void_p, _c_int
+)
+_pt_widget_get_caret_movement = _proto("pt_widget_get_caret_movement", _c_int, _c_void_p)
 _pt_widget_set_text_direction = _proto("pt_widget_set_text_direction", None, _c_void_p, _c_int)
 _pt_widget_get_text_direction = _proto("pt_widget_get_text_direction", _c_int, _c_void_p)
 _pt_widget_set_visible = _proto("pt_widget_set_visible", None, _c_void_p, _c_bool)
@@ -2326,6 +2346,7 @@ _pt_sidebar_set_on_select = _proto(
 # Motion
 _pt_ease = _proto("pt_ease", _c_float, _c_int, _c_float)
 _pt_ease_value = _proto("pt_ease_value", _c_float, _c_int, _c_float, _c_float, _c_float)
+_pt_locale_ui_direction = _proto("pt_locale_ui_direction", _c_int, _c_char_p)
 _pt_transition_init = _proto(
     "pt_transition_init", None, _ctypes.POINTER(_TransitionState), _c_float
 )
@@ -2702,6 +2723,11 @@ _pt_color_picker_set_on_change = _proto(
 
 def ease(easing: int, t: float) -> float:
     return float(_pt_ease(int(easing), float(t)))
+
+
+def locale_ui_direction(locale: Optional[str]) -> int:
+    """Maps a BCP-47/POSIX locale to a default UI direction; None is LTR."""
+    return int(_pt_locale_ui_direction(None if locale is None else _string(locale)))
 
 
 def ease_value(easing: int, start: float, end: float, t: float) -> float:
@@ -3369,6 +3395,19 @@ class Widget:
 
     def set_ui_direction(self, direction: int) -> "Widget":
         self.ui_direction = direction
+        return self
+
+    @property
+    def caret_movement(self) -> int:
+        """Stored widget caret movement (``caret_movement_inherit`` unset)."""
+        return int(_pt_widget_get_caret_movement(self._ptr))
+
+    @caret_movement.setter
+    def caret_movement(self, movement: int) -> None:
+        _pt_widget_set_caret_movement(self._ptr, int(movement))
+
+    def set_caret_movement(self, movement: int) -> "Widget":
+        self.caret_movement = movement
         return self
 
     @property
@@ -5384,6 +5423,19 @@ class Window:
         self.ui_direction = direction
         return self
 
+    @property
+    def caret_movement(self) -> int:
+        """Stored window caret movement (``caret_movement_inherit`` unset)."""
+        return int(_pt_window_get_caret_movement(self._ptr))
+
+    @caret_movement.setter
+    def caret_movement(self, movement: int) -> None:
+        _pt_window_set_caret_movement(self._ptr, int(movement))
+
+    def set_caret_movement(self, movement: int) -> "Window":
+        self.caret_movement = movement
+        return self
+
     def set_size(self, width: int, height: int) -> "Window":
         _pt_window_set_size(self._ptr, int(width), int(height))
         return self
@@ -6273,6 +6325,32 @@ class App:
 
     def set_ui_direction(self, direction: int) -> "App":
         self.ui_direction = direction
+        return self
+
+    @property
+    def caret_movement(self) -> int:
+        """Stored application caret movement (``caret_movement_inherit`` unset)."""
+        return int(_pt_app_get_caret_movement(self._ptr))
+
+    @caret_movement.setter
+    def caret_movement(self, movement: int) -> None:
+        _pt_app_set_caret_movement(self._ptr, int(movement))
+
+    def set_caret_movement(self, movement: int) -> "App":
+        self.caret_movement = movement
+        return self
+
+    @property
+    def locale(self) -> Optional[str]:
+        """Stored locale hint (``None`` when unset)."""
+        return _text_or_none(_pt_app_get_locale(self._ptr))
+
+    @locale.setter
+    def locale(self, locale: Optional[str]) -> None:
+        _pt_app_set_locale(self._ptr, None if locale is None else _string(locale))
+
+    def set_locale(self, locale: Optional[str]) -> "App":
+        self.locale = locale
         return self
 
     @property

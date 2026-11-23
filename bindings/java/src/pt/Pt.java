@@ -366,6 +366,10 @@ public final class Pt {
     public static final int text_direction_ltr = 1;
     public static final int text_direction_rtl = 2;
 
+    public static final int caret_movement_inherit = 0;
+    public static final int caret_movement_visual = 1;
+    public static final int caret_movement_logical = 2;
+
     public static final int justify_start = 0;
     public static final int justify_center = 1;
     public static final int justify_end = 2;
@@ -778,6 +782,13 @@ public final class Pt {
             FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle app_get_ui_direction = bind("pt_app_get_ui_direction",
             desc(i32, ptr));
+    private static final MethodHandle app_set_caret_movement = bind("pt_app_set_caret_movement",
+            FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle app_get_caret_movement = bind("pt_app_get_caret_movement",
+            desc(i32, ptr));
+    private static final MethodHandle app_set_locale = bind("pt_app_set_locale",
+            FunctionDescriptor.ofVoid(ptr, ptr));
+    private static final MethodHandle app_get_locale = bind("pt_app_get_locale", desc(ptr, ptr));
     private static final MethodHandle app_set_accent_color = bind("pt_app_set_accent_color",
             FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle app_set_font_family = bind("pt_app_set_font_family",
@@ -852,6 +863,10 @@ public final class Pt {
             "pt_window_set_ui_direction", FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle window_get_ui_direction = bind(
             "pt_window_get_ui_direction", desc(i32, ptr));
+    private static final MethodHandle window_set_caret_movement = bind(
+            "pt_window_set_caret_movement", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle window_get_caret_movement = bind(
+            "pt_window_get_caret_movement", desc(i32, ptr));
     private static final MethodHandle window_set_resize_callback = bind(
             "pt_window_set_resize_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_popup_policy = bind(
@@ -950,6 +965,8 @@ public final class Pt {
             "pt_window_set_drag_finished_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle uri_list_count = bind("pt_uri_list_count", desc(i32, ptr));
     private static final MethodHandle uri_list_get = bind("pt_uri_list_get", desc(ptr, ptr, i32));
+    private static final MethodHandle locale_ui_direction = bind("pt_locale_ui_direction",
+            desc(i32, ptr));
     private static final MethodHandle window_set_stylus_callback = bind(
             "pt_window_set_stylus_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle app_set_a11y_callback = bind(
@@ -1204,6 +1221,10 @@ public final class Pt {
             "pt_widget_set_ui_direction", FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle widget_get_ui_direction = bind(
             "pt_widget_get_ui_direction", desc(i32, ptr));
+    private static final MethodHandle widget_set_caret_movement = bind(
+            "pt_widget_set_caret_movement", FunctionDescriptor.ofVoid(ptr, i32));
+    private static final MethodHandle widget_get_caret_movement = bind(
+            "pt_widget_get_caret_movement", desc(i32, ptr));
     private static final MethodHandle widget_set_text_direction = bind(
             "pt_widget_set_text_direction", FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle widget_get_text_direction = bind(
@@ -2647,6 +2668,29 @@ public final class Pt {
         return (int) invoke(app_get_ui_direction, app);
     }
 
+    /** Stores the explicit application caret movement; inherit is zero. */
+    public static void app_set_caret_movement(MemorySegment app, int movement) {
+        invoke(app_set_caret_movement, app, movement);
+    }
+
+    /** Returns the stored application caret movement, not the resolved one. */
+    public static int app_get_caret_movement(MemorySegment app) {
+        return (int) invoke(app_get_caret_movement, app);
+    }
+
+    /** Stores a locale hint; null or an empty string clears it. */
+    public static void app_set_locale(MemorySegment app, String locale) {
+        try (Arena arena = Arena.ofConfined()) {
+            invoke(app_set_locale, app,
+                    locale == null ? MemorySegment.NULL : cstring(arena, locale));
+        }
+    }
+
+    /** Returns the stored locale hint, or null when none is set. */
+    public static String app_get_locale(MemorySegment app) {
+        return optionalText((MemorySegment) invoke(app_get_locale, app));
+    }
+
     public static boolean app_enable_a11y(MemorySegment app) {
         return (boolean) invoke(app_enable_a11y, app);
     }
@@ -2911,6 +2955,16 @@ public final class Pt {
     /** Returns the stored window UI direction, not the resolved one. */
     public static int window_get_ui_direction(MemorySegment window) {
         return (int) invoke(window_get_ui_direction, window);
+    }
+
+    /** Stores the explicit window caret movement; inherit is zero. */
+    public static void window_set_caret_movement(MemorySegment window, int movement) {
+        invoke(window_set_caret_movement, window, movement);
+    }
+
+    /** Returns the stored window caret movement, not the resolved one. */
+    public static int window_get_caret_movement(MemorySegment window) {
+        return (int) invoke(window_get_caret_movement, window);
     }
 
     public static void window_set_decorated(MemorySegment window, boolean decorated) {
@@ -4022,6 +4076,16 @@ public final class Pt {
     /** Returns the stored widget UI direction, not the resolved one. */
     public static int widget_get_ui_direction(MemorySegment widget) {
         return (int) invoke(widget_get_ui_direction, widget);
+    }
+
+    /** Stores the explicit widget caret movement; inherit is zero. */
+    public static void widget_set_caret_movement(MemorySegment widget, int movement) {
+        invoke(widget_set_caret_movement, widget, movement);
+    }
+
+    /** Returns the stored widget caret movement, not the resolved one. */
+    public static int widget_get_caret_movement(MemorySegment widget) {
+        return (int) invoke(widget_get_caret_movement, widget);
     }
 
     /** Stores the explicit text direction; auto is zero. */
@@ -5161,6 +5225,14 @@ public final class Pt {
             Arena arena) {
         MemorySegment stub = handler == null ? MemorySegment.NULL : index_upcall(handler, arena);
         invoke(sidebar_set_on_select, sidebar, stub, MemorySegment.NULL);
+    }
+
+    /** Maps a BCP-47/POSIX locale to a default UI direction; null is LTR. */
+    public static int locale_ui_direction(String locale) {
+        try (Arena arena = Arena.ofConfined()) {
+            return (int) invoke(locale_ui_direction,
+                    locale == null ? MemorySegment.NULL : cstring(arena, locale));
+        }
     }
 
     public static float ease(int easing, float t) {

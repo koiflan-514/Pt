@@ -121,6 +121,9 @@ enum pt_button_ghost = 2
 enum pt_button_primary = 0
 enum pt_button_secondary = 1
 enum pt_button_soft = 4
+enum pt_caret_movement_inherit = 0
+enum pt_caret_movement_logical = 2
+enum pt_caret_movement_visual = 1
 enum pt_color_scheme_dark = 0
 enum pt_color_scheme_light = 1
 enum pt_combobox_filterable = 1
@@ -346,11 +349,13 @@ func pt_app_disable_a11y voidpt_app_disable_a11y(pt_app*app)
 func pt_app_enable_a11y boolpt_app_enable_a11y(pt_app*app)
 func pt_app_font_uncovered_count intpt_app_font_uncovered_count(constpt_app*app,constchar*family,constchar*text,size_tlength)
 func pt_app_get_a11y_status pt_a11y_statuspt_app_get_a11y_status(constpt_app*app)
+func pt_app_get_caret_movement pt_caret_movementpt_app_get_caret_movement(constpt_app*app)
 func pt_app_get_color_scheme pt_color_schemept_app_get_color_scheme(constpt_app*app)
 func pt_app_get_font_fallback constchar*pt_app_get_font_fallback(constpt_app*app,intindex)
 func pt_app_get_font_fallback_count intpt_app_get_font_fallback_count(constpt_app*app)
 func pt_app_get_font_fallback_count_for_family intpt_app_get_font_fallback_count_for_family(constpt_app*app,constchar*family)
 func pt_app_get_font_fallback_for_family constchar*pt_app_get_font_fallback_for_family(constpt_app*app,constchar*family,intindex)
+func pt_app_get_locale constchar*pt_app_get_locale(constpt_app*app)
 func pt_app_get_reduced_motion boolpt_app_get_reduced_motion(constpt_app*app)
 func pt_app_get_theme_color pt_colorpt_app_get_theme_color(constpt_app*app,pt_theme_tokentoken)
 func pt_app_get_theme_metric floatpt_app_get_theme_metric(constpt_app*app,pt_theme_metricmetric)
@@ -361,10 +366,12 @@ func pt_app_run intpt_app_run(pt_app*app)
 func pt_app_run_for intpt_app_run_for(pt_app*app,uint32_ttimeout_ms)
 func pt_app_set_a11y_callback voidpt_app_set_a11y_callback(pt_app*app,pt_a11y_event_callbackcallback,void*user_data)
 func pt_app_set_accent_color voidpt_app_set_accent_color(pt_app*app,pt_colorcolor)
+func pt_app_set_caret_movement voidpt_app_set_caret_movement(pt_app*app,pt_caret_movementmovement)
 func pt_app_set_color_scheme voidpt_app_set_color_scheme(pt_app*app,pt_color_schemescheme)
 func pt_app_set_font_fallbacks voidpt_app_set_font_fallbacks(pt_app*app,constchar*const*families,intcount)
 func pt_app_set_font_fallbacks_for_family voidpt_app_set_font_fallbacks_for_family(pt_app*app,constchar*family,constchar*const*families,intcount)
 func pt_app_set_font_family voidpt_app_set_font_family(pt_app*app,constchar*family)
+func pt_app_set_locale voidpt_app_set_locale(pt_app*app,constchar*locale)
 func pt_app_set_quit_on_last_window_close voidpt_app_set_quit_on_last_window_close(pt_app*app,boolenabled)
 func pt_app_set_reduced_motion voidpt_app_set_reduced_motion(pt_app*app,boolreduced)
 func pt_app_set_theme_color voidpt_app_set_theme_color(pt_app*app,pt_theme_tokentoken,pt_colorcolor)
@@ -526,6 +533,7 @@ func pt_list_view_set_row_key_callback voidpt_list_view_set_row_key_callback(pt_
 func pt_list_view_set_row_text_callback voidpt_list_view_set_row_text_callback(pt_widget*list,pt_row_text_callbackcallback,void*user_data)
 func pt_list_view_set_selected voidpt_list_view_set_selected(pt_widget*list,uint32_tindex)
 func pt_list_view_set_selected_key boolpt_list_view_set_selected_key(pt_widget*list,uint64_tkey)
+func pt_locale_ui_direction pt_ui_directionpt_locale_ui_direction(constchar*locale)
 func pt_menu_add_item voidpt_menu_add_item(pt_menu*menu,constchar*label,constchar*shortcut,pt_click_callbackcallback,void*user_data)
 func pt_menu_add_separator voidpt_menu_add_separator(pt_menu*menu)
 func pt_menu_create pt_menu*pt_menu_create(pt_window*window)
@@ -775,6 +783,7 @@ func pt_widget_get_a11y_text boolpt_widget_get_a11y_text(constpt_widget*widget,c
 func pt_widget_get_a11y_value boolpt_widget_get_a11y_value(constpt_widget*widget,float*value)
 func pt_widget_get_bounds voidpt_widget_get_bounds(constpt_widget*widget,float*x,float*y,float*width,float*height)
 func pt_widget_get_busy boolpt_widget_get_busy(constpt_widget*widget)
+func pt_widget_get_caret_movement pt_caret_movementpt_widget_get_caret_movement(constpt_widget*widget)
 func pt_widget_get_checked boolpt_widget_get_checked(constpt_widget*widget)
 func pt_widget_get_drop_hover boolpt_widget_get_drop_hover(constpt_widget*widget)
 func pt_widget_get_grid_span uint32_tpt_widget_get_grid_span(constpt_widget*widget)
@@ -799,6 +808,7 @@ func pt_widget_set_background voidpt_widget_set_background(pt_widget*widget,pt_c
 func pt_widget_set_border_color voidpt_widget_set_border_color(pt_widget*widget,pt_colorcolor)
 func pt_widget_set_border_width voidpt_widget_set_border_width(pt_widget*widget,floatwidth)
 func pt_widget_set_busy voidpt_widget_set_busy(pt_widget*widget,boolbusy)
+func pt_widget_set_caret_movement voidpt_widget_set_caret_movement(pt_widget*widget,pt_caret_movementmovement)
 func pt_widget_set_checked voidpt_widget_set_checked(pt_widget*widget,boolchecked)
 func pt_widget_set_drop_target voidpt_widget_set_drop_target(pt_widget*widget,constpt_drop_target*target)
 func pt_widget_set_enabled voidpt_widget_set_enabled(pt_widget*widget,boolenabled)
@@ -845,6 +855,7 @@ func pt_window_clipboard_set_uri_list boolpt_window_clipboard_set_uri_list(pt_wi
 func pt_window_close voidpt_window_close(pt_window*window)
 func pt_window_create pt_window*pt_window_create(pt_app*app,constchar*title,intwidth,intheight)
 func pt_window_focus voidpt_window_focus(pt_window*window,pt_widget*widget)
+func pt_window_get_caret_movement pt_caret_movementpt_window_get_caret_movement(constpt_window*window)
 func pt_window_get_decoration_mode pt_decoration_modept_window_get_decoration_mode(constpt_window*window)
 func pt_window_get_drag_active boolpt_window_get_drag_active(constpt_window*window)
 func pt_window_get_drag_result pt_drag_actionpt_window_get_drag_result(constpt_window*window)
@@ -870,6 +881,7 @@ func pt_window_primary_set boolpt_window_primary_set(pt_window*window,constchar*
 func pt_window_primary_set_serial boolpt_window_primary_set_serial(pt_window*window,constchar*text,uint32_tserial)
 func pt_window_request_redraw voidpt_window_request_redraw(pt_window*window)
 func pt_window_root pt_widget*pt_window_root(pt_window*window)
+func pt_window_set_caret_movement voidpt_window_set_caret_movement(pt_window*window,pt_caret_movementmovement)
 func pt_window_set_close_callback voidpt_window_set_close_callback(pt_window*window,pt_close_callbackcallback,void*user_data)
 func pt_window_set_decorated voidpt_window_set_decorated(pt_window*window,booldecorated)
 func pt_window_set_decoration_mode voidpt_window_set_decoration_mode(pt_window*window,pt_decoration_modemode)

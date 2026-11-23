@@ -252,6 +252,26 @@ class app {
     [[nodiscard]] pt_ui_direction ui_direction() const {
         return pt_app_get_ui_direction(handle_);
     }
+    /* Application caret movement policy; inherit (zero) resolves to visual. */
+    void set_caret_movement(pt_caret_movement movement) const {
+        pt_app_set_caret_movement(handle_, movement);
+    }
+    [[nodiscard]] pt_caret_movement caret_movement() const {
+        return pt_app_get_caret_movement(handle_);
+    }
+    /* Locale hint for the application fallback direction. An empty string
+     * clears it; an explicit ui_direction always wins. */
+    void set_locale(std::string_view locale) const {
+        std::string value = copy_string(locale);
+        pt_app_set_locale(handle_, value.c_str());
+    }
+    [[nodiscard]] std::optional<std::string> locale() const {
+        const char *value = pt_app_get_locale(handle_);
+        if (!value) {
+            return std::nullopt;
+        }
+        return std::string(value);
+    }
     void set_quit_on_last_window_close(bool enabled) const {
         pt_app_set_quit_on_last_window_close(handle_, enabled);
     }
@@ -365,6 +385,12 @@ class app {
 inline std::string last_error() {
     const char *message = pt_get_last_error();
     return message ? message : "";
+}
+
+/* Bounded locale-to-direction lookup; an empty locale is LTR. */
+inline pt_ui_direction locale_ui_direction(std::string_view locale) {
+    std::string value = copy_string(locale);
+    return pt_locale_ui_direction(value.c_str());
 }
 
 /* Non-owning handle over an asynchronous drop read. Streams are opened by
@@ -626,6 +652,15 @@ class widget {
     }
     [[nodiscard]] pt_text_direction text_direction() const {
         return pt_widget_get_text_direction(handle_);
+    }
+    /* Caret movement policy; inherit (zero) follows the ancestor, window and
+     * application chain and resolves to visual. */
+    widget &set_caret_movement(pt_caret_movement movement) {
+        pt_widget_set_caret_movement(handle_, movement);
+        return *this;
+    }
+    [[nodiscard]] pt_caret_movement caret_movement() const {
+        return pt_widget_get_caret_movement(handle_);
     }
     widget &set_visible(bool visible) {
         pt_widget_set_visible(handle_, visible);
@@ -1995,6 +2030,14 @@ class window {
     }
     [[nodiscard]] pt_ui_direction ui_direction() const {
         return pt_window_get_ui_direction(handle_);
+    }
+    /* Window caret movement policy; inherit (zero) follows the application. */
+    window &set_caret_movement(pt_caret_movement movement) {
+        pt_window_set_caret_movement(handle_, movement);
+        return *this;
+    }
+    [[nodiscard]] pt_caret_movement caret_movement() const {
+        return pt_window_get_caret_movement(handle_);
     }
     window &set_decorated(bool decorated) {
         pt_window_set_decorated(handle_, decorated);
