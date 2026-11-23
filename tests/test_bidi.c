@@ -798,6 +798,276 @@ static void test_rendering(pt_font *font) {
     pt_canvas_destroy(canvas);
 }
 
+/* --- Bidi control inventory and sanitization (2.1) ------------------------- */
+
+/* The nine explicit controls, in kind order (kind 1..9). */
+static const char *const bidi_controls[9] = {
+    "\xE2\x80\xAA", "\xE2\x80\xAB", "\xE2\x80\xAC", "\xE2\x80\xAD", "\xE2\x80\xAE",
+    "\xE2\x81\xA6", "\xE2\x81\xA7", "\xE2\x81\xA8", "\xE2\x81\xA9",
+};
+static const uint32_t bidi_control_points[9] = {0x202Au, 0x202Bu, 0x202Cu, 0x202Du, 0x202Eu,
+                                                0x2066u, 0x2067u, 0x2068u, 0x2069u};
+
+#define UFFFD "\xEF\xBF\xBD"
+
+static void test_control_inventory_each(void) {
+    /* Each control alone, and embedded in "a" ... "b", reports the exact
+     * offset, length, kind and code point. */
+    for (size_t i = 0; i < 9; ++i) {
+        char text[8] = {'a', 0, 0, 0, 'b', 0};
+        memcpy(text + 1, bidi_controls[i], 3);
+        pt_bidi_control_span spans[2];
+        memset(spans, 0xAB, sizeof spans);
+        size_t count = pt_bidi_control_inventory(text, 5, spans, 2);
+        pt_check(count == 1);
+        pt_check(spans[0].offset == 1);
+        pt_check(spans[0].length == 3);
+        pt_check(spans[0].kind == (pt_bidi_control_kind)(i + 1));
+        pt_check(spans[0].codepoint == bidi_control_points[i]);
+        /* Only the first min(total, capacity) entry is written. */
+        pt_check((unsigned char)spans[1].offset == 0xAB);
+
+        count = pt_bidi_control_inventory(bidi_controls[i], 3, spans, 2);
+        pt_check(count == 1 && spans[0].offset == 0 && spans[0].length == 3);
+    }
+
+    /* The enum values are the pinned ABI values. */
+    pt_check(pt_bidi_control_none == 0);
+    pt_check(pt_bidi_control_lre == 1 && pt_bidi_control_rle == 2);
+    pt_check(pt_bidi_control_pdf == 3 && pt_bidi_control_lro == 4);
+    pt_check(pt_bidi_control_rlo == 5 && pt_bidi_control_lri == 6);
+    pt_check(pt_bidi_control_rli == 7 && pt_bidi_control_fsi == 8);
+    pt_check(pt_bidi_control_pdi == 9);
+    pt_check(pt_bidi_sanitize_strip == 0 && pt_bidi_sanitize_neutralize == 1);
+}
+
+static void test_control_inventory_mixed(void) {
+    /* "abc" RLO DEF PDI "." RLI "X" LRE "Y" — five controls, exact offsets. */
+    const char text[] = "abc"
+                        "\xE2\x80\xAE"
+                        "DEF"
+                        "\xE2\x81\xA9"
+                        "."
+                        "\xE2\x81\xA7"
+                        "X"
+                        "\xE2\x80\xAA"
+                        "Y";
+    size_t length = sizeof text - 1;
+    pt_bidi_control_span spans[8];
+    size_t count = pt_bidi_control_inventory(text, length, spans, 8);
+    pt_check(count == 4);
+    pt_check(spans[0].offset == 3 && spans[0].kind == pt_bidi_control_rlo);
+    pt_check(spans[0].codepoint == 0x202Eu);
+    pt_check(spans[1].offset == 9 && spans[1].kind == pt_bidi_control_pdi);
+    pt_check(spans[2].offset == 13 && spans[2].kind == pt_bidi_control_rli);
+    pt_check(spans[3].offset == 17 && spans[3].kind == pt_bidi_control_lre);
+    for (size_t i = 0; i < count; ++i) pt_check(spans[i].length == 3);
+
+    /* Every control in a row keeps increasing offsets. */
+    char all[9 * 3 + 2];
+    all[0] = 'x';
+    for (size_t i = 0; i < 9; ++i) memcpy(all + 1 + i * 3, bidi_controls[i], 3);
+    all[1 + 9 * 3] = 'y';
+    count = pt_bidi_control_inventory(all, 1 + 9 * 3 + 1, spans, 8);
+    pt_check(count == 9);
+    for (size_t i = 0; i < 8; ++i) {
+        pt_check(spans[i].offset == 1 + i * 3);
+        pt_check(spans[i].kind == (pt_bidi_control_kind)(i + 1));
+    }
+
+    /* Capacity truncation still returns the total; count-only needs no array. */
+    pt_bidi_control_span two[2];
+    count = pt_bidi_control_inventory(all, 1 + 9 * 3 + 1, two, 2);
+    pt_check(count == 9);
+    pt_check(two[0].offset == 1 && two[1].offset == 4);
+    pt_check(pt_bidi_control_inventory(all, 1 + 9 * 3 + 1, NULL, 0) == 9);
+    pt_check(pt_bidi_control_inventory(all, 1 + 9 * 3 + 1, two, 0) == 9);
+    pt_check(two[0].offset == 1);
+
+    /* NULL and empty count nothing and leave the array untouched. */
+    pt_check(pt_bidi_control_inventory(NULL, 4, spans, 8) == 0);
+    pt_check(pt_bidi_control_inventory(NULL, 0, spans, 8) == 0);
+    pt_check(pt_bidi_control_inventory("", 0, spans, 8) == 0);
+    pt_check(pt_bidi_control_inventory("abc", 0, spans, 8) == 0);
+
+    /* A length shorter than the string stops the scan at the boundary. */
+    pt_check(pt_bidi_control_inventory("abc\xE2\x80\xAE", 3, spans, 8) == 0);
+    pt_check(pt_bidi_control_inventory("abc\xE2\x80\xAE", 4, spans, 8) == 0);
+}
+
+static void test_control_inventory_ignores_bn(void) {
+    /* The internal paint-skip predicate covers BN and the explicit controls;
+     * the public inventory reports only the nine explicit controls. ZWSP
+     * U+200B, ZWNJ U+200C, ZWJ U+200D, LRM U+200E, RLM U+200F, soft hyphen
+     * U+00AD, word joiner U+2060 and the byte order marks U+FEFF are not
+     * reported even though several are X9-removed when painted. */
+    const char bn_text[] = "a"
+                           "\xE2\x80\x8B"
+                           "b"
+                           "\xE2\x80\x8C"
+                           "c"
+                           "\xE2\x80\x8D"
+                           "d"
+                           "\xE2\x80\x8E"
+                           "e"
+                           "\xE2\x80\x8F"
+                           "f"
+                           "\xC2\xAD"
+                           "g"
+                           "\xE2\x81\xA0"
+                           "h"
+                           "\xEF\xBB\xBF";
+    pt_bidi_control_span spans[4];
+    pt_check(pt_bidi_control_inventory(bn_text, sizeof bn_text - 1, spans, 4) == 0);
+
+    pt_check(pt_bidi_is_removed(0x200Bu)); /* ZWSP: BN */
+    pt_check(pt_bidi_is_removed(0x200Cu)); /* ZWNJ: BN */
+    pt_check(pt_bidi_is_removed(0x200Du)); /* ZWJ: BN */
+    pt_check(pt_bidi_is_removed(0x00ADu)); /* soft hyphen: BN */
+    pt_check(pt_bidi_is_removed(0x2060u)); /* word joiner: BN */
+    pt_check(!pt_bidi_is_removed(0x2066u)); /* LRI is not X9-removed */
+
+    /* Invalid UTF-8 and a truncated control sequence are not reported. */
+    const char invalid[] = {'a', (char)0xFF, (char)0xE2, (char)0x80, 'b', 0};
+    pt_check(pt_bidi_control_inventory(invalid, 5, spans, 4) == 0);
+}
+
+static void test_control_sanitize(void) {
+    const char text[] = "abc"
+                        "\xE2\x80\xAE"
+                        "DEF"
+                        "\xE2\x81\xA9";
+    size_t length = sizeof text - 1;
+    size_t out_length = 123;
+
+    char *stripped = pt_bidi_sanitize(text, length, pt_bidi_sanitize_strip, &out_length);
+    pt_check(stripped != NULL);
+    pt_check(out_length == 6);
+    pt_check(strcmp(stripped, "abcDEF") == 0);
+    pt_check(pt_bidi_control_inventory(stripped, out_length, NULL, 0) == 0);
+    pt_free(stripped);
+
+    char *neutral = pt_bidi_sanitize(text, length, pt_bidi_sanitize_neutralize, &out_length);
+    pt_check(neutral != NULL);
+    /* Two controls each grow to three bytes: 6 + 2 * 3. */
+    pt_check(out_length == 12);
+    pt_check(strcmp(neutral, "abc" UFFFD "DEF" UFFFD) == 0);
+    pt_check(strstr(neutral, UFFFD) != NULL);
+    pt_check(pt_bidi_control_inventory(neutral, out_length, NULL, 0) == 0);
+    pt_free(neutral);
+
+    /* The zero mode value is strip. */
+    out_length = 0;
+    char *zero = pt_bidi_sanitize("a" "\xE2\x80\xAA" "b", 5, (pt_bidi_sanitize_mode)0,
+                                  &out_length);
+    pt_check(zero != NULL && out_length == 2 && strcmp(zero, "ab") == 0);
+    pt_free(zero);
+
+    /* Every control neutralizes to exactly one U+FFFD. */
+    char all[9 * 3];
+    for (size_t i = 0; i < 9; ++i) memcpy(all + i * 3, bidi_controls[i], 3);
+    char *all_out = pt_bidi_sanitize(all, 27, pt_bidi_sanitize_neutralize, &out_length);
+    pt_check(all_out != NULL && out_length == 27);
+    for (size_t i = 0; i < 9; ++i) pt_check(memcmp(all_out + i * 3, UFFFD, 3) == 0);
+    pt_free(all_out);
+    all_out = pt_bidi_sanitize(all, 27, pt_bidi_sanitize_strip, &out_length);
+    pt_check(all_out != NULL && out_length == 0 && all_out[0] == '\0');
+    pt_free(all_out);
+
+    /* BN characters and invalid UTF-8 survive both modes unchanged. */
+    const char keep[] = "a\xE2\x80\x8D" "b";
+    char *kept = pt_bidi_sanitize(keep, sizeof keep - 1, pt_bidi_sanitize_neutralize, &out_length);
+    pt_check(kept != NULL && out_length == sizeof keep - 1);
+    pt_check(memcmp(kept, keep, sizeof keep - 1) == 0);
+    pt_free(kept);
+    const char bad[] = {'a', (char)0xFF, (char)0xC3, 0};
+    kept = pt_bidi_sanitize(bad, 3, pt_bidi_sanitize_strip, &out_length);
+    pt_check(kept != NULL && out_length == 3 && memcmp(kept, bad, 3) == 0);
+    pt_free(kept);
+
+    /* Empty input is an allocated empty string; out_length may be NULL. */
+    char *empty = pt_bidi_sanitize("", 0, pt_bidi_sanitize_strip, &out_length);
+    pt_check(empty != NULL && empty[0] == '\0' && out_length == 0);
+    pt_free(empty);
+    empty = pt_bidi_sanitize(NULL, 0, pt_bidi_sanitize_neutralize, NULL);
+    pt_check(empty != NULL && empty[0] == '\0');
+    pt_free(empty);
+
+    /* Invalid arguments return NULL and do not write out_length. */
+    out_length = 77;
+    pt_check(pt_bidi_sanitize(NULL, 3, pt_bidi_sanitize_strip, &out_length) == NULL);
+    pt_check(out_length == 77);
+    pt_check(pt_bidi_sanitize("abc", 3, (pt_bidi_sanitize_mode)2, &out_length) == NULL);
+    pt_check(pt_bidi_sanitize("abc", 3, (pt_bidi_sanitize_mode)-1, &out_length) == NULL);
+    pt_check(out_length == 77);
+    pt_check(pt_bidi_sanitize("abc", SIZE_MAX, pt_bidi_sanitize_strip, &out_length) == NULL);
+
+    /* pt_free(NULL) is safe, and a round trip is byte-exact for plain text. */
+    pt_free(NULL);
+    char plain[] = "plain \xD7\x90\xD7\x91 text";
+    kept = pt_bidi_sanitize(plain, sizeof plain - 1, pt_bidi_sanitize_neutralize, &out_length);
+    pt_check(kept != NULL && out_length == sizeof plain - 1);
+    pt_check(memcmp(kept, plain, sizeof plain - 1) == 0);
+    pt_free(kept);
+}
+
+/* CVE-2021-42574 class: an RLO override that visually reverses the rest of a
+ * line, wrapped in an isolate pair, hidden inside an identifier. */
+static void test_control_trojan_source(void) {
+    /* "if (access != 'user') {" then RLI + LRI "// Check if admin" PDI PDI so a
+     * reviewer reads the comment while the bytes carry the code. */
+    const char source[] = "if (isAdmin) { // admin\n"
+                          "\xE2\x81\xA7"
+                          "\xE2\x81\xA6"
+                          " } else { // guest"
+                          "\xE2\x81\xA9"
+                          "\xE2\x81\xA9"
+                          "\n";
+    size_t length = sizeof source - 1;
+    pt_bidi_control_span spans[4];
+    size_t count = pt_bidi_control_inventory(source, length, spans, 4);
+    pt_check(count == 4);
+    pt_check(spans[0].kind == pt_bidi_control_rli);
+    pt_check(spans[1].kind == pt_bidi_control_lri);
+    pt_check(spans[2].kind == pt_bidi_control_pdi);
+    pt_check(spans[3].kind == pt_bidi_control_pdi);
+    pt_check(spans[0].offset == strlen("if (isAdmin) { // admin\n"));
+    pt_check(spans[1].offset == spans[0].offset + 3);
+
+    /* The text does reorder for the bidi-aware renderer, which is why the
+     * inventory exists: the bytes look harmless without it. */
+    pt_check(pt_bidi_text_may_reorder(source, length));
+
+    size_t out_length = 0;
+    char *clean = pt_bidi_sanitize(source, length, pt_bidi_sanitize_strip, &out_length);
+    pt_check(clean != NULL);
+    pt_check(pt_bidi_control_inventory(clean, out_length, NULL, 0) == 0);
+    pt_check(strstr(clean, "if (isAdmin) { // admin\n } else { // guest\n") != NULL);
+    pt_free(clean);
+
+    /* The classic RLO filename disguise: "exe.txt" with the visible name
+     * reversed. Neutralizing shows the tampering instead of hiding it. */
+    const char filename[] = "report"
+                            "\xE2\x80\xAE"
+                            "fdp.exe";
+    count = pt_bidi_control_inventory(filename, sizeof filename - 1, spans, 4);
+    pt_check(count == 1 && spans[0].kind == pt_bidi_control_rlo && spans[0].offset == 6);
+    char *shown = pt_bidi_sanitize(filename, sizeof filename - 1, pt_bidi_sanitize_neutralize,
+                                   &out_length);
+    pt_check(shown != NULL && out_length == 6 + 3 + 7);
+    pt_check(memcmp(shown + 6, UFFFD, 3) == 0);
+    pt_free(shown);
+
+    /* A text setter stores the control bytes unchanged: sanitization is
+     * opt-in and no existing path calls it. */
+    pt_widget *label = pt_label_create(NULL, source);
+    pt_check(label != NULL);
+    const char *stored = pt_widget_get_text(label);
+    pt_check(stored != NULL && strcmp(stored, source) == 0);
+    pt_check(pt_bidi_control_inventory(stored, strlen(stored), NULL, 0) == 4);
+    pt_widget_destroy(label);
+}
+
 int main(void) {
     pt_bidi_base base = pt_bidi_base_auto;
 
@@ -805,6 +1075,11 @@ int main(void) {
     test_byte_maps();
     test_controls_and_combining();
     test_line_l1_whitespace();
+    test_control_inventory_each();
+    test_control_inventory_mixed();
+    test_control_inventory_ignores_bn();
+    test_control_sanitize();
+    test_control_trojan_source();
 
     pt_font *font = pt_font_acquire("DejaVu Sans", pt_font_weight_regular,
                                     pt_font_slant_upright, 24.0f);
