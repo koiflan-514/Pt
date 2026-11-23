@@ -6,13 +6,14 @@
 应用可以使用 C、C++、Python 或 Java 编写，面向同一套扁平 C ABI。
 这个名字是铂的化学符号：小而致密、不易反应。
 
-状态：**2.0.0**。从右到左与双向文本版本：通过随源码附带的 SheenBidi 引擎实现
-完整的 Unicode 双向算法并达到 100% 一致性，新增八个方向函数，视觉插入符号移动
-与选择，镜像 UI 几何和界面元素，无障碍方向属性，以及逐字节的 LTR 兼容闸门。
-表面为包含 564 个函数的 C ABI，由 C++/Python/Java 封装，并强制要求绑定功能对等；
-SONAME 保持 `libpt.so.1`，因为 2.0 只新增声明并修正双向文本渲染，不破坏二进制
-接口（`ABI_MAJOR` 与 `VERSION` 分开跟踪）。
-发布记录已写好，最终门禁运行与带注释的标签随后进行；参见
+状态：**2.1.0**。从右到左人体工学与安全版本：新增可选的逻辑插入符号移动策略
+（不取消视觉编辑），一个有界的区域设置到方向辅助函数，用于不可信文本的双向控制
+字符清单与清理（Trojan Source），以及逻辑起始/结束内边距——全部建立在内含 100%
+Unicode 一致性的 2.0 双向文本引擎和逐字节 LTR 兼容闸门之上。
+表面为包含 576 个函数的 C ABI，由 C++/Python/Java 封装，并强制要求绑定功能对等；
+SONAME 保持 `libpt.so.1`，因为 2.1 只新增声明，且每个默认值都保持 2.0 行为
+（`ABI_MAJOR` 与 `VERSION` 分开跟踪）。
+发布记录为草稿，最终门禁运行标记仍未回填；参见
 [docs/release.md](docs/release.md)。API 由经审阅的基线、生成的函数参考和
 兼容性策略共同跟踪；参见 [docs/api-reference.md](docs/api-reference.md)、
 [docs/api-policy.md](docs/api-policy.md) 和 [docs/ROADMAP.md](docs/ROADMAP.md)。
@@ -24,8 +25,9 @@ SONAME 保持 `libpt.so.1`，因为 2.0 只新增声明并修正双向文本渲�
 - 保留模式控件树，以及一套扁平、不透明、便于绑定的 C ABI。
 - 清晰的 FreeType + HarfBuzz 文本，包括 CJK 字形整形和分数缩放。
 - 正确实现从右到左文本：完整的 Unicode 双向算法、带自动括号镜像的阿拉伯文和
-  希伯来文整形、镜像行、列序保持逻辑的表格、视觉插入符号移动，以及无障碍方向
-  属性——纯 LTR 界面的像素保持不变。
+  希伯来文整形、镜像行、列序保持逻辑的表格、默认视觉插入符号移动并可选逻辑
+  策略、区域设置到方向的辅助函数、不可信文本的双向控制字符扫描与清理、逻辑
+  起始/结束内边距，以及无障碍方向属性——纯 LTR 界面的像素保持不变。
 - 现代令牌化设计语言：38 个语义颜色角色和 10 个几何度量，
   深邃的深色调色板与干净的浅色调色板，色调化控件表面，柔和强调色，
   焦点可见环和克制的动效，可按窗口覆盖。
@@ -53,6 +55,52 @@ SONAME 保持 `libpt.so.1`，因为 2.0 只新增声明并修正双向文本渲�
 - 基于 `wl_shm` 的软件渲染：冷启动快，窗口未获焦时空闲占用不到单核的 0.3%，
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
+
+## 2.1.0 的新特性
+
+2.1.0 是从右到左人体工学与安全版本。它封闭了 2.0 记录为有意限制的四个缺口，
+并且不改变任何默认值：新增 **12 个公共函数、3 个枚举（15 个值）和 1 个结构体**，
+而每项功能都是可选的，因此表面变为 **576 个函数和 952 条基线条目**，相对 2.0.0
+0 移除、0 变更。SONAME 保持 `libpt.so.1`：本版本纯属追加式，零初始化的应用保持
+2.0 的像素、插入符号、内边距和文本路径。带注释的标签在最终门禁运行后创建，记录见
+[release.md](docs/release.md)。
+
+- **插入符号移动策略。** `pt_caret_movement`（`inherit`/`visual`/`logical`）加上
+  应用、窗口和控件 setter/getter，共六个函数。解析顺序为控件的显式值，然后是
+  最近显式祖先，然后是窗口，然后是应用，最后是**视觉**，因此 `inherit`（零值）
+  完全保持 2.0 行为。`logical` 模式下，左/右方向键按存储字符串中的 UTF-8 字符
+  边界移动，Home/End 前往逻辑行末；纵向移动、Shift 选择、Backspace/Delete 和
+  输入法插入符号矩形保持 2.0 规则。2.0 的窗口按键回调仍然可用，但不再是获得逻辑
+  方向键的唯一途径。
+- **区域设置提示而非猜测。** `pt_locale_ui_direction(locale)` 是一个有界、不依赖
+  ICU、线程安全的查找：把 BCP-47 或 POSIX 区域设置的语言和脚本子标签与一份保守的
+  RTL 表匹配（阿拉伯文、希伯来文、波斯文、乌尔都文，以及 `Arab`/`Hebr`/`Thaa`/
+  `Nkoo`/`Syrc` 脚本；脚本优先，因此 `az-Arab` 为 RTL 而 `az-Latn` 保持 LTR）。
+  `pt_app_set_locale` 把解析后的字符串存为提示，`pt_app_get_locale` 返回存储的
+  提示；显式的 `pt_app_set_ui_direction` 在任意调用顺序下都优先。不读取环境变量，
+  未设置区域设置时解析为 LTR，因此零初始化的应用不变。
+- **双向控制字符扫描与清理（Trojan Source）。** 新的公共头
+  `include/pt/bidi.h` 新增 `pt_bidi_control_inventory(text, length, spans,
+  capacity)`，以逐字节精确解码报告九个显式方向控制符（U+202A–U+202E 和
+  U+2066–U+2069），给出字节偏移、长度和类别——无分配，且容量不足时仍返回总数；
+  以及 `pt_bidi_sanitize(text, length, mode, &out_length)`，返回调用方拥有的缓冲
+  （用 `pt_free` 释放），把控制符**剥离**或**替换**为 U+FFFD（最坏情况 `3n+1`
+  字节）。两者都是**可选**的：没有任何控件、剪贴板、拖动或无障碍路径会自动清理，
+  因此存储字节和每个字节偏移都保持应用提供时的原样。公共清单按设计比内部
+  `pt_bidi_is_removed` 的 X9 绘制谓词范围更窄。
+- **逻辑起始/结束内边距。** `pt_widget_set_padding_logical(top, start, bottom,
+  end)` 存储逻辑边缘，一个布局/测量前置过程在每次布局时按控件解析后的 UI 方向
+  写入解析后的物理边缘，因此 RTL 的 `start` 是右边缘、`end` 是左边缘，之后的方向
+  变化（显式或继承）无需再次调用即会生效。`pt_widget_set_padding` 保持物理语义且
+  last-call-wins；外边距保持物理；从未调用新函数的控件布局与 2.0 完全相同。
+- **LTR 仍由两道硬门保护。** 2.0 的 golden 不变：纯 LTR PNG 快照逐字节一致，
+  `tools/ltr-compat.sh` 对 1.4.0 报告 **11/11 `SAME`**，Unicode 一致性计数保持
+  770,241 + 91,707 且 0 失败，并且保留了每一个 2.0 测试断言。C++、Python 和 Java
+  的功能对等为 **576/576**，允许列表为空。
+- **示例。** `examples/c/ergonomics_gallery.c` 切换插入符号策略、设置区域设置提示、
+  用逻辑起始/结束内边距为卡片设置内边距，并清理一个不可信字符串；
+  `examples/cpp/ergonomics.cpp`、`examples/python/ergonomics.py` 和
+  `examples/java/Ergonomics.java` 是每种绑定更小的 2.1 示范。
 
 ## 2.0.0 的新特性
 
@@ -534,7 +582,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` 以无头方式运行，不需要合成器。它包含 C 测试套件、
 C++/Python/Java 绑定测试套件、导出符号和 API 基线审计、
-硬性的 564/564 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
+硬性的 576/576 绑定功能对等闸门、按轮次的 0.6–0.10 表面审计、
 `docs/api-reference.md` 与头文件一致的检查，以及针对文本编辑、URI 解析、
 数据视图索引和损坏矩形的随机属性测试套件。
 实时 Wayland 冒烟测试不属于 `make check`。`make check-wayland`
@@ -563,19 +611,23 @@ C++/Python/Java 绑定测试套件、导出符号和 API 基线审计、
 | C | [notes.c](examples/c/notes.c) | `make run-notes` |
 | C | [combobox.c](examples/c/combobox.c) | `make run-combobox` |
 | C | [rtl_gallery.c](examples/c/rtl_gallery.c) | `make run-rtl-gallery` |
+| C | [ergonomics_gallery.c](examples/c/ergonomics_gallery.c) | `make run-ergonomics-gallery` |
 | C++23 | [counter.cpp](examples/cpp/counter.cpp) | `make run-counter` |
 | C++23 | [workspace.cpp](examples/cpp/workspace.cpp) | `make run-cpp-workspace` |
 | C++23 | [combobox.cpp](examples/cpp/combobox.cpp) | `make run-cpp-combobox` |
 | C++23 | [rtl_direction.cpp](examples/cpp/rtl_direction.cpp) | `make run-cpp-rtl-direction` |
+| C++23 | [ergonomics.cpp](examples/cpp/ergonomics.cpp) | `make run-cpp-ergonomics` |
 | Python | [counter.py](examples/python/counter.py) | `make run-python` |
 | Python | [notes.py](examples/python/notes.py) | `python examples/python/notes.py` |
 | Python | [workspace.py](examples/python/workspace.py) | `make run-python-workspace` |
 | Python | [combobox.py](examples/python/combobox.py) | `make run-python-combobox` |
 | Python | [rtl_direction.py](examples/python/rtl_direction.py) | `make run-python-rtl-direction` |
+| Python | [ergonomics.py](examples/python/ergonomics.py) | `make run-python-ergonomics` |
 | Java 25 | [HelloPt.java](examples/java/HelloPt.java) | `make run-java` |
 | Java 25 | [Workspace.java](examples/java/Workspace.java) | `make run-java-workspace` |
 | Java 25 | [Combobox.java](examples/java/Combobox.java) | `make run-java-combobox` |
 | Java 25 | [RtlDirection.java](examples/java/RtlDirection.java) | `make run-java-rtl-direction` |
+| Java 25 | [Ergonomics.java](examples/java/Ergonomics.java) | `make run-java-ergonomics` |
 
 C 和 C++ 示例由 `make` 构建；Python 和 Java 运行目标会自动构建或定位库。
 所有示例既可原生运行，也可在无头测试环境中运行。
@@ -718,7 +770,7 @@ pkg-config --modversion pt
 
 <a id="limitations-in-20"></a>
 
-## 2.0 中的限制
+## 2.1 中的限制
 
 - 仅支持 Wayland；没有 X11、Windows 或 macOS 后端。
 - 1.x ABI 为只追加：移除需要主版本发布和 SONAME 提升。
@@ -764,8 +816,11 @@ pkg-config --modversion pt
   折叠，而绘制的矩形保持正确。`pt_text_span` 没有方向字段。缺失的阿拉伯文/
   希伯来文字形是记录在案的豆腐块，由 `pt_app_font_uncovered_count` 报告，
   不是硬错误；请安装覆盖它们的字体，例如 Noto Sans Arabic/Hebrew 或
-  DejaVu Sans。双向控制字符可以重排显示文本（Trojan Source 一类问题），且不会
-  被自动清理；接受不可信文本的应用应自行剥离或显示它们。详情见
+  DejaVu Sans。双向控制字符可以重排显示文本（Trojan Source 一类问题）：2.1
+  为此提供 `pt_bidi_control_inventory` 和 `pt_bidi_sanitize`，但清理是可选的，
+  没有任何文本路径会自动调用它，因此接受不可信文本的应用必须在显示、记日志或
+  存储之前自行清理。区域设置提示只用于选择默认方向；文本、日期、数字和选择器
+  仍与区域设置无关。详情见
   [RTL 与双向文本指南](docs/zh-CN/rtl.md)。
 - 表格列保留应用设置的宽度，这些宽度在重新绑定和行回收后仍然有效；
   列可以隐藏、通过拖动调整大小，也可以由用户重新排序。排序报告最多四个

@@ -2,11 +2,14 @@
 
 English | [简体中文](zh-CN/rtl.md)
 
-Status: delivered in 2.0.0. This document is the design contract that 2.0
-ships, not a post-1.0 plan. The direction API is additive, the text model and
-the offset contracts are unchanged, and a pure LTR application keeps the 1.4
-pixels byte for byte. Every section below states what landed, the decisions
-that were taken while building it, and the limitations that remain.
+Status: delivered in 2.0.0, extended in 2.1.0. This document is the design
+contract that 2.0 ships plus the 2.1 ergonomics and safety additions, not a
+post-1.0 plan. Every addition is additive, the text model and the offset
+contracts are unchanged, and a pure LTR application keeps the 1.4 pixels byte
+for byte. Every section below states what landed, the decisions that were
+taken while building it, and the limitations that remain. The 2.1 sections are
+marked as such; [m23-design.md](m23-design.md) records their design input and
+[release.md](release.md) the release.
 
 Related reading: [architecture.md](architecture.md) describes the bidi pipeline
 inside layout and painting, [accessibility.md](accessibility.md) defines the
@@ -85,10 +88,13 @@ the resolved one: an unset widget reports `pt_ui_direction_inherit` or
 `inherit` and `auto` are the zero values, so a zero-initialized widget keeps the
 1.x behavior and an application that wants an RTL shell sets the UI direction
 once on the app or window. A nested editor overrides it with
-`pt_widget_set_ui_direction(editor, pt_ui_direction_ltr)`. The release does not
-guess the UI direction from the process locale; 1.0 has no locale API and a
-wrong guess would mirror every window. Auto text direction is safe because it
-applies per paragraph and does not move UI chrome.
+`pt_widget_set_ui_direction(editor, pt_ui_direction_ltr)`. Pt does not guess
+the UI direction from the process environment, because a wrong guess would
+mirror every window. 2.1 offers an explicit hint instead: the application reads
+the locale it already resolved, the pure helper maps it to a direction, and the
+result joins the resolution chain as the application fallback. Auto text
+direction is safe because it applies per paragraph and does not move UI
+chrome.
 
 ```c
 pt_app_set_ui_direction(app, pt_ui_direction_rtl);
@@ -156,9 +162,14 @@ direction and level key, so the same bytes shaped LTR and RTL never collide.
   the intentional correction 2.0 records.
 - Start/end alignment resolves against the paragraph direction, including
   multi-paragraph text areas. Center alignment is unchanged.
-- Padding and margin stay physical, with no start/end API. A mirrored row flips
-  child order and alignment, not the meaning of the four padding values. This
-  is the recorded decision for 2.0 rather than an implied guarantee.
+- Padding can be set in either order. `pt_widget_set_padding` stays physical
+  and is the default; `pt_widget_set_padding_logical` (since 2.1) takes
+  top/start/bottom/end and resolves start/end against the widget's UI
+  direction on every layout, so an RTL widget gets start on the right and a
+  later direction change re-resolves without another call. The two setters
+  share the same four edges and the last call wins. Margin is still physical
+  and has no logical setter: a mirrored row flips child order and alignment,
+  not the meaning of the four margin values.
 - Ellipsis and clipping stay on the visual end. User-supplied images are never
   mirrored automatically.
 
@@ -188,10 +199,162 @@ in an RTL run:
   direction of its insertion context.
 - A password entry paints bullets from the stored text direction, so the
   bullets never reveal the content's direction through the visual order.
-- An application that needs logical movement can intercept Left, Right, Home
-  and End in `pt_window_set_key_callback`, which runs before the focused
-  widget, and consume them. That escape hatch is the 2.0 answer; there is no
-  ninth direction API and no per-widget caret-mode property.
+- Logical movement is a policy, not an interception. 2.1 adds
+  `pt_caret_movement` (see the section below), so an application that wants
+  logical arrows sets it and an application that needs something else — a
+  custom motion, extra keys — can still intercept Left, Right, Home and End in
+  `pt_window_set_key_callback`, which runs before the focused widget. The
+  callback still wins over the policy.
+
+## Caret movement policy (2.1)
+
+2.0 chose visual movement by default and left logical movement to the window key
+callback. 2.1 keeps the default and makes the alternative declarative:
+
+```c
+typedef enum pt_caret_movement {
+    pt_caret_movement_inherit = 0,
+    pt_caret_movement_visual,
+    pt_caret_movement_logical
+} pt_caret_movement;
+
+void pt_app_set_caret_movement(pt_app *app, pt_caret_movement movement);
+pt_caret_movement pt_app_get_caret_movement(const pt_app *app);
+void pt_window_set_caret_movement(pt_window *window, pt_caret_movement movement);
+pt_caret_movement pt_window_get_caret_movement(const pt_window *window);
+void pt_widget_set_caret_movement(pt_widget *widget, pt_caret_movement movement);
+pt_caret_movement pt_widget_get_caret_movement(const pt_widget *widget);
+```
+
+Resolution is the widget's explicit value, then the nearest explicit ancestor,
+then the window, then the application, then **visual**. `inherit` is the zero
+value, so a zero-initialized application and widget keep 2.0 behavior and the
+default is the same visual editing described above.
+
+- **Visual** (default) is exactly the 2.0 movement.
+- **Logical** moves Left/Right by UTF-8 character boundary in the stored
+  string and Home/End to the logical line ends. It applies to entries and text
+  areas only.
+- **Unchanged in both modes:** Up/Down/Page Up/Page Down keep their visual goal
+  x, Shift+arrow keeps a fixed logical anchor and reports a logical byte range,
+  Backspace/Delete stay logical, clicks go through the bidi map, and the IME
+  and accessibility caret rectangles stay visual.
+- A password entry derives its bullet direction from the stored text in both
+  modes, so the policy never leaks the content's direction.
+- Setters ignore NULL and out-of-range values; getters return the stored
+  explicit value. A change does not invalidate layout and does not repaint: it
+  affects the next key event only.
+
+```c
+/* A source editor inside an RTL shell: logical arrows for the editor, the
+ * visual default everywhere else. */
+pt_app_set_locale(app, "he_IL.UTF-8");      /* application fallback: RTL */
+pt_widget_set_caret_movement(editor, pt_caret_movement_logical);
+```
+
+## Locale hint (2.1)
+
+`pt_locale_ui_direction(const char *locale)` maps a BCP-47 or POSIX locale name
+to a default interface direction. It is a bounded, ICU-free lookup: parsing
+stops at `.` (codeset) and `@` (modifier), the remaining tag splits on `-` or
+`_`, ASCII is lowercased, and at most 64 bytes are examined. The language and
+the optional four-letter script subtag are matched against a conservative
+table.
+
+- RTL scripts: `Arab`, `Hebr`, `Thaa`, `Nkoo`, `Syrc`, `Samr`, `Mand`, `Mend`,
+  `Adlm`, `Rohg`.
+- RTL languages when no script is given: `ar`, `arc`, `bal`, `bgn`, `ckb`,
+  `dv`, `fa`, `glk`, `he`, `iw`, `khw`, `ks`, `lrc`, `mzn`, `nqo`, `prs`,
+  `ps`, `rhg`, `sd`, `syr`, `ug`, `ur`, `yi`, `ji`.
+- A script subtag wins over the language: `az-Arab`, `ku-Arab`, `pa-Arab` and
+  `ms-Arab` are RTL while plain `az`, `ku`, `pa` and `ms` are LTR.
+- Everything else — including NULL, empty, `C` and `POSIX` — is LTR.
+
+`pt_app_set_locale` copies the string as a hint and `pt_app_get_locale` borrows
+it until the next set or `pt_app_destroy`; NULL or an empty string clears the
+hint. The resolution chain becomes widget → nearest explicit ancestor → window
+→ **application explicit → application locale hint** → LTR, so an explicit
+`pt_app_set_ui_direction` always wins regardless of call order. The helper is
+thread-safe and never reads the environment: the application passes the locale
+it already resolved. An unset locale resolves to LTR, exactly as in 2.0.
+
+```c
+pt_app_set_locale(app, "ar_EG.UTF-8");        /* app fallback RTL */
+pt_ui_direction guess = pt_locale_ui_direction("az-Arab"); /* rtl: script wins */
+```
+
+## Bidi control safety (2.1)
+
+Bidi control characters can reorder what a reader sees without changing the
+stored bytes — the Trojan-Source class of attack (CVE-2021-42574). Pt keeps the
+controls in the stored string for shaping and skips them when painting; it never
+removes them silently. 2.1 adds the primitives an application needs, in the new
+public header `include/pt/bidi.h`:
+
+```c
+typedef enum pt_bidi_control_kind {
+    pt_bidi_control_none = 0,
+    pt_bidi_control_lre,  pt_bidi_control_rle,  pt_bidi_control_pdf,
+    pt_bidi_control_lro,  pt_bidi_control_rlo,  pt_bidi_control_lri,
+    pt_bidi_control_rli,  pt_bidi_control_fsi,  pt_bidi_control_pdi
+} pt_bidi_control_kind;
+
+typedef struct pt_bidi_control_span {
+    size_t offset;                    /* UTF-8 byte offset in the input */
+    size_t length;                    /* bytes occupied (2 or 3) */
+    pt_bidi_control_kind kind;
+    uint32_t codepoint;
+} pt_bidi_control_span;
+
+typedef enum pt_bidi_sanitize_mode {
+    pt_bidi_sanitize_strip = 0,       /* remove the controls */
+    pt_bidi_sanitize_neutralize       /* replace each with U+FFFD */
+} pt_bidi_sanitize_mode;
+
+size_t pt_bidi_control_inventory(const char *text, size_t length,
+                                 pt_bidi_control_span *spans, size_t capacity);
+char *pt_bidi_sanitize(const char *text, size_t length,
+                       pt_bidi_sanitize_mode mode, size_t *out_length);
+```
+
+- The inventory reports the **nine explicit directional formatting controls**:
+  U+202A–U+202E (`LRE`, `RLE`, `PDF`, `LRO`, `RLO`) and U+2066–U+2069 (`LRI`,
+  `RLI`, `FSI`, `PDI`). Matching is byte-exact, so it works on invalid UTF-8,
+  allocates nothing and cannot be confused by continuation bytes. The return
+  value is always the total count; when `spans` is non-NULL, up to `capacity`
+  entries are written in logical order, so a count-only call sizes the buffer
+  first.
+- The sanitizer returns a newly allocated NUL-terminated copy that the caller
+  frees with `pt_free`; `out_length` receives the byte length. `strip` removes
+  the controls, `neutralize` replaces each with U+FFFD so a reader can see that
+  something was removed. The worst case is `3 * length + 1` bytes. All other
+  bytes, including invalid UTF-8, are copied unchanged.
+- Both are **opt-in**. No text setter, entry, text area, clipboard, drag or
+  accessibility path calls them, so stored bytes and every byte offset stay
+  exactly as the application supplied them. An application that accepts
+  untrusted text — a chat input, a log viewer, a file preview, anything that
+  lands in source control — should inventory or sanitize before display,
+  logging or storage.
+- The public inventory is deliberately narrower than the internal
+  `pt_bidi_is_removed`, which keeps its broader X9 meaning (explicit controls
+  plus BN characters such as ZWSP, soft hyphen, ZWJ/ZWNJ and BOM) as the paint
+  and shaping predicate. Zero-width BN characters are ordinary text to the
+  public API and are not Trojan-Source controls.
+- `pt_bidi_sanitize` is a mitigation, not a validator: it does not check the
+  rest of the UTF-8 and it does not promise that the remaining text is safe.
+
+```c
+/* Untrusted text from the network or a file. */
+size_t clean_length = 0;
+char *shown = pt_bidi_sanitize(untrusted, untrusted_length,
+                               pt_bidi_sanitize_neutralize, &clean_length);
+if (shown) {
+    pt_widget_set_text(preview, shown);   /* U+FFFD marks every removed control */
+    pt_free(shown);
+}
+/* Audit instead of rewrite: count first, then decide. */
+size_t controls = pt_bidi_control_inventory(untrusted, untrusted_length, NULL, 0);
+```
 
 ## Accessibility
 
@@ -214,17 +377,26 @@ in an RTL run:
 
 ## Bindings and examples
 
-All eight functions are wrapped in C++, Python and Java in the same change, and
-the parity gate reports 564/564 for every language with an empty allowlist. The
-wrappers are ordinary value setters/getters; C++ returns the builder from
-setters, Python exposes properties plus `set_*` methods, Java takes the C enum
-value as an `int`.
+The 2.0 direction functions are wrapped in C++, Python and Java, and the 2.1
+surface is wrapped in the same change: the parity gate reports **576/576** for
+every language with an empty allowlist. The wrappers are ordinary value
+setters/getters; C++ returns the builder from setters, Python exposes properties
+plus `set_*` methods, Java takes the C enum value as an `int`. The pure
+`pt_locale_ui_direction` helper, `pt_bidi_control_inventory` and
+`pt_bidi_sanitize` are exposed per language's idiom: C++ returns a
+`std::vector<pt_bidi_control_span>` and a `std::string`, Python a list of spans
+and a `str`, Java a `BidiControlSpan` array and a `String`.
 
 The C gallery carries an RTL screen (`examples/c/rtl_gallery.c`) with a mirrored
 row, a mixed Arabic/Hebrew/Latin label, an RTL entry, an RTL text area, a nested
 LTR panel and a direction switch. `examples/cpp/rtl_direction.cpp`,
 `examples/python/rtl_direction.py` and `examples/java/RtlDirection.java` are
-smaller switches that exercise the binding setters and getters.
+smaller switches that exercise the binding setters and getters. The 2.1
+ergonomics gallery (`examples/c/ergonomics_gallery.c`) switches the caret
+policy, sets a locale hint, pads a card with logical start/end and sanitizes an
+untrusted string, with smaller per-binding notebooks in
+`examples/cpp/ergonomics.cpp`, `examples/python/ergonomics.py` and
+`examples/java/Ergonomics.java`.
 
 ## Compatibility and rollout
 
@@ -294,9 +466,13 @@ These are documented behavior, not hidden surprises:
   it, not a hard configuration error; install Noto Sans Arabic/Hebrew or DejaVu
   Sans for the examples.
 - Bidi control characters can reorder what a reader sees, which is the
-  Trojan-Source class of problem. Pt does not sanitize text automatically; an
-  application that accepts untrusted text should strip or display controls
-  itself. A future optional API may expose the control inventory.
+  Trojan-Source class of problem. 2.1 exposes `pt_bidi_control_inventory` and
+  `pt_bidi_sanitize` for it, but sanitization stays opt-in: no text path calls
+  either function, so an application that accepts untrusted text still has to
+  use them itself before display, logging or storage.
+- The locale table is small and CLDR-derived by design. A missing language or
+  script resolves to LTR, and the hint selects a default UI direction only; it
+  does not localize text, dates, numbers, pickers or the colour field.
 
 ## Test plan
 
@@ -323,6 +499,15 @@ These are documented behavior, not hidden surprises:
   password-with-direction case.
 - **LTR compatibility.** The 17 snapshot goldens and `tools/ltr-compat.sh`'s
   11-scene cross-version comparison are release gates, not optional checks.
+- **2.1 ergonomics and safety.** `test_direction` covers the caret policy
+  chain, the locale table, the script-wins cases and the app precedence in both
+  call orders; `test_editing` and `test_text_area` assert visual and logical
+  movement on the same RTL text and keep every 2.0 assertion; `test_bidi` covers
+  the nine controls, offsets, capacity truncation, invalid UTF-8, strip and
+  neutralize, and that `pt_widget_set_text` stores controls unchanged; the
+  logical-padding cases in the layout, flex/grid and visual suites cover LTR
+  start→left, RTL start→right, a direction change after the setter,
+  measure/layout agreement, last-call-wins and the table/tree opt-out.
 
 ## Delivered waves
 
@@ -341,3 +526,12 @@ The delivery order in the original plan became the 2.0 workstreams:
 6. Accessibility attributes, bindings and examples (W6a/W6b).
 7. Conformance, fuzz, performance hardening and the LTR byte-compatibility gate
    (W7).
+
+The 2.1 ergonomics and safety workstreams are recorded in
+[m23-design.md](m23-design.md) and the [ROADMAP](ROADMAP.md):
+
+1. Caret movement policy and the locale hint (W1).
+2. Bidi control inventory and sanitization in a new `pt/bidi.h` (W2).
+3. Logical start/end padding with a layout prepass (W3).
+4. This guide, its Chinese pair, the four-language examples and the generated
+   reference (W4).

@@ -6,17 +6,18 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **2.0.0**. The right-to-left and bidirectional-text release: the full
-Unicode Bidirectional Algorithm through a vendored SheenBidi engine with 100%
-conformance, eight additive direction functions, visual caret movement and
-selection, mirrored UI geometry and chrome, an accessibility direction
-attribute, and a byte-for-byte LTR compatibility gate.
-The surface is a 564-function C ABI wrapped in C++/Python/Java with
+Status: **2.1.0**. The right-to-left ergonomics and safety release: a caret
+movement policy that adds logical arrows without taking visual editing away, a
+bounded locale-to-direction helper, bidi control inventory and sanitization for
+untrusted text (Trojan Source), and logical start/end padding, all on top of the
+2.0 bidi engine with 100% Unicode conformance and the byte-for-byte LTR
+compatibility gate.
+The surface is a 576-function C ABI wrapped in C++/Python/Java with
 binding parity enforced;
-SONAME stays `libpt.so.1` because 2.0 adds declarations and corrects bidi
-rendering without breaking the binary interface (`ABI_MAJOR` is tracked
-separately from `VERSION`). The release record is written and the final gate
-run and annotated tag follow it; see [docs/release.md](docs/release.md). The API
+SONAME stays `libpt.so.1` because 2.1 only adds declarations and every default
+keeps 2.0 behavior (`ABI_MAJOR` is tracked separately from `VERSION`). The
+release record is a draft with the final gate run markers still open; see
+[docs/release.md](docs/release.md). The API
 is tracked by a reviewed baseline, a generated function reference and a
 compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 [docs/api-policy.md](docs/api-policy.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -30,7 +31,9 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Crisp FreeType + HarfBuzz text, including CJK shaping and fractional scaling.
 - Right-to-left text done properly: the full Unicode Bidirectional Algorithm,
   Arabic and Hebrew shaping with automatic bracket mirroring, mirrored rows,
-  columns-kept-logical tables, visual caret movement, and an accessible
+  columns-kept-logical tables, visual caret movement by default with an opt-in
+  logical policy, a locale-to-direction helper, bidi control scanning and
+  sanitization for untrusted text, logical start/end padding, and an accessible
   direction attribute — with unchanged pixels for pure LTR interfaces.
 - A modern, tokenized design language: 38 semantic color roles and 10 geometric
   metrics, deep dark and clean light palettes, tonal control surfaces, soft
@@ -66,6 +69,68 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 2.1.0
+
+2.1.0 is the RTL ergonomics and safety release. It closes the four gaps that
+2.0 documented as deliberate limitations and changes no default: it adds **12
+public functions, 3 enums (15 values) and 1 struct** while every feature is
+opt-in, so the surface becomes **576 functions and 952 baseline entries**, 0
+removed and 0 changed against 2.0.0. The SONAME stays `libpt.so.1`: the release
+is purely additive and a zero-initialized application keeps the 2.0 pixels,
+caret, padding and text path. The annotated tag follows the final gate run
+recorded in [release.md](docs/release.md).
+
+- **Caret movement policy.** `pt_caret_movement`
+  (`inherit`/`visual`/`logical`) with app, window and widget setters/getters —
+  six functions. Resolution is the widget's explicit value, then the nearest
+  explicit ancestor, then the window, then the application, then **visual**, so
+  `inherit` (the zero value) keeps 2.0 behavior exactly. In `logical` mode Left
+  and Right move by UTF-8 character boundary in the stored string and
+  Home/End go to the logical line ends; vertical movement, Shift selection,
+  Backspace/Delete and the IME caret rectangle keep their 2.0 rules. The 2.0
+  window key callback still works and is no longer the only way to get logical
+  arrows.
+- **A locale hint instead of a guess.** `pt_locale_ui_direction(locale)` is a
+  bounded, ICU-free, thread-safe lookup of the language and script subtags of a
+  BCP-47 or POSIX locale against a conservative RTL table (Arabic, Hebrew,
+  Farsi, Urdu and the `Arab`/`Hebr`/`Thaa`/`Nkoo`/`Syrc` scripts, with the
+  script winning so `az-Arab` is RTL while `az-Latn` stays LTR). `pt_app_set_locale`
+  stores the resolved string as a hint and `pt_app_get_locale` returns the
+  stored hint; an explicit `pt_app_set_ui_direction` still wins in either call
+  order. Nothing reads the environment, and an unset locale resolves to LTR, so
+  a zero-initialized application is unchanged.
+- **Bidi control scanning and sanitization (Trojan Source).** A new public
+  header, `include/pt/bidi.h`, adds
+  `pt_bidi_control_inventory(text, length, spans, capacity)`, which reports the
+  nine explicit directional controls (U+202A–U+202E and U+2066–U+2069) with
+  byte-exact decoding, byte offsets, lengths and kinds — allocation-free, and
+  it still returns the total count when the span buffer is too small — and
+  `pt_bidi_sanitize(text, length, mode, &out_length)`, which returns a
+  caller-owned buffer (`pt_free`) with the controls **stripped** or
+  **neutralized** to U+FFFD (worst case `3n+1` bytes). Both are **opt-in**: no
+  widget, clipboard, drag or accessibility path sanitizes automatically, so
+  stored bytes and every byte offset stay exactly as the application supplied
+  them. The public inventory is narrower than the internal
+  `pt_bidi_is_removed` X9 paint predicate by design.
+- **Logical start/end padding.** `pt_widget_set_padding_logical(top, start,
+  bottom, end)` stores the logical edges and a layout/measure prepass writes the
+  resolved physical edges from the widget's resolved UI direction on every
+  layout, so RTL `start` is the right edge and `end` the left, and a later
+  direction change — explicit or inherited — is honoured without another call.
+  `pt_widget_set_padding` stays physical and the last call wins; margins stay
+  physical, and a widget that never calls the new setter lays out exactly as in
+  2.0.
+- **LTR is still protected by both hard gates.** The 2.0 goldens are unchanged:
+  the pure-LTR PNG snapshots are byte-identical, `tools/ltr-compat.sh` reports
+  **11/11 `SAME`** against 1.4.0, the Unicode conformance counts stay 770,241
+  + 91,707 with 0 failures, and every 2.0 test assertion is kept. Parity is
+  **576/576** in C++, Python and Java with an empty allowlist.
+- **Examples.** `examples/c/ergonomics_gallery.c` switches the caret policy,
+  sets a locale hint, pads a card with logical start/end and sanitizes an
+  untrusted string; `examples/cpp/ergonomics.cpp`,
+  `examples/python/ergonomics.py` and `examples/java/Ergonomics.java` are
+  smaller 2.1 notebooks for each binding.
 
 ## What is new in 2.0.0
 
@@ -663,7 +728,7 @@ tools/release-check.sh     # readiness report for the frozen release
 
 `make check` runs headless and needs no compositor. It includes the C test
 suites, the C++/Python/Java binding suites, the exported-symbol and API
-baseline audit, the hard 564/564 binding-parity gate, the per-round 0.6–0.10
+baseline audit, the hard 576/576 binding-parity gate, the per-round 0.6–0.10
 surface audits, a check that `docs/api-reference.md` matches the headers, and
 the randomized property suite for text editing, URI parsing, data-view indices
 and damage rectangles.
@@ -696,19 +761,23 @@ only a person can close.
 | C | [notes.c](examples/c/notes.c) | `make run-notes` |
 | C | [combobox.c](examples/c/combobox.c) | `make run-combobox` |
 | C | [rtl_gallery.c](examples/c/rtl_gallery.c) | `make run-rtl-gallery` |
+| C | [ergonomics_gallery.c](examples/c/ergonomics_gallery.c) | `make run-ergonomics-gallery` |
 | C++23 | [counter.cpp](examples/cpp/counter.cpp) | `make run-counter` |
 | C++23 | [workspace.cpp](examples/cpp/workspace.cpp) | `make run-cpp-workspace` |
 | C++23 | [combobox.cpp](examples/cpp/combobox.cpp) | `make run-cpp-combobox` |
 | C++23 | [rtl_direction.cpp](examples/cpp/rtl_direction.cpp) | `make run-cpp-rtl-direction` |
+| C++23 | [ergonomics.cpp](examples/cpp/ergonomics.cpp) | `make run-cpp-ergonomics` |
 | Python | [counter.py](examples/python/counter.py) | `make run-python` |
 | Python | [notes.py](examples/python/notes.py) | `python examples/python/notes.py` |
 | Python | [workspace.py](examples/python/workspace.py) | `make run-python-workspace` |
 | Python | [combobox.py](examples/python/combobox.py) | `make run-python-combobox` |
 | Python | [rtl_direction.py](examples/python/rtl_direction.py) | `make run-python-rtl-direction` |
+| Python | [ergonomics.py](examples/python/ergonomics.py) | `make run-python-ergonomics` |
 | Java 25 | [HelloPt.java](examples/java/HelloPt.java) | `make run-java` |
 | Java 25 | [Workspace.java](examples/java/Workspace.java) | `make run-java-workspace` |
 | Java 25 | [Combobox.java](examples/java/Combobox.java) | `make run-java-combobox` |
 | Java 25 | [RtlDirection.java](examples/java/RtlDirection.java) | `make run-java-rtl-direction` |
+| Java 25 | [Ergonomics.java](examples/java/Ergonomics.java) | `make run-java-ergonomics` |
 
 The C and C++ examples are built by `make`; the Python and Java run targets
 build or locate the library automatically. All examples run both natively and
@@ -857,7 +926,7 @@ migration and comparison guides also have
 release records, roadmap, performance notes and policy pages remain
 English-only.
 
-## Limitations in 2.0
+## Limitations in 2.1
 
 - Wayland only; there is no X11, Windows or macOS backend.
 - The 1.x ABI is append-only: removals require a major release and a SONAME
@@ -921,9 +990,12 @@ English-only.
   Missing Arabic/Hebrew glyphs are documented tofu with
   `pt_app_font_uncovered_count`, not a hard error; install a covering font such
   as Noto Sans Arabic/Hebrew or DejaVu Sans. Bidi control characters can
-  reorder displayed text (the Trojan-Source class of problem) and are not
-  sanitized automatically; an application that accepts untrusted text should
-  strip or display them. Details are in the
+  reorder displayed text (the Trojan-Source class of problem): 2.1 exposes
+  `pt_bidi_control_inventory` and `pt_bidi_sanitize` for it, but sanitization
+  is opt-in and no text path calls it automatically, so an application that
+  accepts untrusted text has to sanitize before display, logging or storage.
+  The locale hint only selects a default direction; text, dates, numbers and
+  pickers stay locale-independent. Details are in the
   [RTL and bidi guide](docs/rtl.md).
 - Table columns keep application-set widths that survive rebinds and row
   recycling, can be hidden, are resizable by dragging and can be reordered by
