@@ -255,6 +255,222 @@ static void check_text_resolution(pt_app *app, pt_window *window, pt_widget *box
     pt_widget_set_text_direction(box, pt_text_direction_auto);
 }
 
+static void check_caret_movement(pt_app *app, pt_window *window, pt_widget *box,
+                                 pt_widget *label) {
+    /* Enum values are pinned by the ABI contract. */
+    pt_check(pt_caret_movement_inherit == 0);
+    pt_check(pt_caret_movement_visual == 1);
+    pt_check(pt_caret_movement_logical == 2);
+
+    /* Fresh objects store inherit and resolve to visual; NULL is tolerated. */
+    pt_check(pt_app_get_caret_movement(NULL) == pt_caret_movement_inherit);
+    pt_check(pt_window_get_caret_movement(NULL) == pt_caret_movement_inherit);
+    pt_check(pt_widget_get_caret_movement(NULL) == pt_caret_movement_inherit);
+    pt_app_set_caret_movement(NULL, pt_caret_movement_logical);
+    pt_window_set_caret_movement(NULL, pt_caret_movement_logical);
+    pt_widget_set_caret_movement(NULL, pt_caret_movement_logical);
+    pt_check(pt_app_get_caret_movement(app) == pt_caret_movement_inherit);
+    pt_check(pt_window_get_caret_movement(window) == pt_caret_movement_inherit);
+    pt_check(pt_widget_get_caret_movement(box) == pt_caret_movement_inherit);
+    pt_check(pt_widget_resolved_caret_movement(label) == pt_caret_movement_visual);
+
+    /* Out-of-range values are rejected. */
+    pt_app_set_caret_movement(app, (pt_caret_movement)99);
+    pt_window_set_caret_movement(window, (pt_caret_movement)-1);
+    pt_widget_set_caret_movement(box, (pt_caret_movement)7);
+    pt_check(pt_app_get_caret_movement(app) == pt_caret_movement_inherit);
+    pt_check(pt_window_get_caret_movement(window) == pt_caret_movement_inherit);
+    pt_check(pt_widget_get_caret_movement(box) == pt_caret_movement_inherit);
+
+    /* Explicit storage is returned verbatim. */
+    pt_app_set_caret_movement(app, pt_caret_movement_logical);
+    pt_check(pt_app_get_caret_movement(app) == pt_caret_movement_logical);
+    pt_check(pt_widget_resolved_caret_movement(label) == pt_caret_movement_logical);
+    pt_window_set_caret_movement(window, pt_caret_movement_visual);
+    pt_check(pt_window_get_caret_movement(window) == pt_caret_movement_visual);
+    pt_check(pt_widget_resolved_caret_movement(label) == pt_caret_movement_visual);
+    pt_widget_set_caret_movement(box, pt_caret_movement_logical);
+    pt_check(pt_widget_resolved_caret_movement(label) == pt_caret_movement_logical);
+    pt_widget_set_caret_movement(label, pt_caret_movement_visual);
+    pt_check(pt_widget_get_caret_movement(label) == pt_caret_movement_visual);
+    pt_check(pt_widget_resolved_caret_movement(label) == pt_caret_movement_visual);
+
+    /* The policy affects the next key event only: no layout or repaint. */
+    reset_marks(window);
+    pt_widget_set_caret_movement(label, pt_caret_movement_inherit);
+    pt_widget_set_caret_movement(box, pt_caret_movement_inherit);
+    pt_window_set_caret_movement(window, pt_caret_movement_inherit);
+    pt_app_set_caret_movement(app, pt_caret_movement_inherit);
+    pt_check(!window->needs_layout);
+    pt_check(!window->needs_draw);
+
+    pt_check(pt_app_get_caret_movement(app) == pt_caret_movement_inherit);
+    pt_check(pt_window_get_caret_movement(window) == pt_caret_movement_inherit);
+    pt_check(pt_widget_get_caret_movement(box) == pt_caret_movement_inherit);
+    pt_check(pt_widget_get_caret_movement(label) == pt_caret_movement_inherit);
+    pt_check(pt_widget_resolved_caret_movement(label) == pt_caret_movement_visual);
+}
+
+static void check_locale_helpers(void) {
+    static const struct {
+        const char *locale;
+        pt_ui_direction expected;
+    } cases[] = {
+        {NULL, pt_ui_direction_ltr},
+        {"", pt_ui_direction_ltr},
+        {"C", pt_ui_direction_ltr},
+        {"POSIX", pt_ui_direction_ltr},
+        {"en", pt_ui_direction_ltr},
+        {"en_US.UTF-8", pt_ui_direction_ltr},
+        {"de-DE", pt_ui_direction_ltr},
+        {"sr_RS.UTF-8", pt_ui_direction_ltr},
+        {"ar", pt_ui_direction_rtl},
+        {"he", pt_ui_direction_rtl},
+        {"fa", pt_ui_direction_rtl},
+        {"ur", pt_ui_direction_rtl},
+        {"iw", pt_ui_direction_rtl},
+        {"ji", pt_ui_direction_rtl},
+        {"ckb", pt_ui_direction_rtl},
+        {"dv", pt_ui_direction_rtl},
+        {"ps", pt_ui_direction_rtl},
+        {"sd", pt_ui_direction_rtl},
+        {"ug", pt_ui_direction_rtl},
+        {"yi", pt_ui_direction_rtl},
+        {"nqo", pt_ui_direction_rtl},
+        {"syr", pt_ui_direction_rtl},
+        {"AR", pt_ui_direction_rtl},
+        {"HE_il.UTF-8", pt_ui_direction_rtl},
+        {"ar_SA.UTF-8", pt_ui_direction_rtl},
+        {"ar_SA@modifier", pt_ui_direction_rtl},
+        {"fa_IR.UTF-8@euro", pt_ui_direction_rtl},
+        {"az", pt_ui_direction_ltr},
+        {"az-Latn", pt_ui_direction_ltr},
+        {"az-Arab", pt_ui_direction_rtl},
+        {"az-arab", pt_ui_direction_rtl},
+        {"AZ-arab", pt_ui_direction_rtl},
+        {"ku-Arab", pt_ui_direction_rtl},
+        {"pa-Arab", pt_ui_direction_rtl},
+        {"ms-Arab", pt_ui_direction_rtl},
+        {"qaa-Hebr", pt_ui_direction_rtl},
+        {"qaa-Thaa", pt_ui_direction_rtl},
+        {"qaa-Nkoo", pt_ui_direction_rtl},
+        {"qaa-Syrc", pt_ui_direction_rtl},
+        {"qaa-Adlm", pt_ui_direction_rtl},
+        {"qaa-Rohg", pt_ui_direction_rtl},
+        {"qaa-Samr", pt_ui_direction_rtl},
+        {"qaa-Mand", pt_ui_direction_rtl},
+        {"qaa-Mend", pt_ui_direction_rtl},
+        {"qaa-Latn", pt_ui_direction_ltr},
+        {"12", pt_ui_direction_ltr},
+        {"-", pt_ui_direction_ltr},
+        {"ar-", pt_ui_direction_rtl},
+        {"x-private", pt_ui_direction_ltr},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        pt_ui_direction direction = pt_locale_ui_direction(cases[i].locale);
+        if (direction != cases[i].expected) {
+            fprintf(stderr, "locale %s: expected %d, got %d\n",
+                    cases[i].locale ? cases[i].locale : "(null)",
+                    (int)cases[i].expected, (int)direction);
+        }
+        pt_check(direction == cases[i].expected);
+    }
+}
+
+static void check_locale(pt_app *app, pt_window *window, pt_widget *box,
+                         pt_widget *label) {
+    check_locale_helpers();
+
+    /* Start from a clean inheritance chain: check_text_resolution can leave a
+     * window direction behind. */
+    pt_app_set_ui_direction(app, pt_ui_direction_inherit);
+    pt_window_set_ui_direction(window, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(box, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(label, pt_ui_direction_inherit);
+
+    /* The app copies the hint, reports it verbatim and clears on NULL/empty. */
+    pt_check(pt_app_get_locale(NULL) == NULL);
+    pt_check(pt_app_get_locale(app) == NULL);
+    pt_app_set_locale(NULL, "ar");
+    pt_app_set_locale(app, "ar_SA.UTF-8");
+    const char *stored = pt_app_get_locale(app);
+    pt_check(stored != NULL && strcmp(stored, "ar_SA.UTF-8") == 0);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_rtl);
+    pt_app_set_locale(app, "");
+    pt_check(pt_app_get_locale(app) == NULL);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_app_set_locale(app, "he");
+    pt_check(pt_app_get_locale(app) != NULL);
+    pt_app_set_locale(app, NULL);
+    pt_check(pt_app_get_locale(app) == NULL);
+
+    /* An explicit application direction wins over the hint in either order. */
+    pt_app_set_locale(app, "ar");
+    pt_app_set_ui_direction(app, pt_ui_direction_ltr);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_app_set_ui_direction(app, pt_ui_direction_inherit);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_rtl);
+
+    pt_app_set_ui_direction(app, pt_ui_direction_ltr);
+    pt_app_set_locale(app, "ar");
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_app_set_ui_direction(app, pt_ui_direction_inherit);
+
+    /* Window and widget explicit values still beat the app hint. */
+    pt_window_set_ui_direction(window, pt_ui_direction_ltr);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_window_set_ui_direction(window, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(box, pt_ui_direction_ltr);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_widget_set_ui_direction(box, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(label, pt_ui_direction_ltr);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_widget_set_ui_direction(label, pt_ui_direction_inherit);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_rtl);
+
+    /* A hint invalidates only when it changes the resolved app fallback. */
+    pt_app_set_locale(app, "en");
+    reset_marks(window);
+    pt_app_set_locale(app, "en_US.UTF-8");
+    pt_check(!window->needs_layout);
+    pt_check(!window->needs_draw);
+
+    reset_marks(window);
+    pt_app_set_locale(app, "he");
+    pt_check(window->needs_layout);
+    pt_check(window->needs_draw);
+
+    reset_marks(window);
+    pt_app_set_locale(app, "he");
+    pt_check(!window->needs_layout);
+    pt_check(!window->needs_draw);
+
+    reset_marks(window);
+    pt_app_set_locale(app, "he_IL.UTF-8");
+    pt_check(!window->needs_layout);
+    pt_check(!window->needs_draw);
+
+    reset_marks(window);
+    pt_app_set_locale(app, NULL);
+    pt_check(window->needs_layout);
+    pt_check(window->needs_draw);
+
+    /* An explicit direction shadows the hint, so no invalidation is needed. */
+    pt_app_set_ui_direction(app, pt_ui_direction_ltr);
+    reset_marks(window);
+    pt_app_set_locale(app, "ar");
+    pt_check(!window->needs_layout);
+    pt_check(!window->needs_draw);
+
+    pt_app_set_locale(app, NULL);
+    pt_app_set_ui_direction(app, pt_ui_direction_inherit);
+    pt_window_set_ui_direction(window, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(box, pt_ui_direction_inherit);
+    pt_widget_set_ui_direction(label, pt_ui_direction_inherit);
+    pt_check(pt_widget_resolved_ui_direction(label) == pt_ui_direction_ltr);
+    pt_check(pt_app_get_locale(app) == NULL);
+}
+
 static void check_invalidation(pt_app *app, pt_window *window, pt_widget *box,
                                pt_widget *label) {
     /* Widget setters mark layout and repaint dirty through the window. */
@@ -339,6 +555,8 @@ int main(void) {
         check_ui_resolution(app, window, box, label);
         check_auto_direction(box, label);
         check_text_resolution(app, window, box, label);
+        check_caret_movement(app, window, box, label);
+        check_locale(app, window, box, label);
         check_invalidation(app, window, box, label);
         check_text_unchanged(label);
     }

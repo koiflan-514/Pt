@@ -548,6 +548,126 @@ static void test_rtl_editing(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Logical caret movement in a text area (2.1): Left/Right move by UTF-8
+ * boundary across soft wraps and Home/End stop at the logical line ends, while
+ * vertical motion and Ctrl+Home/End keep their 2.0 semantics. */
+static void test_logical_editing(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-textarea", 460, 320);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_check(area != NULL);
+    const char *mixed = "abc \xD7\x90\xD7\x91\xD7\x92 123";
+    pt_widget_set_text(area, mixed);
+    pt_widget_set_size(area, 400.0f, 120.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(460, 320, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+
+    /* Default visual: End is the visual right edge (byte 4). */
+    pt_check(pt_widget_resolved_caret_movement(area) == pt_caret_movement_visual);
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == 4);
+
+    pt_widget_set_caret_movement(area, pt_caret_movement_logical);
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == 14);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == 0);
+    const size_t logical_right[] = {1, 2, 3, 4, 6, 8, 10, 11, 12, 13, 14};
+    for (size_t i = 0; i < sizeof(logical_right) / sizeof(logical_right[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+        pt_check(area->cursor == logical_right[i]);
+    }
+    const size_t logical_left[] = {13, 12, 11, 10, 8, 6, 4, 3, 2, 1, 0};
+    for (size_t i = 0; i < sizeof(logical_left) / sizeof(logical_left[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+        pt_check(area->cursor == logical_left[i]);
+    }
+
+    /* Shift still extends a logical range from the fixed anchor. */
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 1u, NULL, true);
+    pt_check(area->selection_anchor == 0 && area->cursor == 14);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+
+    /* Wrapped RTL line: logical Home/End are the line's byte start/end, and a
+     * right step crosses the soft wrap into the next UTF-8 boundary. */
+    window = pt_window_create(app, "logical-textarea-rtl", 420, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    root = pt_window_root(window);
+    pt_widget_set_padding(root, 12.0f, 12.0f, 12.0f, 12.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 220.0f, 180.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    const char *wrapped =
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E \xD7\xA0\xD7\xA1\xD7\xA2 "
+        "\xD7\xA3\xD7\xA4\xD7\xA5 \xD7\xA6\xD7\xA7\xD7\xA8 "
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E";
+    pt_widget_set_text(area, wrapped);
+    pt_widget_set_caret_movement(area, pt_caret_movement_logical);
+    pt_window_show(window);
+    canvas = pt_canvas_create(420, 300, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.line_count >= 2);
+    size_t line0_end = layout.line_count > 0 ? layout.lines[0].end : 0;
+    size_t total = layout.display_len;
+    pt_text_layout_free(&layout);
+    pt_check(line0_end > 0 && total > line0_end);
+
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(area->cursor == line0_end);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(area->cursor == 0);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == 2);
+
+    pt_text_area_set_selection(area, line0_end, line0_end);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == pt_utf8_next_boundary(area->text, total, line0_end));
+
+    pt_window_input_key(window, XKB_KEY_End, (uint32_t)pt_key_modifier_ctrl, NULL, true);
+    pt_check(area->cursor == total);
+    pt_window_input_key(window, XKB_KEY_Home, (uint32_t)pt_key_modifier_ctrl, NULL, true);
+    pt_check(area->cursor == 0);
+
+    /* Vertical motion keeps the visual goal-x rule. */
+    pt_text_area_set_selection(area, 4, 4);
+    pt_window_input_key(window, XKB_KEY_Down, 0, NULL, true);
+    pt_check(area->cursor >= line0_end);
+    pt_check(area->caret_goal_x >= 0.0f);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 /* Soft-wrap boundaries are shared by both adjacent lines (the previous line's
  * end and the next line's start are the same byte). The caret's affinity picks
  * the line the caret box, Home/End, the next visual step and a click act on:
@@ -777,6 +897,7 @@ int main(void) {
     test_grow_to_content(window, canvas);
     test_rtl_layout(app);
     test_rtl_editing(app);
+    test_logical_editing(app);
     test_soft_wrap_affinity(app);
 
     pt_canvas_destroy(canvas);

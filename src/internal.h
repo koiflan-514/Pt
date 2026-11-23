@@ -1058,6 +1058,8 @@ typedef struct pt_widget {
     /* Explicit direction properties (since 2.0). Zero is inherit/auto. */
     uint8_t ui_direction;
     uint8_t text_direction;
+    /* Explicit caret movement (since 2.1). Zero is inherit/visual. */
+    uint8_t caret_movement;
     /* Set on the column containers a table or tree owns. In RTL their children
      * keep logical order (column 0 stays first in the child list) and the
      * container mirrors only its origin, so the data views place each column
@@ -1254,6 +1256,9 @@ pt_app *pt_widget_app(const pt_widget *widget);
  * when the paragraph is empty or has no strong character. Both are side-effect
  * free and never look at layout. */
 pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget);
+/* Resolves the caret movement policy: widget -> nearest explicit ancestor ->
+ * window -> application -> visual. */
+pt_caret_movement pt_widget_resolved_caret_movement(const pt_widget *widget);
 pt_text_direction pt_widget_resolved_text_direction(const pt_widget *widget,
                                                     const char *text, size_t length);
 /* Liveness check usable after a user callback that may have destroyed widget:
@@ -1499,6 +1504,12 @@ struct pt_app {
     uint64_t next_fd_watch_id;
     /* Explicit application UI direction (since 2.0); zero means inherit/LTR. */
     uint8_t ui_direction;
+    /* Explicit application caret movement (since 2.1); zero means inherit. */
+    uint8_t caret_movement;
+    /* Locale hint and its derived application fallback direction (since 2.1).
+     * locale is owned; locale_ui_direction is 0 when unset (LTR). */
+    char *locale;
+    uint8_t locale_ui_direction;
     bool running;
     bool quit_requested;
     bool quit_on_last_window_close;
@@ -1546,6 +1557,8 @@ struct pt_window {
     bool decorated;
     /* Explicit window UI direction (since 2.0); zero means inherit from app. */
     uint8_t ui_direction;
+    /* Explicit window caret movement (since 2.1); zero means inherit. */
+    uint8_t caret_movement;
     pt_decoration_mode decoration_mode;
     pt_decoration_mode effective_decoration;
     bool csd;

@@ -473,6 +473,7 @@ void pt_app_destroy(pt_app *app) {
     }
     pt_platform_stop(app);
     free(app->app_id);
+    free(app->locale);
     free(app);
 }
 
@@ -537,6 +538,69 @@ void pt_app_set_ui_direction(pt_app *app, pt_ui_direction direction) {
 
 pt_ui_direction pt_app_get_ui_direction(const pt_app *app) {
     return app ? (pt_ui_direction)app->ui_direction : pt_ui_direction_inherit;
+}
+
+void pt_app_set_caret_movement(pt_app *app, pt_caret_movement movement) {
+    if (!app || (movement != pt_caret_movement_inherit &&
+                 movement != pt_caret_movement_visual &&
+                 movement != pt_caret_movement_logical)) {
+        return;
+    }
+    /* A policy change affects the next key event only: no layout or paint. */
+    app->caret_movement = (uint8_t)movement;
+}
+
+pt_caret_movement pt_app_get_caret_movement(const pt_app *app) {
+    return app ? (pt_caret_movement)app->caret_movement : pt_caret_movement_inherit;
+}
+
+void pt_app_set_locale(pt_app *app, const char *locale) {
+    if (!app) {
+        return;
+    }
+    bool had = app->locale != NULL;
+    if (!locale || !*locale) {
+        if (!had) {
+            return;
+        }
+        uint8_t previous = app->locale_ui_direction;
+        free(app->locale);
+        app->locale = NULL;
+        app->locale_ui_direction = (uint8_t)pt_ui_direction_ltr;
+        /* Clearing the hint changes the resolved fallback only when the app has
+         * no explicit direction and the hint was RTL. */
+        if (app->ui_direction == pt_ui_direction_inherit &&
+            previous == (uint8_t)pt_ui_direction_rtl) {
+            for (pt_window *window = app->first_window; window; window = window->next) {
+                pt_window_invalidate_layout(window, NULL);
+                window->needs_draw = true;
+                pt_window_damage_all(window);
+                pt_platform_window_schedule_draw(window);
+            }
+        }
+        return;
+    }
+    if (had && strcmp(app->locale, locale) == 0) {
+        return;
+    }
+    char *copy = pt_strdup(locale);
+    uint8_t derived = (uint8_t)pt_locale_ui_direction(copy);
+    uint8_t previous = app->locale_ui_direction;
+    free(app->locale);
+    app->locale = copy;
+    app->locale_ui_direction = derived;
+    if (app->ui_direction == pt_ui_direction_inherit && previous != derived) {
+        for (pt_window *window = app->first_window; window; window = window->next) {
+            pt_window_invalidate_layout(window, NULL);
+            window->needs_draw = true;
+            pt_window_damage_all(window);
+            pt_platform_window_schedule_draw(window);
+        }
+    }
+}
+
+const char *pt_app_get_locale(const pt_app *app) {
+    return app ? app->locale : NULL;
 }
 
 void pt_app_set_accent_color(pt_app *app, pt_color color) {

@@ -126,6 +126,18 @@ pt_api void pt_window_set_ui_direction(pt_window *window, pt_ui_direction direct
 /* Since 2.0. */
 pt_api pt_ui_direction pt_window_get_ui_direction(const pt_window *window);
 
+/* Window caret movement policy (since 2.1). It overrides the application value
+ * for this window and every widget inside it that inherits; the widget chain is
+ * widget -> nearest explicit ancestor -> this window -> application -> visual.
+ * The setter stores the explicit value, ignores a NULL window and rejects values
+ * outside pt_caret_movement. pt_caret_movement_inherit is the zero value. A
+ * change does not invalidate layout or repaint: it affects the next key event
+ * only. The getter reports the stored explicit value, so an unset window
+ * returns pt_caret_movement_inherit. Since 2.1. */
+pt_api void pt_window_set_caret_movement(pt_window *window, pt_caret_movement movement);
+/* Since 2.1. */
+pt_api pt_caret_movement pt_window_get_caret_movement(const pt_window *window);
+
 /* Per-window theme overrides. A window inherits the application theme until a
  * role or metric is overridden here, so a settings preview or a second
  * surface can restyle itself without copying the whole palette. Passing an

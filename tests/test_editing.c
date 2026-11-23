@@ -576,6 +576,112 @@ static void test_bidi_entry_editing(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Logical caret movement (2.1): Left/Right move by UTF-8 character boundary and
+ * Home/End to the logical line ends, while the default visual mode keeps the
+ * 2.0 behaviour and Shift/Backspace/Delete stay logical in both modes. */
+static void test_logical_entry_editing(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-editing", 640, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 10.0f, 10.0f, 10.0f, 10.0f);
+    pt_widget *entry = pt_entry_create(root, "");
+    pt_check(entry != NULL);
+    const char *mixed = "abc " HE_BET " 123";
+    pt_widget_set_text(entry, mixed);
+    pt_widget_set_size(entry, 600.0f, 32.0f);
+    pt_widget_set_align_self(entry, pt_align_start);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(640, 240, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(entry));
+    window->caret_visible = true;
+
+    /* Default is visual: from byte 4 the next stop is the visual neighbour. */
+    pt_check(pt_widget_resolved_caret_movement(entry) == pt_caret_movement_visual);
+    pt_check(pt_widget_get_caret_movement(entry) == pt_caret_movement_inherit);
+    pt_entry_set_selection(entry, 0, 0);
+    const size_t visual_path[] = {1, 2, 3, 4, 12};
+    for (size_t i = 0; i < sizeof(visual_path) / sizeof(visual_path[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+        expect_entry_caret(window, entry, visual_path[i], "visual right");
+    }
+
+    pt_widget_set_caret_movement(entry, pt_caret_movement_logical);
+    pt_check(pt_widget_resolved_caret_movement(entry) == pt_caret_movement_logical);
+
+    /* Logical Right walks the UTF-8 boundaries in stored order. */
+    pt_entry_set_selection(entry, 0, 0);
+    const size_t logical_right[] = {1, 2, 3, 4, 6, 8, 10, 11, 12, 13, 14};
+    for (size_t i = 0; i < sizeof(logical_right) / sizeof(logical_right[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+        expect_entry_caret(window, entry, logical_right[i], "logical right");
+    }
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    expect_entry_caret(window, entry, 14, "logical end");
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    expect_entry_caret(window, entry, 0, "logical home");
+
+    const size_t logical_left[] = {13, 12, 11, 10, 8, 6, 4, 3, 2, 1, 0};
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    for (size_t i = 0; i < sizeof(logical_left) / sizeof(logical_left[0]); ++i) {
+        pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+        expect_entry_caret(window, entry, logical_left[i], "logical left");
+    }
+
+    /* Shift keeps a logical anchor while the caret moves by UTF-8 boundary. */
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_key(window, XKB_KEY_Right, 1u, NULL, true);
+    pt_window_input_key(window, XKB_KEY_Right, 1u, NULL, true);
+    pt_check(entry->selection_anchor == 0 && entry->cursor == 2);
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_key(window, XKB_KEY_End, 1u, NULL, true);
+    pt_check(entry->selection_anchor == 0 && entry->cursor == 14);
+    uint32_t sel_start = 99;
+    uint32_t sel_end = 99;
+    pt_check(pt_entry_get_selection(entry, &sel_start, &sel_end));
+    pt_check(sel_start == 0 && sel_end == 14);
+
+    /* Backspace and Delete are logical in both modes. */
+    pt_widget_set_text(entry, mixed);
+    pt_entry_set_selection(entry, 4, 4);
+    pt_window_input_key(window, XKB_KEY_BackSpace, 0, NULL, true);
+    pt_check(strcmp(pt_widget_get_text(entry), "abc" HE_BET " 123") == 0);
+    pt_widget_set_text(entry, mixed);
+    pt_entry_set_selection(entry, 4, 4);
+    pt_window_input_key(window, XKB_KEY_Delete, 0, NULL, true);
+    pt_check(strcmp(pt_widget_get_text(entry), "abc \xD7\x91\xD7\x92 123") == 0);
+
+    /* An RTL paragraph: logical Home/End are byte 0 and the byte length. */
+    pt_widget_set_text_direction(entry, pt_text_direction_rtl);
+    pt_widget_set_text(entry, HE_BET " abc " HE_GIMEL_DALET_HE);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(entry->cursor == strlen(HE_BET " abc " HE_GIMEL_DALET_HE));
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(entry->cursor == 0);
+    pt_widget_set_text_direction(entry, pt_text_direction_auto);
+
+    /* Password bullets expose nothing, but the logical boundaries come from the
+     * stored text: Right is 2 bytes and End is the stored length. */
+    pt_widget_set_text(entry, HE_BET);
+    pt_entry_set_password(entry, true);
+    pt_entry_set_selection(entry, 0, 0);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(entry->cursor == 2);
+    pt_window_input_key(window, XKB_KEY_End, 0, NULL, true);
+    pt_check(entry->cursor == 6);
+    pt_window_input_key(window, XKB_KEY_Home, 0, NULL, true);
+    pt_check(entry->cursor == 0);
+    pt_check(strcmp(pt_widget_get_text(entry), HE_BET) == 0);
+    pt_entry_set_password(entry, false);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 /* RTL entries anchor their text to the right edge (2.0 wave 5b): scroll_x = 0
  * shows the logical start at the visual right, and overflowing backwards moves
  * the line right. IME rectangles and click mapping use the same origin. */
@@ -920,6 +1026,7 @@ int main(void) {
     test_table_editing(app);
     test_tree_rename(app);
     test_bidi_entry_editing(app);
+    test_logical_entry_editing(app);
     test_rtl_entry_anchor(app);
     test_rtl_entry_caret_pixels(app);
     test_entry_placeholder_ellipsis(app);

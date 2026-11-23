@@ -469,6 +469,20 @@ pt_ui_direction pt_window_get_ui_direction(const pt_window *window) {
     return window ? (pt_ui_direction)window->ui_direction : pt_ui_direction_inherit;
 }
 
+void pt_window_set_caret_movement(pt_window *window, pt_caret_movement movement) {
+    if (!window || (movement != pt_caret_movement_inherit &&
+                    movement != pt_caret_movement_visual &&
+                    movement != pt_caret_movement_logical)) {
+        return;
+    }
+    /* A policy change affects the next key event only: no layout or paint. */
+    window->caret_movement = (uint8_t)movement;
+}
+
+pt_caret_movement pt_window_get_caret_movement(const pt_window *window) {
+    return window ? (pt_caret_movement)window->caret_movement : pt_caret_movement_inherit;
+}
+
 void pt_window_set_decorated(pt_window *window, bool decorated) {
     if (!window) {
         return;

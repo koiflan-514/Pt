@@ -125,6 +125,28 @@ typedef enum pt_text_direction {
     pt_text_direction_rtl
 } pt_text_direction;
 
+/* Caret movement policy (since 2.1). The zero value inherits: a widget takes
+ * the nearest explicit ancestor's value, then the window, then the application,
+ * then visual. visual moves Left/Right to the visually adjacent cluster
+ * boundary and Home/End to the visual line ends; logical moves Left/Right by
+ * UTF-8 character boundary and Home/End to the logical line ends. Vertical
+ * movement, Shift selection, Backspace/Delete and the IME caret rectangle are
+ * unchanged in both modes. The policy affects the next key event only: it never
+ * changes layout, stored bytes or accessibility character offsets. */
+typedef enum pt_caret_movement {
+    pt_caret_movement_inherit = 0,
+    pt_caret_movement_visual,
+    pt_caret_movement_logical
+} pt_caret_movement;
+
+/* Maps a locale name to a default interface direction (since 2.1). This is a
+ * bounded, ICU-free lookup: the language and script subtags of a BCP-47 or
+ * POSIX locale are matched against a conservative RTL table; everything else,
+ * including NULL, empty, "C" and "POSIX", returns pt_ui_direction_ltr. It never
+ * returns inherit and never reads the process environment. Thread-safe: it
+ * touches caller-owned data only. */
+pt_api pt_ui_direction pt_locale_ui_direction(const char *locale);
+
 typedef enum pt_justify {
     pt_justify_start = 0,
     pt_justify_center,

@@ -2161,11 +2161,36 @@ pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget) {
         if (window->ui_direction != pt_ui_direction_inherit) {
             return (pt_ui_direction)window->ui_direction;
         }
-        if (window->app && window->app->ui_direction != pt_ui_direction_inherit) {
-            return (pt_ui_direction)window->app->ui_direction;
+        if (window->app) {
+            if (window->app->ui_direction != pt_ui_direction_inherit) {
+                return (pt_ui_direction)window->app->ui_direction;
+            }
+            /* The locale hint is the application fallback, below the explicit
+             * app direction and above the compiled LTR default (since 2.1). */
+            if (window->app->locale_ui_direction == (uint8_t)pt_ui_direction_rtl) {
+                return pt_ui_direction_rtl;
+            }
         }
     }
     return pt_ui_direction_ltr;
+}
+
+pt_caret_movement pt_widget_resolved_caret_movement(const pt_widget *widget) {
+    for (const pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
+        if (cursor->caret_movement != pt_caret_movement_inherit) {
+            return (pt_caret_movement)cursor->caret_movement;
+        }
+    }
+    pt_window *window = pt_widget_window(widget);
+    if (window) {
+        if (window->caret_movement != pt_caret_movement_inherit) {
+            return (pt_caret_movement)window->caret_movement;
+        }
+        if (window->app && window->app->caret_movement != pt_caret_movement_inherit) {
+            return (pt_caret_movement)window->app->caret_movement;
+        }
+    }
+    return pt_caret_movement_visual;
 }
 
 pt_text_direction pt_widget_resolved_text_direction(const pt_widget *widget,
@@ -2198,6 +2223,20 @@ void pt_widget_set_ui_direction(pt_widget *widget, pt_ui_direction direction) {
 
 pt_ui_direction pt_widget_get_ui_direction(const pt_widget *widget) {
     return widget ? (pt_ui_direction)widget->ui_direction : pt_ui_direction_inherit;
+}
+
+void pt_widget_set_caret_movement(pt_widget *widget, pt_caret_movement movement) {
+    if (!widget || (movement != pt_caret_movement_inherit &&
+                    movement != pt_caret_movement_visual &&
+                    movement != pt_caret_movement_logical)) {
+        return;
+    }
+    /* A policy change affects the next key event only: no layout or paint. */
+    widget->caret_movement = (uint8_t)movement;
+}
+
+pt_caret_movement pt_widget_get_caret_movement(const pt_widget *widget) {
+    return widget ? (pt_caret_movement)widget->caret_movement : pt_caret_movement_inherit;
 }
 
 void pt_widget_set_text_direction(pt_widget *widget, pt_text_direction direction) {
@@ -3820,7 +3859,8 @@ static bool entry_horizontal(pt_widget *entry, bool right, bool shift) {
     pt_font *font = pt_widget_font_for(entry, &ctx);
     size_t display_len = 0;
     char *display = entry_display_text(entry, &display_len);
-    bool mapped = font && entry_display_needs_map(entry, display, display_len);
+    bool logical = pt_widget_resolved_caret_movement(entry) == pt_caret_movement_logical;
+    bool mapped = !logical && font && entry_display_needs_map(entry, display, display_len);
     if (!shift && entry_has_selection(entry)) {
         size_t start = 0;
         size_t end = 0;
@@ -3885,7 +3925,8 @@ static bool entry_line_edge(pt_widget *entry, bool end, bool shift) {
     size_t display_len = 0;
     char *display = entry_display_text(entry, &display_len);
     size_t target = end ? len : 0;
-    if (font && entry_display_needs_map(entry, display, display_len)) {
+    bool logical = pt_widget_resolved_caret_movement(entry) == pt_caret_movement_logical;
+    if (!logical && font && entry_display_needs_map(entry, display, display_len)) {
         pt_text_visual_map *map = entry_build_map(entry, font, display, display_len, NULL);
         if (map) {
             size_t display_target = 0;
@@ -4079,7 +4120,8 @@ static bool text_area_line_edge(pt_widget *area, bool end, bool shift, bool docu
                                                        (pt_text_bias)area->caret_affinity);
     size_t position = end ? layout.lines[line].end : layout.lines[line].start;
     pt_text_bias bias = pt_text_bias_leading;
-    if (text_area_line_is_mapped(&layout, line)) {
+    bool logical = pt_widget_resolved_caret_movement(area) == pt_caret_movement_logical;
+    if (!logical && text_area_line_is_mapped(&layout, line)) {
         size_t mapped_position = position;
         if (visual_line_edge(layout.maps[line], !end, &mapped_position, &bias)) {
             position = mapped_position;
@@ -4104,7 +4146,8 @@ static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
                    ? pt_text_layout_line_for_position_bias(&layout, layout.caret,
                                                             (pt_text_bias)area->caret_affinity)
                    : 0;
-    bool mapped = have_layout && text_area_line_is_mapped(&layout, line);
+    bool mapped = have_layout && text_area_line_is_mapped(&layout, line) &&
+                  pt_widget_resolved_caret_movement(area) != pt_caret_movement_logical;
     size_t position = area->cursor;
     pt_text_bias bias = (pt_text_bias)area->caret_affinity;
     if (mapped && !shift && entry_has_selection(area)) {

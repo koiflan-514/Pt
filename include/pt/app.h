@@ -199,6 +199,30 @@ pt_api void pt_app_set_ui_direction(pt_app *app, pt_ui_direction direction);
 /* Since 2.0. */
 pt_api pt_ui_direction pt_app_get_ui_direction(const pt_app *app);
 
+/* Application-wide caret movement policy (since 2.1). It is the last fallback
+ * in the resolution chain widget -> nearest explicit ancestor -> window ->
+ * application -> visual. The setter stores the explicit value, ignores a NULL
+ * app and rejects values outside pt_caret_movement. pt_caret_movement_inherit
+ * is the zero value, so a fresh application resolves to visual. A change does
+ * not invalidate layout or repaint: it affects the next key event only. The
+ * getter reports the stored explicit value, not the resolved one. Since 2.1. */
+pt_api void pt_app_set_caret_movement(pt_app *app, pt_caret_movement movement);
+/* Since 2.1. */
+pt_api pt_caret_movement pt_app_get_caret_movement(const pt_app *app);
+
+/* Stores a locale hint (since 2.1). The string is copied; NULL or an empty
+ * string clears the hint. When the application's explicit UI direction is
+ * inherit, the hint supplies the application fallback in the resolution chain;
+ * an explicit pt_app_set_ui_direction always wins, regardless of call order. A
+ * change invalidates layout and repaints only when it changes the resolved
+ * application fallback. Pt never reads the process environment: the caller
+ * passes the locale it already resolved. Since 2.1. */
+pt_api void pt_app_set_locale(pt_app *app, const char *locale);
+/* Since 2.1. Returns the stored locale hint, or NULL when none is set. The
+ * pointer is owned by the app and stays valid until the next set_locale or
+ * pt_app_destroy. */
+pt_api const char *pt_app_get_locale(const pt_app *app);
+
 /* Since 1.0. */
 pt_api void pt_app_set_quit_on_last_window_close(pt_app *app, bool enabled);
 

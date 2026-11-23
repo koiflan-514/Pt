@@ -260,19 +260,33 @@ pt_api void pt_widget_set_text_direction(pt_widget *widget, pt_text_direction di
 /* Since 2.0. */
 pt_api pt_text_direction pt_widget_get_text_direction(const pt_widget *widget);
 
-/* Editing follows visual order (2.0). Left and Right move the caret to the
- * visually adjacent cluster boundary, which can raise or lower the logical
- * byte offset inside an RTL run; Home and End go to the visual start and end of
- * the line. Shift+Left/Right extend the selection from the fixed logical
- * anchor, so the reported selection is always a logical byte range. Up, Down,
- * Page Up and Page Down keep a visual goal x across lines. Backspace and Delete
- * stay logical: they remove the preceding or following character in the stored
- * string, never the visually adjacent one. Caret rectangles reported through
- * IME and accessibility are visual rectangles. An application that needs
- * logical editing semantics can intercept keys in a window key callback, which
- * runs before the focused widget, and consume Left/Right/Home/End there. A
- * password entry derives its displayed bullets' direction from the stored text,
- * so the bullets never leak it in input purpose or accessibility text. */
+/* Editing follows the caret movement policy (since 2.1). The default is visual,
+ * the 2.0 behaviour: Left and Right move the caret to the visually adjacent
+ * cluster boundary, which can raise or lower the logical byte offset inside an
+ * RTL run; Home and End go to the visual start and end of the line. With
+ * pt_caret_movement_logical, Left and Right move by UTF-8 character boundary in
+ * the stored string and Home and End go to the logical line ends; the policy
+ * applies to entries and text areas only. Shift+Left/Right extend the selection
+ * from the fixed logical anchor, so the reported selection is always a logical
+ * byte range. Up, Down, Page Up and Page Down keep a visual goal x across lines
+ * in both modes. Backspace and Delete stay logical: they remove the preceding or
+ * following character in the stored string, never the visually adjacent one.
+ * Caret rectangles reported through IME and accessibility are visual rectangles.
+ * A window key callback still runs before the focused widget and can consume
+ * Left/Right/Home/End. A password entry derives its displayed bullets'
+ * direction from the stored text, so the bullets never leak it in input purpose
+ * or accessibility text. */
+
+/* Caret movement policy (since 2.1). Resolution is the widget's explicit value,
+ * then the nearest ancestor with an explicit value, then the window, then the
+ * application, then visual. The setter stores the explicit value, ignores NULL
+ * or an out-of-range enum, and does not invalidate layout or repaint: the policy
+ * affects the next key event only. The getter returns the stored explicit value,
+ * never the resolved one, so an unset widget reports
+ * pt_caret_movement_inherit. */
+pt_api void pt_widget_set_caret_movement(pt_widget *widget, pt_caret_movement movement);
+/* Since 2.1. */
+pt_api pt_caret_movement pt_widget_get_caret_movement(const pt_widget *widget);
 
 /* Since 1.0. */
 pt_api void pt_widget_set_visible(pt_widget *widget, bool visible);
