@@ -2306,6 +2306,56 @@ Achieved on `m23/w5-gate` (W5, all of the above):
 **M23 is closed.** The tree on `m23/w5-gate` is tag-ready; tag creation and
 the landing on `main` are the owner's step, exactly as for 2.0.
 
+## M24 - 2.2.0: documented RTL editing limitations (proposed; design only)
+
+Target release **2.2.0**, `ABI_MAJOR` stays 1 (SONAME `libpt.so.1`). Baseline
+on the landed 2.1.0 tree (`a3aea38`): `api/pt.api` reads **576 functions /
+952 entries**. The behavior design, code evidence and risk register live in
+[m24-design.md](m24-design.md); this section is the scope and wave contract.
+
+### Residual limitations reviewed
+
+The three editing bullets in [rtl.md](rtl.md#known-limitations) were read
+against `src/widget.c`, `src/text_layout.c`, `src/wayland/platform.c` and
+`src/table.c`:
+
+| Limitation | Verdict | Reason |
+| --- | --- | --- |
+| Shift+arrow across a soft wrap in RTL | **feasible**, medium risk | `text_area_horizontal`'s mapped Shift branch only calls `visual_caret_step`; the visual-line-edge test and the `caret_goal_x` pattern from `text_area_vertical` already exist. A cross-line step at a soft-wrap visual edge is a local change in one function. |
+| Multi-line mapped selection collapse | **feasible**, low risk, no paint change | The collapse already has a mapped single-line branch; `visual_line_edge` on the start and end line maps to the visual edges, and the painted range is already logical. |
+| Table horizontal wheel | **feasible**, premise corrected | Wayland's `wl_pointer.axis` has `horizontal_scroll` (value 1) since v1 (`wayland.xml` enum, matching `WL_POINTER_AXIS_HORIZONTAL_SCROLL`). Pt drops it at `platform.c:435`, so this is a routing gap, not a protocol gap. Whether a device emits it depends on the hardware; the limitation becomes device-dependent, not "unsupported". |
+| `pt_text_span` frozen / Arabic-Hebrew tofu / sanitization opt-in / locale table | out of scope | ABI and product decisions, not editing behavior. Recorded in [m24-design.md](m24-design.md#out-of-scope-recorded-not-planned). |
+
+### Waves
+
+| Wave | Scope | Edit domain | New API |
+| --- | --- | --- | --- |
+| W1 | Multi-line mapped selection collapses to the visual edge; Shift+arrow crosses a soft wrap at a visual line edge (affinity pinned to the landing line). | `src/widget.c`, `tests/test_text_area.c` | 0 (static helper only) |
+| W2 | Route `WL_POINTER_AXIS_HORIZONTAL_SCROLL` from the platform through an internal axis-kind path to `pt_table_scroll_horizontal`, with RTL direction mapping and overlay precedence; fill the existing `pt_pointer_event.delta_x` on horizontal axis events; narrow the limitation wording. | `src/wayland/platform.c`, `src/window.c`, `src/internal.h`, `src/overlay.c`, `src/widget.c`, `tests/test_data_view.c`, `tests/test_window.c` | 0 (public 4-arg `pt_window_input_axis` unchanged) |
+| W3 | `rtl.md` + `zh-CN/rtl.md` limitation rewrite, README pair "What is new in 2.2.0", `VERSION` 2.2.0, gate run. | docs, `VERSION`, `docs/release.md` | 0 |
+
+### Completion criteria
+
+- Default LTR text areas, logical caret movement and vertical-only wheel behavior
+  are byte-identical to 2.1; `tools/ltr-compat.sh` stays 11/11 `SAME` and the
+  2.1 snapshots do not move.
+- `api/pt.api` still reads **576 / 952** and binding parity stays 576/576 in
+  C++, Python and Java; `ABI_MAJOR` stays 1 with SONAME `libpt.so.1`.
+- `make check` green with additive tests only; no painting golden needs an
+  update.
+- The three `rtl.md` bullets describe the delivered behavior (the wheel one is
+  narrowed to device dependence); `check-bilingual-docs.py` and
+  `gen-api-reference.py --check` pass.
+- `VERSION` and the `pt_version_*` macros read 2.2.0 and
+  `tools/release-check.sh` passes on the frozen tree.
+
+### Budget
+
+~250 credits on a single main workstream: scaffold/research ~60 (this wave and
+this document), W1 ~80, W2 ~70, W3 ~40. If W2 cannot be verified live because the
+bench compositor/device never emits a horizontal axis, the routing still lands
+and W2's evidence is marked headless-only; the wave is not dropped.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
