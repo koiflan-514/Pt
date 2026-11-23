@@ -1,12 +1,12 @@
 # M23 design — 2.1.0 RTL ergonomics and safety (delivered)
 
-Status: **delivered (W1-W4)**, 2026-11-23; W5 landing pending. This document
+Status: **delivered (W1-W5)**, 2026-11-23; tag-ready. This document
 started as the design input for the M23 implementation waves and is kept as the
 record of what they built. The signatures below are the shipped C declarations
 (see `include/pt/base.h`, `app.h`, `window.h`, `widget.h` and `bidi.h`); the
 four open questions are answered in "Open questions" at the end. The release
 record is in [release.md](release.md) and the milestone plan in
-[ROADMAP.md](ROADMAP.md#m23---210-rtl-ergonomics-and-safety-delivered-w5-landing-pending).
+[ROADMAP.md](ROADMAP.md#m23---210-rtl-ergonomics-and-safety-delivered-tag-ready).
 
 2.0 delivered the bidi engine, the direction properties and visual editing.
 M23 is a minor release that closes four ergonomic gaps that 2.0 documented as
@@ -478,9 +478,9 @@ after W1's to keep the merge clean.
 | **W2** | Bidi control inventory + sanitizer (2 functions, 2 enums, 1 struct) | `include/pt/bidi.h` (new), `include/pt/pt.h`, `src/bidi.c`, `tools/gen-api-reference.py`, three bindings, `tests/test_bidi.c`, `api/pt.api`, `docs/api-reference.md` | `make check` (conformance still 770,241 + 91,707), sanitizer tests, ASan clean; delivered on `423d9da`/`ce6730a`/`e99b1a6`/`56e3904` |
 | **W3** | Logical start/end padding (1 function) | `include/pt/widget.h`, `src/widget.c`, `src/internal.h`, `src/layout.c`, three bindings, `tests/test_layout.c`, `tests/test_flex_grid.c`, `tests/test_visuals.c`, `api/pt.api`, `docs/api-reference.md` | `make check`, `make perf-check`, 17 LTR snapshots and 11/11 LTR gate unchanged; delivered on `4af041c`/`34108f1`, baseline 576/952 after the window-level review |
 | **W4** | Public guides, examples, generated reference | `docs/rtl.md`, `docs/zh-CN/rtl.md`, `docs/api-reference.md` (regen only), `examples/c/ergonomics_gallery.c`, `examples/cpp/ergonomics.cpp`, `examples/python/ergonomics.py`, `examples/java/Ergonomics.java`, `README.md`/`README.zh-CN.md`, the five guide pairs, `Makefile` example targets (end of file only), `docs/m23-design.md` (status) | delivered on `43a1f7f`/`279291d`; `tools/check-bilingual-docs.py`, `tools/gen-api-reference.py --check`, four-language example smoke |
-| **W5** | Hardening, 2.1.0 landing | `include/pt/base.h` (version macros), `Makefile` (`VERSION`), `README.md`, `docs/release.md`, `docs/ROADMAP.md`, `docs/standards.md` (if needed) | `werror=1`, `make check`, `check-bindings`, `perf-check`, sanitizers, staged install, reproducible tarball, four live suites, `tools/ci.sh`, `tools/release-check.sh --full`, tag `2.1.0` |
+| **W5** | Hardening, 2.1.0 landing | `include/pt/base.h` (version macros), `Makefile` (`VERSION`), `README.md`, `docs/release.md`, `docs/ROADMAP.md`, `docs/standards.md` (if needed) | `werror=1`, `make check`, `check-bindings`, `perf-check`, sanitizers, staged install, reproducible tarball, four live suites, `tools/ci.sh`, `tools/release-check.sh --full`, tag `2.1.0`; delivered on `607b847`/`c80e21a` with every gate green |
 
-W1-W4 are delivered and reviewed; W5 is pending. W4 and W5 are
+W1-W5 are delivered and reviewed. W4 and W5 are
 documentation/landing waves and must not add behavior. W5 is the
 only wave that changes the version and the release record; the tag itself is
 the owner's step, as in 2.0.
@@ -567,6 +567,7 @@ recorded here with the outcome, so the next reader does not reopen them:
    layout and flex/grid suites, so the interaction is asserted rather than
    assumed.
 
-Two follow-ups are registered for W5, neither with a correctness impact: an
-unset locale under an inherited application direction can mark one extra
-repaint, and `src/bidi.c` is missing a trailing newline.
+The two follow-ups registered for W5 are closed with no correctness impact: an
+unsetting `pt_app_set_locale` now repaints only windows that inherit the
+application direction (a window with its own explicit direction is skipped),
+and `src/bidi.c` gained its trailing newline.

@@ -2164,16 +2164,17 @@ tag tree expands `$(ABI_MAJOR)` in `tools/install-check.sh` and gives
 `tools/ci.sh` its test paths, and
 [release.md](release.md#gate-transcript) records both corrections.
 
-## M23 - 2.1.0: RTL ergonomics and safety (delivered; W5 landing pending)
+## M23 - 2.1.0: RTL ergonomics and safety (delivered; tag-ready)
 
 Goal: close the four RTL ergonomics and safety gaps that 2.0 documented as
 deliberate limitations, in a minor release that is purely additive. The full
 design, signatures and zero-regression arguments are in
 [m23-design.md](m23-design.md); the release record is in [release.md](release.md).
 
-Status (2026-11-23): **W1-W4 delivered and reviewed; W5 (version bump and
-final gate) pending.** The branches are `m23/w1-caret-locale`,
-`m23/w2-bidi-safety`, `m23/w3-logical-padding` and `m23/w4-docs`. The baseline
+Status (2026-11-23): **W1-W5 delivered; the tree is tag-ready and M23 is
+closed.** The branches are `m23/w1-caret-locale`, `m23/w2-bidi-safety`,
+`m23/w3-logical-padding`, `m23/w4-docs` (tip `67e87b7`) and `m23/w5-gate`
+(the final gate). The baseline
 is **576 functions / 952 entries** (576 `func`, 303 `enum`, 43 `callback`, 11
 `struct`, 12 `opaque`, 6 `define`, 1 `type`): 12 new functions, 3 new enums (15
 values) and 1 new public struct. Parity is 576/576 in C++, Python and Java with
@@ -2221,7 +2222,7 @@ baseline is 576/952.
 | W2 | Bidi inventory/sanitizer, new `bidi.h`, byte scanner, wrappers, tests, baseline | `423d9da` (API), `ce6730a` (bindings), `e99b1a6` (baseline + reference), `56e3904` (tests) | conformance unchanged (770,241 + 91,707), ASan clean, 573/949 cumulative |
 | W3 | Logical padding storage, layout/measure prepass, wrappers, geometry tests, baseline, RTL golden | `4af041c` (setter + prepass), `34108f1` (layout, flex/grid, opt-out, goldens) | `make perf-check`, 17 LTR snapshots and 11/11 cross-version gate unchanged, 574/950 before review, 576/952 after review |
 | W4 | `rtl.md` + Chinese pair, README pair, quickstart/architecture/bindings/comparison/accessibility pairs, four-language examples, generated reference check, example targets | `43a1f7f` (bilingual README and RTL guide), `279291d` (four-language examples and `run-*` targets) | `check-bilingual-docs.py` green, `gen-api-reference.py --check` clean, four-language smoke |
-| W5 | Hardening, version 2.1.0, release record finalisation, final gate | pending | `werror=1`, full `tools/ci.sh`, `release-check.sh --full`, staged install, tarball, four live suites, tag `2.1.0` by the owner |
+| W5 | Hardening, version 2.1.0, release record finalisation, final gate | `607b847` (version bump and follow-ups), `c80e21a` (final release record) | `werror=1`, full `tools/ci.sh` exit 0, `release-check.sh --full` green, staged install, reproducible tarball, four live suites, 564 → 576 ABI diff; tag `2.1.0` by the owner |
 
 Waves were sequential so `bindings/`, `widget.c` and `internal.h` never
 conflicted. File ownership and the detailed test plan are in
@@ -2280,18 +2281,30 @@ Achieved on `m23/w4-docs` (W1-W4):
   and the 2.0.0 history intact; the four-language 2.1 examples build with
   `werror=1`, exit 0 headless and 124 in the nested smoke.
 
-Pending for W5:
+Achieved on `m23/w5-gate` (W5, all of the above):
 
-- `VERSION` and the `pt_version_*` macros move to 2.1.0 and
-  `tools/release-check.sh` reports every automated gate green on the frozen
-  tree.
-- `make check`, `make check-bindings`, `make perf-check`, sanitizers, staged
-  install, reproducible tarball, four live suites and `tools/ci.sh` pass on the
-  2.1.0 tree; SONAME is `libpt.so.1`.
+- `VERSION` and the `pt_version_*` macros read **2.1.0**
+  (`pt_version_major/minor/patch` = 2/1/0), `tools/release-check.sh` reports
+  every automated gate green on the frozen tree, and `ABI_MAJOR` stays 1 with
+  SONAME `libpt.so.1`.
+- `tools/ci.sh` exits 0 on `607b847` (`CI verification passed for Pt 2.1.0`);
+  `make check` passes 41 C executables at 586,441 checks, C++ 863, Python 68
+  and Java 701 with 0 failures; `make perf-check` holds every ceiling including
+  the bidi profiles; ASan+UBSan report nothing with `libasan.so.8` and
+  `libubsan.so.1` linked; staged install reports pkg-config 2.1.0, the baseline
+  ABI, the four consumers and a clean uninstall; two `make dist` runs at
+  `SOURCE_DATE_EPOCH=1767225600` reproduce sha256
+  `9580b56fd92f3fac2fe2c7346b3fdf590663e340ace211d7a9e0a2ccc0370850`, and the
+  extracted tree rebuilds and passes; the four live suites pass.
 - Every `pending final gate run` marker in [release.md](release.md) is
-  replaced; the owner creates and pushes the annotated `2.1.0` tag.
-- W5 registers two small follow-ups: the locale-unset repaint and the missing
-  trailing newline in `src/bidi.c`, neither of which has a correctness impact.
+  replaced with a measured figure; the owner creates and pushes the annotated
+  `2.1.0` tag from this tag-ready tree.
+- The three W5 follow-ups are closed: the version bump, the locale-unset
+  excess repaint (only windows that inherit the app direction repaint) and the
+  missing trailing newline in `src/bidi.c`.
+
+**M23 is closed.** The tree on `m23/w5-gate` is tag-ready; tag creation and
+the landing on `main` are the owner's step, exactly as for 2.0.
 
 ## Post-1.0 horizons
 
