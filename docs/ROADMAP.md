@@ -2164,6 +2164,94 @@ tag tree expands `$(ABI_MAJOR)` in `tools/install-check.sh` and gives
 `tools/ci.sh` its test paths, and
 [release.md](release.md#gate-transcript) records both corrections.
 
+## M23 - 2.1.0: RTL ergonomics and safety (proposed)
+
+Goal: close the four RTL ergonomics and safety gaps that 2.0 documented as
+deliberate limitations, in a minor release that is purely additive. The full
+design, signatures and zero-regression arguments are in
+[m23-design.md](m23-design.md); this section is the milestone plan.
+
+Status (2026-11-23): **proposed**. No code has landed. The design was
+researched against the 2.0 tree (`12dbbf6`): `include/pt/base.h`,
+`app.h`/`widget.h`, `src/app.c`, `widget.c`, `internal.h`, `bidi.c`,
+`layout.c`, `rtl.md` (including the locale gap at line 89, the padding
+decision at 159-160 and the future-API note at 299) and `api-policy.md`.
+Projected baseline: **574 functions / 950 entries** (from 564/924), with three
+new enums (15 values), one new public struct and ten new functions. SONAME
+stays `libpt.so.1`; `ABI_MAJOR` stays 1 because nothing is removed or changed.
+
+### Proposed surface
+
+1. **Caret movement policy (4 functions, 1 enum).**
+   `pt_caret_movement` is `inherit=0`/`visual`/`logical`; app and widget
+   setters/getters resolve widget → ancestor → app → visual. Visual remains
+   the default, so 2.0 behavior and the LTR path are unchanged. Logical mode
+   switches Left/Right to UTF-8 boundaries and Home/End to logical line ends;
+   vertical movement, Shift selection and Backspace/Delete keep their 2.0
+   rules. A window level is intentionally omitted because a root-widget
+   override covers a window.
+2. **Locale helper (3 functions).** `pt_locale_ui_direction` is a bounded,
+   ICU-free BCP-47/POSIX language/script lookup; `pt_app_set_locale` copies a
+   hint and `pt_app_get_locale` borrows it. Resolution becomes widget →
+   ancestor → window → app explicit → app locale hint → LTR, so an explicit
+   setter wins in either call order. No environment is read; no locale means
+   LTR exactly as today.
+3. **Bidi control inventory and sanitization (2 functions, 2 enums, 1
+   struct).** A new `include/pt/bidi.h` reports the nine explicit directional
+   controls with byte offsets, lengths and kinds
+   (`pt_bidi_control_inventory`), and optionally returns a caller-owned copy
+   with them stripped or replaced by U+FFFD (`pt_bidi_sanitize`). It is
+   opt-in: no widget, clipboard, drag or accessibility path sanitizes
+   automatically, so stored bytes and offsets never move. The public
+   inventory is narrower than the internal `pt_bidi_is_removed`, which keeps
+   its BN-plus-X9 paint meaning.
+4. **Logical start/end padding (1 function).**
+   `pt_widget_set_padding_logical(top, start, bottom, end)` stores the
+   logical edges and re-resolves them against the widget's UI direction on
+   every layout, including an inherited direction change. Physical
+   `pt_widget_set_padding` remains and the last call wins; the logical flag
+   defaults false, so existing geometry is untouched.
+
+### Waves
+
+| Wave | Scope | Exit gate |
+| --- | --- | --- |
+| W1 | Caret policy and locale helper; app/widget storage, resolver, editing branches, three bindings, tests | `make check`, `make check-bindings`, 571/934 cumulative, LTR snapshots unchanged |
+| W2 | Bidi inventory/sanitizer, new `bidi.h`, byte scanner, wrappers, tests | conformance unchanged (770,241 + 91,707), ASan clean, 573/949 cumulative |
+| W3 | Logical padding storage, layout/measure prepass, wrappers, geometry tests | `make perf-check`, 17 LTR snapshots and 11/11 cross-version gate unchanged, 574/950 cumulative |
+| W4 | `rtl.md` + Chinese pair, four-language examples, generated reference, example targets | `check-bilingual-docs.py`, `gen-api-reference.py --check`, four-language smoke |
+| W5 | Hardening, version 2.1.0, release record, final gate | `werror=1`, full `tools/ci.sh`, `release-check.sh --full`, staged install, tarball, four live suites |
+
+Waves are sequential so `bindings/`, `widget.c` and `internal.h` never conflict;
+W2 can run beside W1 only if its wrappers land after W1's. File ownership and
+the detailed test plan are in [m23-design.md](m23-design.md#waves).
+
+### Budget
+
+DuMate is exhausted and is not a dependency. Suggested allocation: W1 30%
+(main free channel), W2 15% (Lingxi or main, bounded scanner review), W3 20%
+(main, layout review), W4 20% (main English guide, small provider for the
+Chinese pair), W5 15% (main plus an independent gate reproduction on a second
+provider). A wave that cannot pass its exit gate is split rather than merged
+partially, and no 2.0 gate is lowered to make room for a 2.1 feature.
+
+### Completion criteria
+
+- `api/pt.api` reads 574 functions / 950 entries; every function has a since
+  marker; 574/574 parity in C++, Python and Java with an empty allowlist.
+- Defaults preserve 2.0: visual caret, no locale, physical padding, no
+  automatic sanitization; 17 LTR snapshots and 11/11 `ltr-compat.sh` unchanged.
+- Locale mapping, logical caret movement, control inventory/sanitize and
+  logical padding each have headless tests, including LTR/RTL pairs and
+  invalid/NULL inputs.
+- `rtl.md` and `zh-CN/rtl.md` document the four features and drop the matching
+  limitations; `check-bilingual-docs.py` and `gen-api-reference.py --check`
+  pass.
+- `make check`, `make check-bindings`, `make perf-check`, sanitizers, staged
+  install, reproducible tarball, four live suites and `tools/ci.sh` pass on the
+  2.1.0 tree; SONAME is `libpt.so.1`; `release.md` records the release and the
+  owner creates and pushes the annotated `2.1.0` tag.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
