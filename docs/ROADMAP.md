@@ -1986,8 +1986,8 @@ sanitizers clean with `libasan`/`libubsan` linked, staged install plus
 four-language consumers, reproducible tarball with an extracted rebuild, four
 live suites under nested niri (including the new RTL caret/selection check),
 11/11 LTR `SAME` against 1.4.0, and the symbol ABI diff 556 → 564 with 0
-removed / 0 changed / 8 added. The annotated 2.0.0 tag is the remaining owner
-step.
+removed / 0 changed / 8 added. The annotated tag `2.0.0` (object `cdd78c3`)
+was created from `12dbbf6` and pushed to `origin`; M22 is fully closed.
 
 Decisions (researched 2026-11-22, kept as taken):
 
@@ -2156,10 +2156,13 @@ Achieved on the final gate tree `91176c2`:
   diff against 1.4.0 is 8 added, 0 removed, 0 changed; every
   `pending final gate run` marker in [release.md](release.md) is replaced.
 
-**M22 is closed.** 2.0.0 is delivered on `m22/integration` as a tag-ready tree;
-the annotated tag is the owner's remaining step. The only gate-facility debt is
-the `tools/install-check.sh` `$(ABI_MAJOR)` expansion recorded under
-[release.md](release.md#gate-transcript).
+**M22 is closed.** 2.0.0 is tagged and pushed: the annotated tag `2.0.0`
+(object `cdd78c3e3beb3e7d934cadc488fc561b430324fe`) points at commit `12dbbf6`,
+and `git ls-remote origin refs/tags/2.0.0` returns that object. M22 is fully
+closed. The gate-facility debt was fixed rather than carried: `1992f86` in the
+tag tree expands `$(ABI_MAJOR)` in `tools/install-check.sh` and gives
+`tools/ci.sh` its test paths, and
+[release.md](release.md#gate-transcript) records both corrections.
 
 ## Post-1.0 horizons
 
@@ -2191,8 +2194,8 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
 
 ### 2.0 — structural
 
-- RTL/bidi paragraph layout per [rtl.md](rtl.md) (delivered in M22 as 2.0.0;
-  tag pending): a UBA implementation
+- RTL/bidi paragraph layout per [rtl.md](rtl.md) (delivered in M22 as 2.0.0,
+  tagged): a UBA implementation
   (SheenBidi, Apache-2.0, to avoid FriBidi's LGPL static-link constraint),
   bidi-run shaping, logical offsets through the public API and AT-SPI, mirrored
   layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing,

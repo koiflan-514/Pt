@@ -1158,7 +1158,7 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
-## 2.0.0 validation record (2026-11-23, final — tag-ready)
+## 2.0.0 validation record (2026-11-23, final — published)
 
 Environment: the final gate tree `91176c2` on `m22/integration` on the
 reference machine (CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC
@@ -1177,8 +1177,9 @@ and `tools/release-check.sh --full`. Three pre-tag cleanup commits follow it:
 `tools/ci.sh` its test paths, `6775485` corrects the LTR scene count in the
 guides, and the commit that carries this paragraph records the resulting
 committed-tree digest. The clean exit-0 `tools/ci.sh` transcript and the
-committed-tree digest were measured on `6775485`; the artifact itself is
-tag-ready, and the only step left is the owner's freeze confirmation.
+committed-tree digest were measured on `6775485`; the annotated tag `2.0.0`
+(object `cdd78c3e3beb3e7d934cadc488fc561b430324fe`) was then created from the
+frozen commit `12dbbf6` and pushed to `origin`, so the release is published.
 
 ### Scope
 
@@ -1305,7 +1306,7 @@ section an upgrading application must read:
 | Live suites | pass under nested niri on `91176c2`: `check-wayland` 48 checks with focused-entry idle 26.1 ms over 5000 ms after one external-input retry; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `PREEDIT_COUNT=5`, `LAST_PREEDIT=ni hao` and `COMMIT=你好`; `check-rtl-live` PASS — the IME rectangle matches the visual caret map within one pixel at every stop, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink |
 | Sanitizers, staged install, reproducible tarball, `tools/ci.sh` | pass end to end: bare `tools/ci.sh` on `6775485` exits 0 (`CI verification passed for Pt 2.0.0`) after the clean `werror=1` build, `make check`, `make perf-check`, the 11/11 LTR gate, staged install (SONAME `libpt.so.1`, pkg-config 2.0.0, the baseline ABI, the C/C++/Python/Java consumers and a clean `uninstall`), the ASan+UBSan rebuild (41 C binaries plus `test_cpp` 862 checks, the Python suite 68 tests and the Java suite 701 checks, nothing reported), two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproducing `b19e2995…cce9549` (sidecar matches; the extracted tree rebuilds with `werror=1` and passes `make check`) and the four live suites; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.0.0` and `tests/libwire_driver.so` |
 | ABI diff against 1.4.0 | pass at the symbol level on `91176c2`: 556 → 564 exported `pt_*` symbols, 0 removed, 0 changed, 8 added (`pt_app_{set,get}_ui_direction`, `pt_window_{set,get}_ui_direction`, `pt_widget_{set,get}_ui_direction`, `pt_widget_{set,get}_text_direction`), no `SB_*` exports, SONAME `libpt.so.1` on both; `readelf --dyn-syms` types agree on all 556 common symbols; `abidiff` is still unavailable on the reference machine |
-| `tools/release-check.sh --full` | pass: every automated gate is green (version agreement, header surface, 564/924 baseline, 564/564 parity in three languages, reference coverage, deprecation inventory, examples, 9 bilingual guides); the two open items are the human freeze commit/tag and live-suite sign-off, both recorded above |
+| `tools/release-check.sh --full` | pass: every automated gate is green (version agreement, header surface, 564/924 baseline, 564/564 parity in three languages, reference coverage, deprecation inventory, examples, 9 bilingual guides); both human open items are now closed — the freeze commit/tag is the annotated tag `2.0.0` (object `cdd78c3`, commit `12dbbf6`) pushed to `origin`, and the live-suite sign-off is recorded above |
 
 ### ABI statement
 
@@ -1411,11 +1412,13 @@ The same run then executed every remaining stage:
   `COMMIT=你好`; `check-rtl-live` PASS with every IME-rectangle/caret-map stop
   within one pixel, Shift+Right keeping its anchor and the entry painting ink.
 - **Readiness.** `tools/release-check.sh --full` reports every automated gate
-  green and only the two human open items (freeze commit/tag and
-  live-suite sign-off).
+  green; both human open items are closed — the freeze commit/tag is the
+  annotated tag `2.0.0` (object `cdd78c3`, commit `12dbbf6`) pushed to
+  `origin`, and the live-suite sign-off is the live rows above.
 
-All suite counts, the live runs and the ABI comparison are final on this tree;
-the annotated tag is created by the owner from the frozen commit.
+All suite counts, the live runs and the ABI comparison are final on `12dbbf6`;
+the annotated tag `2.0.0` (object `cdd78c3`) was created from that frozen
+commit and pushed to `origin`.
 
 ### Committed-tree digest
 
@@ -1430,10 +1433,9 @@ consecutive `dist` runs, and the archive is tree-identical to
 more, so the tagged tree necessarily has a different digest; that is the
 self-reference of shipping the record inside the archive, not nondeterminism.
 `make dist` on the tagged tree reproduces its own digest exactly. The final
-tag-time digest is built by the landing agent from the frozen tagged tree and
-published as the sidecar; that is the authoritative value, and by design it
-differs from this committed-tree digest because this record lies inside the
-archive.
+tag-time digest is built from the frozen tagged tree (`12dbbf6`) and published
+as the sidecar; that is the authoritative value, and by design it differs from
+this committed-tree digest because this record lies inside the archive.
 
 All sha256 digests in this record — the gate-time
 `e9e436b974a3473727465289d27e6141c2cc0d116f830e1efa888a28ce95c513` and the
@@ -1446,10 +1448,11 @@ byte-identical trees; only the timestamp header differs. To reproduce a digest
 quoted here, run `SOURCE_DATE_EPOCH=1767225600 make dist`, not a bare
 `make dist`.
 
-The annotated tag is created from the final gate tree once the owner confirms
-the freeze. `tools/release-check.sh --full` reports every automated gate green;
-the two open items it always reports are the human ones (freeze commit/tag and
-live-suite sign-off), and the live suites above were run on `6775485`. The
+The annotated tag `2.0.0` was created from the frozen tree `12dbbf6` and
+pushed to `origin`. `tools/release-check.sh --full` reports every automated
+gate green; the two human items it always reports are both closed (the freeze
+commit/tag above and the live-suite sign-off), and the live suites above were
+run on `6775485`. The
 `$(ABI_MAJOR)` expansion and the `ci.sh` test paths are part of the artifact,
 so a bare `tools/ci.sh` on the tagged tree exits 0.
 
