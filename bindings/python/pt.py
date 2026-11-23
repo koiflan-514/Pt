@@ -1831,6 +1831,9 @@ _pt_widget_set_margin = _proto(
 _pt_widget_set_padding = _proto(
     "pt_widget_set_padding", None, _c_void_p, _c_float, _c_float, _c_float, _c_float
 )
+_pt_widget_set_padding_logical = _proto(
+    "pt_widget_set_padding_logical", None, _c_void_p, _c_float, _c_float, _c_float, _c_float
+)
 _pt_widget_set_gap = _proto("pt_widget_set_gap", None, _c_void_p, _c_float)
 _pt_widget_set_grow = _proto("pt_widget_set_grow", None, _c_void_p, _c_float)
 _pt_widget_set_align_self = _proto("pt_widget_set_align_self", None, _c_void_p, _c_int)
@@ -3414,6 +3417,10 @@ class Widget:
 
     def set_padding(self, top: float, right: float, bottom: float, left: float) -> "Widget":
         _pt_widget_set_padding(self._ptr, top, right, bottom, left)
+        return self
+
+    def set_padding_logical(self, top: float, start: float, bottom: float, end: float) -> "Widget":
+        _pt_widget_set_padding_logical(self._ptr, top, start, bottom, end)
         return self
 
     def set_gap(self, gap: float) -> "Widget":

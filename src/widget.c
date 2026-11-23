@@ -1930,6 +1930,30 @@ void pt_widget_set_padding(pt_widget *widget, float top, float right, float bott
     widget->padding_right = right;
     widget->padding_bottom = bottom;
     widget->padding_left = left;
+    widget->padding_logical = false;
+    pt_widget_mark_dirty(widget, true);
+}
+
+void pt_widget_set_padding_logical(pt_widget *widget, float top, float start, float bottom,
+                                   float end) {
+    if (!widget) {
+        return;
+    }
+    widget->padding_top = top;
+    widget->padding_bottom = bottom;
+    widget->padding_start = start;
+    widget->padding_end = end;
+    widget->padding_logical = true;
+    /* Resolve once now so the fields are valid before the next layout and paint
+     * (paint can run on a damage-only frame) read them. The layout prepass
+     * repeats this from the current direction on every pass. */
+    if (pt_widget_resolved_ui_direction(widget) == pt_ui_direction_rtl) {
+        widget->padding_right = start;
+        widget->padding_left = end;
+    } else {
+        widget->padding_left = start;
+        widget->padding_right = end;
+    }
     pt_widget_mark_dirty(widget, true);
 }
 
@@ -2173,6 +2197,25 @@ pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget) {
         }
     }
     return pt_ui_direction_ltr;
+}
+
+void pt_widget_resolve_logical_padding(pt_widget *root) {
+    if (!root) {
+        return;
+    }
+    for (pt_widget *widget = root->first_child; widget; widget = widget->next_sibling) {
+        pt_widget_resolve_logical_padding(widget);
+    }
+    if (!root->padding_logical) {
+        return;
+    }
+    if (pt_widget_resolved_ui_direction(root) == pt_ui_direction_rtl) {
+        root->padding_right = root->padding_start;
+        root->padding_left = root->padding_end;
+    } else {
+        root->padding_left = root->padding_start;
+        root->padding_right = root->padding_end;
+    }
 }
 
 pt_caret_movement pt_widget_resolved_caret_movement(const pt_widget *widget) {

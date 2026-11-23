@@ -1085,10 +1085,19 @@ typedef struct pt_widget {
     float margin_right;
     float margin_bottom;
     float margin_left;
+    /* The four fields below are always the physical values layout and paint
+     * read. A logical call (pt_widget_set_padding_logical) also stores its
+     * start/end pair and sets padding_logical; the layout prepass re-derives
+     * padding_left/padding_right from them on every layout and measure so a
+     * direction change is honoured. padding_logical is false in every widget
+     * that only ever used the physical setter, so the prepass is a no-op. */
     float padding_top;
     float padding_right;
     float padding_bottom;
     float padding_left;
+    float padding_start;
+    float padding_end;
+    bool padding_logical;
     float grow;
     pt_align align_self;
 
@@ -1259,6 +1268,12 @@ pt_ui_direction pt_widget_resolved_ui_direction(const pt_widget *widget);
 /* Resolves the caret movement policy: widget -> nearest explicit ancestor ->
  * window -> application -> visual. */
 pt_caret_movement pt_widget_resolved_caret_movement(const pt_widget *widget);
+/* Walks the subtree and re-resolves the physical left/right padding of every
+ * widget whose padding was set logically (padding_logical), from the resolved UI
+ * direction. Runs at the entry of layout and measure so both see the same
+ * geometry; widgets that never called the logical setter are untouched, so the
+ * pass allocates nothing and writes nothing for a pure physical tree. */
+void pt_widget_resolve_logical_padding(pt_widget *root);
 pt_text_direction pt_widget_resolved_text_direction(const pt_widget *widget,
                                                     const char *text, size_t length);
 /* Liveness check usable after a user callback that may have destroyed widget:

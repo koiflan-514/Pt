@@ -844,6 +844,7 @@ func pt_widget_set_min_height voidpt_widget_set_min_height(pt_widget*widget,floa
 func pt_widget_set_min_width voidpt_widget_set_min_width(pt_widget*widget,floatwidth)
 func pt_widget_set_on_checked voidpt_widget_set_on_checked(pt_widget*widget,pt_value_callbackcallback,void*user_data)
 func pt_widget_set_padding voidpt_widget_set_padding(pt_widget*widget,floattop,floatright,floatbottom,floatleft)
+func pt_widget_set_padding_logical voidpt_widget_set_padding_logical(pt_widget*widget,floattop,floatstart,floatbottom,floatend)
 func pt_widget_set_paint_callback voidpt_widget_set_paint_callback(pt_widget*widget,pt_paint_callbackcallback,void*user_data)
 func pt_widget_set_radius voidpt_widget_set_radius(pt_widget*widget,floatradius)
 func pt_widget_set_size voidpt_widget_set_size(pt_widget*widget,floatwidth,floatheight)

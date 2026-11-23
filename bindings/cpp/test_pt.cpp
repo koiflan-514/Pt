@@ -864,6 +864,16 @@ int main() {
           pt_ui_direction_rtl == 2);
     check(pt_text_direction_auto == 0 && pt_text_direction_ltr == 1 &&
           pt_text_direction_rtl == 2);
+    /* 2.1 logical padding: the builder form compiles and chains; the mapping
+     * itself is asserted in tests/test_layout.c. */
+    pt::widget logical_card = pt::column(root.get());
+    logical_card.set_width(200.0f).set_height(80.0f);
+    logical_card.set_padding_logical(4.0f, 16.0f, 6.0f, 8.0f);
+    logical_card.set_ui_direction(pt_ui_direction_rtl);
+    const pt::rect logical_bounds = logical_card.bounds();
+    check(logical_bounds.width >= 0.0f);
+    logical_card.set_padding(1.0f, 2.0f, 3.0f, 4.0f);
+
     application.set_ui_direction(pt_ui_direction_rtl);
     check(application.ui_direction() == pt_ui_direction_rtl);
     window.set_ui_direction(pt_ui_direction_ltr);

@@ -493,6 +493,15 @@ public final class PtTest {
                     "widget direction default");
             check(Pt.widget_get_text_direction(directionLabel) == Pt.text_direction_auto,
                     "text direction default");
+            /* 2.1 logical padding: the wrapper binds and runs; the mapping is
+             * asserted in tests/test_layout.c. */
+            MemorySegment logicalCard = Pt.column(root);
+            Pt.widget_set_width(logicalCard, 200.0f);
+            Pt.widget_set_height(logicalCard, 80.0f);
+            Pt.widget_set_padding_logical(logicalCard, 4.0f, 16.0f, 6.0f, 8.0f);
+            Pt.widget_set_ui_direction(logicalCard, Pt.ui_direction_rtl);
+            Pt.widget_set_padding(logicalCard, 1.0f, 2.0f, 3.0f, 4.0f);
+
             Pt.app_set_ui_direction(app, Pt.ui_direction_rtl);
             check(Pt.app_get_ui_direction(app) == Pt.ui_direction_rtl,
                     "app direction stored");

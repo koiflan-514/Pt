@@ -1211,6 +1211,7 @@ void pt_widget_layout_child(pt_widget *widget, float x, float y, float width, fl
         return;
     }
     pt_layout_ctx local = ctx ? *ctx : pt_layout_context_for(widget);
+    pt_widget_resolve_logical_padding(widget);
     layout_widget_internal(widget, x, y, width, height, &local);
 }
 
@@ -1226,6 +1227,7 @@ void pt_widget_measure_child(pt_widget *widget, const pt_layout_ctx *ctx, float 
         return;
     }
     pt_layout_ctx local = ctx ? *ctx : pt_layout_context_for(widget);
+    pt_widget_resolve_logical_padding(widget);
     float width = 0.0f;
     float height = 0.0f;
     preferred_size(widget, &local, avail_width, avail_height, &width, &height);
@@ -1243,6 +1245,7 @@ void pt_widget_layout(pt_widget *root, float x, float y, float width, float heig
         return;
     }
     pt_layout_ctx local = ctx ? *ctx : pt_layout_context_for(root);
+    pt_widget_resolve_logical_padding(root);
     layout_widget_internal(root, x, y, width, height, &local);
 }
 
@@ -1258,6 +1261,7 @@ void pt_widget_measure(pt_widget *widget, const pt_layout_ctx *ctx, float availa
         return;
     }
     pt_layout_ctx local = ctx ? *ctx : pt_layout_context_for(widget);
+    pt_widget_resolve_logical_padding(widget);
     float width = 0.0f;
     float height = 0.0f;
     preferred_size(widget, &local, available_width, available_height, &width, &height);

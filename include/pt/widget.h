@@ -191,6 +191,21 @@ pt_api void pt_widget_set_margin(pt_widget *widget, float top, float right, floa
 /* Since 1.0. */
 pt_api void pt_widget_set_padding(pt_widget *widget, float top, float right, float bottom,
                                   float left);
+/* Since 2.1. Sets padding in logical order. top and bottom stay physical; start
+ * is the edge where content begins in the widget's resolved UI direction and
+ * end is the opposite edge. In LTR start maps to left and end to right; in RTL
+ * start maps to right and end to left. The mapping is re-evaluated on every
+ * layout and measure, so a later direction change (explicit, inherited from an
+ * ancestor, the window or the application) is honoured without another call,
+ * and measure reports the same geometry as layout.
+ *
+ * pt_widget_set_padding remains physical. The two setters share the same four
+ * edges and the last call wins: a physical call drops the logical mapping, a
+ * logical call replaces the physical values. Margins stay physical; there is
+ * no logical margin setter. For a widget that never calls this function the
+ * layout is byte-identical to 2.0. Ignores NULL. Since 2.1. */
+pt_api void pt_widget_set_padding_logical(pt_widget *widget, float top, float start, float bottom,
+                                          float end);
 /* Since 1.0. */
 pt_api void pt_widget_set_gap(pt_widget *widget, float gap);
 /* Since 1.0. */

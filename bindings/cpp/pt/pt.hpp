@@ -592,6 +592,10 @@ class widget {
         pt_widget_set_padding(handle_, top, right, bottom, left);
         return *this;
     }
+    widget &set_padding_logical(float top, float start, float bottom, float end) {
+        pt_widget_set_padding_logical(handle_, top, start, bottom, end);
+        return *this;
+    }
     widget &set_gap(float gap) {
         pt_widget_set_gap(handle_, gap);
         return *this;

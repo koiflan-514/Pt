@@ -1199,6 +1199,8 @@ public final class Pt {
             FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32));
     private static final MethodHandle widget_set_padding = bind("pt_widget_set_padding",
             FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32));
+    private static final MethodHandle widget_set_padding_logical = bind("pt_widget_set_padding_logical",
+            FunctionDescriptor.ofVoid(ptr, f32, f32, f32, f32));
     private static final MethodHandle widget_set_gap = bind("pt_widget_set_gap",
             FunctionDescriptor.ofVoid(ptr, f32));
     private static final MethodHandle widget_set_grow = bind("pt_widget_set_grow",
@@ -4111,6 +4113,11 @@ public final class Pt {
     public static void widget_set_padding(MemorySegment widget, float top, float right,
             float bottom, float left) {
         invoke(widget_set_padding, widget, top, right, bottom, left);
+    }
+
+    public static void widget_set_padding_logical(MemorySegment widget, float top, float start,
+            float bottom, float end) {
+        invoke(widget_set_padding_logical, widget, top, start, bottom, end);
     }
 
     public static void widget_set_gap(MemorySegment widget, float gap) {

@@ -83,6 +83,14 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(label.ui_direction, pt.ui_direction_inherit)
         self.assertEqual(label.text_direction, pt.text_direction_auto)
 
+        # 2.1 logical padding: the wrapper runs and chains; the mapping is
+        # asserted in tests/test_layout.c.
+        card = pt.column(self.column)
+        card.set_width(200.0).set_height(80.0)
+        card.set_padding_logical(4.0, 16.0, 6.0, 8.0)
+        card.set_ui_direction(pt.ui_direction_rtl)
+        self.assertEqual(card.set_padding(1.0, 2.0, 3.0, 4.0), card)
+
         self.app.set_ui_direction(pt.ui_direction_rtl)
         self.assertEqual(self.app.ui_direction, pt.ui_direction_rtl)
         self.window.ui_direction = pt.ui_direction_ltr
