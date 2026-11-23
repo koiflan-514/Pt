@@ -1158,14 +1158,25 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
-## 2.1.0 validation record (2026-11-23, draft — final gate run pending)
+## 2.1.0 validation record (2026-11-23, final — tag-ready)
 
-Status: **draft**. This section records the scope and the additive contract of
-2.1.0 while the release tree is still being landed. Every figure below comes
-from the W1–W4 wave trees and is reproducible there; each row marked
-`pending final gate run` is filled in by W5 on the frozen 2.1.0 tree, in the
-same shape as the 2.0.0 record above it. The annotated `2.1.0` tag is created
-and pushed by the owner after that run, as in 2.0.
+Environment: the final gate tree on `m23/w5-gate` on the reference machine
+(CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1, Python 3.14.10
+and OpenJDK 25.0.2. The W1–W4 branch `m23/w4-docs` tip `67e87b7` lands the W5
+hardening commit `607b847` (version bump to 2.1.0 plus the three registered
+follow-ups).
+
+This is the **final gate record**. Every figure below was measured on the
+2.1.0 tree after that bump, including `make check`, `make check-bindings`,
+`make perf-check`, the four live suites, the sanitizer and staged-install
+passes, the reproducible tarball and extracted rebuild, the symbol-level ABI
+comparison against 2.0.0 and `tools/release-check.sh --full`. Because this
+record ships inside the release archive, editing it changes the archive digest:
+the sha256 quoted below is what the gate measured for the commit that carries
+this paragraph, and `make dist` on the tagged tree reproduces its own digest
+exactly — re-measure there rather than trusting a digest quoted from inside the
+archive. The annotated `2.1.0` tag is created and pushed by the owner after
+this record, as in 2.0.
 
 ### Scope
 
@@ -1238,20 +1249,21 @@ None by default. These are the points an upgrading application must read:
 
 | Check | Result |
 | --- | --- |
-| Version agreement | pending final gate run (W5 sets `VERSION` and the `pt_version_*` macros to 2.1.0; SONAME stays `libpt.so.1` through `ABI_MAJOR := 1`) |
-| API baseline | pass on the W3 tree: `api/pt.api` reads 576 functions / 952 entries; W4 re-runs `tools/gen-api-reference.py --check` |
-| Since audit | pending final gate run: 12 declarations carry `Since 2.1.`; the tree-wide count is recorded with the final gate |
-| Binding parity | pass on the W3 tree: 576/576 (C++, Python and Java), 0 missing, 0 allowlisted |
-| Unicode conformance | unchanged: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
-| LTR byte stability | pass on the W3 tree: 2.0 snapshots byte-identical and `tools/ltr-compat.sh 1.4.0 HEAD` at 11/11 `SAME` (W3 ran the cross-version gate; W5 re-runs it) |
-| `make check` / `make check-bindings` | pending final gate run (W1–W3 each ran `make check` and `make check-bindings` green with the new suites) |
-| `make perf-check` | pending final gate run (W3 ran the layout-sensitive profiles) |
-| Sanitizers, staged install, reproducible tarball | pending final gate run (`tools/ci.sh` stages) |
-| Four live suites | pending final gate run (`check-wayland`, `check-typing`, `check-ime-live`, `check-rtl-live`) |
-| Bilingual documentation | pass on W4: 9 public guides with byte-identical code blocks, including the rewritten `rtl.md` pair |
-| Examples | pass on W4: C/C++/Python/Java 2.1 examples build under `werror=1`, exit 0 with `PT_HEADLESS=1` and exit 124 under the nested niri smoke timeout |
-| ABI diff against 2.0.0 | pending final gate run: expected symbol-level 564 → 576 with 0 removed, 0 changed and 12 added, no `SB_*` export, SONAME `libpt.so.1` on both |
-| `tools/release-check.sh --full` | pending final gate run |
+| Version agreement | pass: `include/pt/base.h` (`pt_version_major/minor/patch` = 2/1/0 and `pt_version_string` `"2.1.0"`), `Makefile` `VERSION := 2.1.0`, the README status line and the generated reference say 2.1.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| API baseline | pass: `api/pt.api` reads 576 functions / 952 entries; `tools/gen-api-reference.py --check` is clean after the version bump |
+| Since audit | pass: 11 declarations carry a `Since 2.1.` marker (4 in `app.h`, 3 in `widget.h`, 2 in `window.h`, 2 in `bidi.h`); the new struct `pt_bidi_control_span` and the three enums are documented under their functions rather than carrying a per-field marker, matching the 2.0 convention |
+| Binding parity | pass: 576/576 (C++, Python and Java), 0 missing, 0 allowlisted |
+| Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| LTR byte stability | pass: `tools/ltr-compat.sh 1.4.0 HEAD` reports 11/11 `SAME`, and `tools/ltr-compat.sh 2.0.0 HEAD` (12dbbf6 vs the gate tree) reports 11/11 `SAME`, so 2.1 is byte-identical to 2.0 as well as to 1.4 in LTR |
+| `make check` / `make check-bindings` | pass: 41 C executables (586,441 checks in total, including the 454,380-check property sweep), 0 failures; C++ 863 checks, Python 68 tests, Java 701 checks, 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
+| `make perf-check` | pass: every guard ceiling holds (`startup first frame 8.032 ms`, `idle 300 ms CPU 0.515 ms`, `dense layout 2.829 ms`, `dense full paint 5.493 ms`, `dense damage share 3.237%`, `4K full paint 8.343 ms`, `views full paint 3.193 ms`, `100k table scroll 4.612 ms`), and the bidi profiles hold (`mixed paragraph wrap+paint 0.860 ms` vs 2.0 ms, `rtl table 100 rows paint 2.957 ms` vs 7.0 ms, `rtl entry 1000 caret moves 44.278 ms` vs 100 ms) |
+| Sanitizers, staged install, reproducible tarball | pass end to end: bare `tools/ci.sh` on `607b847` exits 0 (`CI verification passed for Pt 2.1.0`) after the clean `werror=1` build, `make check`, `make perf-check`, the 11/11 LTR gate, staged install (SONAME `libpt.so.1`, pkg-config 2.1.0, the baseline ABI, the C/C++/Python/Java consumers and a clean `uninstall`), the ASan+UBSan rebuild (41 C binaries plus `test_cpp` 863 checks, the Python suite 68 tests and the Java suite 701 checks, nothing reported), two `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproducing `9580b56f…370850` (sidecar matches; the extracted tree rebuilds with `werror=1` and passes `make check`) and the four live suites; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.1.0` and `tests/libwire_driver.so` |
+| Four live suites | pass under nested niri: `check-wayland` 48 checks; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `COMMIT=你好` (nihao + space); `check-rtl-live` RESULT PASS — the IME rectangle matches the visual caret map, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink; the example smoke exits 124 under the 3 s nested timeout as expected |
+| Bilingual documentation | pass: 9 public guides with byte-identical code blocks, including the rewritten `rtl.md` pair |
+| Examples | pass: C/C++/Python/Java 2.1 examples build under `werror=1`, exit 0 with `PT_HEADLESS=1` and exit 124 under the nested niri smoke timeout; `tools/release-check.sh` covers the four ergonomics examples and their `run-*` targets |
+| ABI diff against 2.0.0 | pass at the symbol level: 564 → 576 exported `pt_*` symbols, 0 removed, 0 changed, 12 added (listed under "ABI statement"), no `SB_*` export, SONAME `libpt.so.1` on both |
+| `tools/release-check.sh --full` | pass: every automated gate is green (version agreement, header surface, 576/952 baseline, 576/576 parity in three languages, reference coverage, deprecation inventory, the eight examples and their `run-*` targets, 9 bilingual guides); both human open items are closed by this gate — the live-suite sign-off is recorded above, and the freeze commit and annotated `2.1.0` tag are created by the owner from this tag-ready tree |
+| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` (the epoch `tools/ci.sh` fixes, unchanged from 2.0) produce `build/dist/pt-2.1.0.tar.gz` with byte-identical sha256 `9580b56fd92f3fac2fe2c7346b3fdf590663e340ace211d7a9e0a2ccc0370850`; the sidecar matches; the extracted tree rebuilds with `werror=1` and passes `make check` |
 
 ### ABI statement
 
@@ -1259,8 +1271,31 @@ None by default. These are the points an upgrading application must read:
 signature change. The release minor is not an ABI change: `ABI_MAJOR := 1`
 keeps SONAME `libpt.so.1`, and the new struct `pt_bidi_control_span` is a new
 public struct rather than an extension of an existing one, so no existing
-layout moves. `readelf -d` on the 2.0.0 and 2.1.0 libraries reports the same
-SONAME; the final symbol diff is recorded above with the gate run.
+layout moves. The final gate compared a fresh `make lib` build of `12dbbf6`
+(2.0.0) against the gate build of the 2.1.0 tree with `nm -D --defined-only`:
+both libraries define only `pt_*` dynamic symbols (564 and 576 total), the
+counts are **564 → 576**, and the sorted diff is **0 removed, 0 changed,
+12 added**:
+
+```
+pt_app_get_caret_movement      pt_app_set_caret_movement
+pt_app_get_locale              pt_app_set_locale
+pt_bidi_control_inventory      pt_bidi_sanitize
+pt_locale_ui_direction         pt_widget_get_caret_movement
+pt_widget_set_caret_movement   pt_widget_set_padding_logical
+pt_window_get_caret_movement   pt_window_set_caret_movement
+```
+
+`readelf --dyn-syms` types and bindings agree on every one of the 564 common
+names (all `T`, global text; the only per-symbol differences are function text
+sizes for three edited bodies, which is not an ABI change), no `pt_*` object
+symbol exists on either side, and no `SB_*` symbol is exported by either build.
+`readelf -d` reports `libpt.so.1` on both, `objdump -p` agrees, and `Makefile`
+reads `ABI_MAJOR := 1` with `VERSION := 2.1.0`. A header diff of `include/pt/`
+against 2.0.0 adds `bidi.h`, the twelve declarations, the three enums, the one
+struct and the version macros; no existing declaration changed. `abidiff`
+(libabigail) is still unavailable on the reference machine, so the release-time
+run is symbol-level; a type-level run is recommended where libabigail exists.
 
 ### Known issues
 
@@ -1278,9 +1313,10 @@ SONAME; the final symbol diff is recorded above with the gate run.
 - **The locale table is small and CLDR-derived on purpose.** A language or
   script that is missing resolves to LTR; the table can grow in a future minor
   without an ABI change.
-- **Registered for W5, no correctness impact:** unsetting the locale when the
-  application direction is inherited can mark one extra repaint, and
-  `src/bidi.c` is missing a trailing newline.
+- **The W5 follow-ups are closed.** The unset-locale excess repaint is fixed
+  (W5 now repaints only windows that inherit the application direction, so a
+  window with its own explicit direction is left untouched), and `src/bidi.c`
+  gains its trailing newline; neither changed a public behaviour or a test.
 
 ## 2.0.0 validation record (2026-11-23, final — published)
 
