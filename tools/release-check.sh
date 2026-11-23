@@ -176,14 +176,18 @@ fi
 
 section "Examples"
 for example in examples/c/combobox.c examples/cpp/combobox.cpp examples/python/combobox.py \
-    examples/java/Combobox.java; do
+    examples/java/Combobox.java examples/c/ergonomics_gallery.c \
+    examples/cpp/ergonomics.cpp examples/python/ergonomics.py \
+    examples/java/Ergonomics.java; do
     if [ -f "$example" ]; then
         pass "$example exists"
     else
         problem "$example is missing"
     fi
 done
-for target in run-combobox run-cpp-combobox run-python-combobox run-java-combobox; do
+for target in run-combobox run-cpp-combobox run-python-combobox run-java-combobox \
+    run-ergonomics-gallery run-cpp-ergonomics run-python-ergonomics \
+    run-java-ergonomics; do
     if grep -q "^$target:" Makefile; then
         pass "Makefile defines $target"
     else

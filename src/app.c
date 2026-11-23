@@ -568,10 +568,15 @@ void pt_app_set_locale(pt_app *app, const char *locale) {
         app->locale = NULL;
         app->locale_ui_direction = (uint8_t)pt_ui_direction_ltr;
         /* Clearing the hint changes the resolved fallback only when the app has
-         * no explicit direction and the hint was RTL. */
+         * no explicit direction and the hint was RTL. A window that resolves
+         * its own explicit direction never saw the hint, so it is left
+         * untouched: only windows that inherit from the app repaint. */
         if (app->ui_direction == pt_ui_direction_inherit &&
             previous == (uint8_t)pt_ui_direction_rtl) {
             for (pt_window *window = app->first_window; window; window = window->next) {
+                if (window->ui_direction != pt_ui_direction_inherit) {
+                    continue;
+                }
                 pt_window_invalidate_layout(window, NULL);
                 window->needs_draw = true;
                 pt_window_damage_all(window);
