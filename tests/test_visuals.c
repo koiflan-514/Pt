@@ -1094,6 +1094,76 @@ static void test_combobox_rtl_chevron(pt_app *app) {
     pt_window_free(window);
 }
 
+static pt_rect bounds_of(pt_widget *widget) {
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+    pt_widget_get_bounds(widget, &x, &y, &w, &h);
+    return (pt_rect){x, y, w, h};
+}
+
+/* Logical padding golden (2.1 wave 3): an RTL card places its inner panel with
+ * asymmetric start/end padding, so the panel hugs the right start edge. The
+ * same card in LTR puts the panel on the left, the repaint is stable and the
+ * pure-LTR goldens above are untouched. */
+static void test_snapshot_rtl_logical_padding(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "rtl-logical-padding", 420, 220);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+
+    pt_widget *card = pt_card_create(root);
+    pt_widget_set_size(card, 380.0f, 140.0f);
+    pt_widget_set_align_self(card, pt_align_start);
+    pt_widget_set_padding_logical(card, 8.0f, 32.0f, 12.0f, 10.0f);
+    pt_widget *panel = pt_box_create(card, pt_direction_column);
+    pt_widget_set_size(panel, 120.0f, 60.0f);
+    pt_widget_set_align_self(panel, pt_align_start);
+    pt_widget *caption = pt_label_create(card, "logical padding");
+    pt_widget_set_align_self(caption, pt_align_start);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(420, 220, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+    uint64_t ltr = 0;
+    snapshot_paint(window, canvas, directory, "rtl-logical-padding-ltr", &ltr);
+    /* LTR: start 32 is the left edge. */
+    pt_check_near(card->padding_left, 32.0, 0.01);
+    pt_check_near(card->padding_right, 10.0, 0.01);
+
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    uint64_t rtl = 0;
+    snapshot_paint(window, canvas, directory, "rtl-logical-padding", &rtl);
+    uint64_t repeat = 0;
+    snapshot_paint(window, canvas, directory, "rtl-logical-padding-repeat", &repeat);
+    pt_check(rtl == repeat);
+    pt_check(rtl != ltr);
+    pt_check_near(card->padding_right, 32.0, 0.01);
+    pt_check_near(card->padding_left, 10.0, 0.01);
+    pt_rect card_rect = bounds_of(card);
+    pt_rect panel_rect = bounds_of(panel);
+    pt_check_near(panel_rect.x, card_rect.x + card_rect.w - 32.0 - 120.0, 0.01);
+
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    uint64_t back = 0;
+    snapshot_paint(window, canvas, directory, "rtl-logical-padding-roundtrip", &back);
+    pt_check(back == ltr);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.visuals");
@@ -1110,6 +1180,7 @@ int main(void) {
     test_snapshot_rtl_wrapped(app);
     test_snapshot_rtl_editing(app);
     test_snapshot_rtl_chrome(app);
+    test_snapshot_rtl_logical_padding(app);
     test_csd_title_bidi(app);
     test_combobox_rtl_chevron(app);
     pt_app_destroy(app);

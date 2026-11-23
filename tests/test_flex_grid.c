@@ -262,6 +262,216 @@ static void test_rtl_mirror(pt_app *app) {
     pt_window_free(window);
 }
 
+/* ---- 2.1 logical padding inside the flex and grid containers ----------- */
+
+/* The flex row consumes the resolved physical sides; an asymmetric logical
+ * pair in RTL packs the first child against the right start edge. */
+static void test_logical_padding_flex(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-flex", 500, 300);
+    pt_check(window != NULL);
+    pt_window_show(window);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+
+    pt_widget *row = pt_box_create(root, pt_direction_row);
+    pt_widget_set_size(row, 300.0f, 40.0f);
+    pt_widget_set_align_self(row, pt_align_start);
+    pt_widget_set_gap(row, 10.0f);
+    pt_widget_set_padding_logical(row, 4.0f, 12.0f, 6.0f, 18.0f);
+    pt_widget *first = fixed_box(row, 60.0f, 20.0f);
+    pt_widget *second = fixed_box(row, 60.0f, 20.0f);
+
+    pt_canvas *canvas = pt_canvas_create(500, 300, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect row_rect = bounds_of(row);
+    pt_check_near(row->padding_left, 12.0, 0.01);
+    pt_check_near(row->padding_right, 18.0, 0.01);
+    pt_check_near(row->padding_top, 4.0, 0.01);
+    pt_check_near(row->padding_bottom, 6.0, 0.01);
+    pt_check_near(bounds_of(first).x, row_rect.x + 12.0, 0.01);
+    pt_check_near(bounds_of(second).x, row_rect.x + 12.0 + 60.0 + 10.0, 0.01);
+    pt_check_near(bounds_of(first).y, row_rect.y + 4.0, 0.01);
+
+    pt_widget_set_ui_direction(row, pt_ui_direction_rtl);
+    pt_check(pt_window_paint(window, canvas));
+    /* start=12 is the right edge now, end=18 the left edge. */
+    pt_check_near(row->padding_right, 12.0, 0.01);
+    pt_check_near(row->padding_left, 18.0, 0.01);
+    pt_check_near(bounds_of(first).x, row_rect.x + row_rect.w - 12.0 - 60.0, 0.01);
+    pt_check_near(bounds_of(second).x, row_rect.x + row_rect.w - 12.0 - 60.0 - 10.0 - 60.0,
+                  0.01);
+    pt_check_near(bounds_of(first).y, row_rect.y + 4.0, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* Grid columns are sized inside the resolved content box: the inner width
+ * subtracts the resolved physical left and right edges. A logical pair that is
+ * asymmetric therefore changes the cell width when the direction flips. */
+static void test_logical_padding_grid(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-grid", 500, 300);
+    pt_check(window != NULL);
+    pt_window_show(window);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+
+    pt_widget *grid = pt_grid_create(root, 2);
+    pt_widget_set_width(grid, 220.0f);
+    pt_widget_set_align_self(grid, pt_align_start);
+    pt_grid_set_gap(grid, 10.0f, 10.0f);
+    pt_widget_set_padding_logical(grid, 0.0f, 20.0f, 0.0f, 10.0f);
+    pt_widget *cell_a = pt_box_create(grid, pt_direction_column);
+    pt_widget_set_height(cell_a, 30.0f);
+    pt_widget *cell_b = pt_box_create(grid, pt_direction_column);
+    pt_widget_set_height(cell_b, 30.0f);
+
+    pt_canvas *canvas = pt_canvas_create(500, 300, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    pt_rect grid_rect = bounds_of(grid);
+    pt_check_near(grid_rect.w, 220.0, 0.01);
+    pt_check_near(grid->padding_left, 20.0, 0.01);
+    pt_check_near(grid->padding_right, 10.0, 0.01);
+    float ltr_cell_w = bounds_of(cell_a).w;
+    pt_check(ltr_cell_w > 0.0f);
+    pt_check(grid->padding_left + grid->padding_right == 30.0f);
+
+    /* In RTL start (20) lands on the right and end (10) on the left. The sum
+     * is unchanged, so the frozen column width holds while the sides swap. */
+    pt_widget_set_ui_direction(grid, pt_ui_direction_rtl);
+    pt_check(pt_window_paint(window, canvas));
+    pt_check_near(grid->padding_right, 20.0, 0.01);
+    pt_check_near(grid->padding_left, 10.0, 0.01);
+    pt_check_near(bounds_of(grid).x, grid_rect.x, 0.01);
+    pt_check(bounds_of(cell_a).w == ltr_cell_w);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* The table and tree column/row containers opt out of row mirroring. They keep
+ * their logical child order, so a logical padding on such a container resolves
+ * from the container's own direction without disturbing that order. */
+static void test_logical_padding_optout_containers(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-optout", 640, 480);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_width(table, 400.0f);
+    pt_widget_set_height(table, 200.0f);
+    pt_table_set_column_title(table, 0, "Name");
+    pt_table_set_column_title(table, 1, "Size");
+    pt_table_set_column_width(table, 0, 200.0f);
+    pt_table_set_column_width(table, 1, 200.0f);
+    pt_table_set_row_height(table, 40.0f);
+    pt_table_set_header_height(table, 38.0f);
+    pt_table_set_row_count(table, 4);
+
+    pt_widget *tree = pt_tree_create(root);
+    pt_check(tree != NULL);
+    pt_widget_set_align_self(tree, pt_align_start);
+    pt_widget_set_size(tree, 320.0f, 160.0f);
+    pt_tree_set_row_height(tree, 32.0f);
+    pt_tree_add_node(tree, NULL, "alpha");
+    pt_tree_add_node(tree, NULL, "beta");
+
+    pt_canvas *canvas = pt_canvas_create(640, 480, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+
+    pt_widget *header = NULL;
+    for (pt_widget *child = table->first_child; child; child = child->next_sibling) {
+        if (child->kind == pt_widget_table_header) {
+            header = child;
+            break;
+        }
+    }
+    pt_check(header != NULL);
+    /* Only the table header and table row opt out of row mirroring; a tree row
+     * mirrors like any list row and is exercised through the table row below. */
+    pt_widget *table_row = NULL;
+    for (pt_widget *child = table->first_child; child; child = child->next_sibling) {
+        if (child->kind == pt_widget_table_row && child->list_bound) {
+            table_row = child;
+            break;
+        }
+    }
+    pt_check(table_row != NULL);
+    pt_widget *tree_row = NULL;
+    for (pt_widget *child = tree->first_child; child; child = child->next_sibling) {
+        if (child->kind == pt_widget_tree_row && child->list_bound) {
+            tree_row = child;
+            break;
+        }
+    }
+    pt_check(tree_row != NULL);
+
+    if (header && tree_row) {
+        /* The row containers keep logical order regardless of padding. */
+        pt_check(header->rtl_logical_order);
+        /* A tree row is an ordinary list row (no opt-out). */
+        pt_check(!tree_row->rtl_logical_order);
+        pt_rect table_rect = bounds_of(table);
+        pt_rect header_before = bounds_of(header);
+        pt_rect tree_rect = bounds_of(tree);
+        pt_rect tree_row_before = bounds_of(tree_row);
+
+        /* Asymmetric logical padding on the opt-out containers resolves from
+         * the RTL direction: start (30) on the right, end (6) on the left. */
+        pt_widget_set_padding_logical(header, 0.0f, 30.0f, 0.0f, 6.0f);
+        if (table_row) {
+            pt_widget_set_padding_logical(table_row, 0.0f, 30.0f, 0.0f, 6.0f);
+        }
+        pt_widget_set_padding_logical(tree_row, 0.0f, 30.0f, 0.0f, 6.0f);
+        pt_check(pt_window_paint(window, canvas));
+        pt_check_near(header->padding_right, 30.0, 0.01);
+        pt_check_near(header->padding_left, 6.0, 0.01);
+        if (table_row) {
+            pt_check_near(table_row->padding_right, 30.0, 0.01);
+            pt_check_near(table_row->padding_left, 6.0, 0.01);
+        }
+        pt_check_near(tree_row->padding_right, 30.0, 0.01);
+        pt_check_near(tree_row->padding_left, 6.0, 0.01);
+        /* The containers themselves sit where they did: the padding applies
+         * inside the container it is set on. */
+        pt_check_near(bounds_of(header).x, header_before.x, 0.01);
+        pt_check_near(bounds_of(header).w, header_before.w, 0.01);
+        pt_check_near(bounds_of(tree_row).x, tree_row_before.x, 0.01);
+        pt_check(table_rect.w == 400.0f);
+        pt_check(tree_rect.w == 320.0f);
+
+        /* Column 0 is still the first child and still hugs the table's right
+         * edge, so the logical column order is untouched. */
+        pt_widget *head0 = header->first_child;
+        pt_widget *head1 = head0 ? head0->next_sibling : NULL;
+        pt_check(head0 && head1);
+        if (head0 && head1) {
+            pt_check(strcmp(pt_widget_get_text(head0), "Name") == 0);
+            pt_check(strcmp(pt_widget_get_text(head1), "Size") == 0);
+            pt_check(head0->x > head1->x);
+        }
+
+        /* A later physical call wins over the logical one. */
+        pt_widget_set_padding(header, 0.0f, 2.0f, 0.0f, 3.0f);
+        pt_check(pt_window_paint(window, canvas));
+        pt_check_near(header->padding_right, 2.0, 0.01);
+        pt_check_near(header->padding_left, 3.0, 0.01);
+    }
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.flexgrid");
@@ -272,6 +482,9 @@ int main(void) {
     test_wrap(app);
     test_grid(app);
     test_rtl_mirror(app);
+    test_logical_padding_flex(app);
+    test_logical_padding_grid(app);
+    test_logical_padding_optout_containers(app);
     pt_app_destroy(app);
     return pt_test_finish("flex_grid");
 }

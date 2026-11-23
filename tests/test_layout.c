@@ -238,6 +238,200 @@ static void test_wrapped_rtl(pt_app *app) {
     pt_window_free(window);
 }
 
+/* ---- 2.1 logical start/end padding ------------------------------------- */
+
+/* The resolved physical sides are layout state, so the checks read the widget
+ * fields through internal.h after a layout pass. */
+static void check_padding(const pt_widget *widget, double top, double right, double bottom,
+                          double left) {
+    pt_check_near(widget->padding_top, top, 0.01);
+    pt_check_near(widget->padding_right, right, 0.01);
+    pt_check_near(widget->padding_bottom, bottom, 0.01);
+    pt_check_near(widget->padding_left, left, 0.01);
+}
+
+/* LTR: start is left and end is right. The child sits after the start padding
+ * and the content width is the box minus both logical edges. */
+static void test_logical_padding_ltr(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-ltr", 400, 240);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+
+    pt_widget *card = pt_box_create(root, pt_direction_row);
+    pt_widget_set_size(card, 300.0f, 60.0f);
+    pt_widget_set_align_self(card, pt_align_start);
+    pt_widget_set_padding_logical(card, 5.0f, 16.0f, 7.0f, 8.0f);
+    pt_check(card->padding_logical);
+    pt_widget *child = pt_box_create(card, pt_direction_row);
+    pt_widget_set_size(child, 40.0f, 20.0f);
+    pt_widget_set_align_self(child, pt_align_start);
+
+    pt_canvas *canvas = pt_canvas_create(400, 240, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 5.0, 8.0, 7.0, 16.0);
+    pt_rect card_rect = bounds_of(card);
+    pt_rect child_rect = bounds_of(child);
+    pt_check_near(child_rect.x, card_rect.x + 16.0, 0.01);
+    pt_check_near(child_rect.y, card_rect.y + 5.0, 0.01);
+    pt_check(card_rect.w == 300.0f);
+
+    /* The measured width agrees with the laid-out width. */
+    pt_layout_ctx ctx = pt_layout_context_for(card);
+    float measured_w = 0.0f;
+    float measured_h = 0.0f;
+    pt_widget_measure(card, &ctx, 300.0f, 60.0f, &measured_w, &measured_h);
+    pt_check(measured_w == 300.0f);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* RTL: the same call mirrors to start=right and end=left. */
+static void test_logical_padding_rtl(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-rtl", 400, 240);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *card = pt_box_create(root, pt_direction_row);
+    pt_widget_set_size(card, 300.0f, 60.0f);
+    pt_widget_set_align_self(card, pt_align_start);
+    pt_widget_set_padding_logical(card, 5.0f, 16.0f, 7.0f, 8.0f);
+    pt_widget *child = pt_box_create(card, pt_direction_row);
+    pt_widget_set_size(child, 40.0f, 20.0f);
+    pt_widget_set_align_self(child, pt_align_start);
+
+    pt_canvas *canvas = pt_canvas_create(400, 240, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 5.0, 16.0, 7.0, 8.0);
+    pt_rect card_rect = bounds_of(card);
+    pt_rect child_rect = bounds_of(child);
+    /* The row mirrors, so the first child packs against the right start edge
+     * and clears the 16 px start padding there. */
+    pt_check_near(child_rect.x, card_rect.x + card_rect.w - 16.0 - 40.0, 0.01);
+    pt_check_near(child_rect.y, card_rect.y + 5.0, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* A direction change after the setter re-resolves on the next layout, both for
+ * an explicit value on the widget and for one inherited from an ancestor. */
+static void test_logical_padding_direction_change(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-dir", 400, 240);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+
+    pt_widget *card = pt_box_create(root, pt_direction_row);
+    pt_widget_set_size(card, 300.0f, 60.0f);
+    pt_widget_set_align_self(card, pt_align_start);
+    pt_widget_set_padding_logical(card, 0.0f, 16.0f, 0.0f, 8.0f);
+    pt_canvas *canvas = pt_canvas_create(400, 240, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 0.0, 8.0, 0.0, 16.0);
+
+    /* A painted window does not lay out again unless something is dirty, so
+     * change the direction through the public setter and repaint. */
+    pt_widget_set_ui_direction(card, pt_ui_direction_rtl);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 0.0, 16.0, 0.0, 8.0);
+    pt_widget_set_ui_direction(card, pt_ui_direction_inherit);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 0.0, 8.0, 0.0, 16.0);
+
+    /* A standalone layout entry resolves the subtree it is given, so the flip
+     * does not depend on the window paint path. The card itself is measured
+     * along with the root. */
+    pt_window *standalone = pt_window_create(app, "logical-dir-2", 400, 240);
+    pt_check(standalone != NULL);
+    pt_widget *standalone_root = pt_window_root(standalone);
+    pt_widget_set_padding(standalone_root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(standalone_root, 0.0f);
+    pt_widget_set_ui_direction(standalone_root, pt_ui_direction_rtl);
+    pt_widget *inner_card = pt_box_create(standalone_root, pt_direction_row);
+    pt_check(inner_card != NULL);
+    pt_widget_set_size(inner_card, 60.0f, 20.0f);
+    pt_widget_set_padding_logical(inner_card, 0.0f, 2.0f, 0.0f, 6.0f);
+    pt_widget_layout(standalone_root, 0.0f, 0.0f, 400.0f, 240.0f, NULL);
+    check_padding(inner_card, 0.0, 2.0, 0.0, 6.0);
+    pt_widget_set_ui_direction(standalone_root, pt_ui_direction_ltr);
+    pt_widget_layout(standalone_root, 0.0f, 0.0f, 400.0f, 240.0f, NULL);
+    check_padding(inner_card, 0.0, 6.0, 0.0, 2.0);
+    pt_window_free(standalone);
+
+    /* A nested widget with its own LTR direction inside an RTL parent keeps
+     * LTR mapping while measuring on its own. */
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *inner = pt_box_create(card, pt_direction_row);
+    pt_widget_set_size(inner, 100.0f, 20.0f);
+    pt_widget_set_ui_direction(inner, pt_ui_direction_ltr);
+    pt_widget_set_padding_logical(inner, 0.0f, 3.0f, 0.0f, 4.0f);
+    pt_layout_ctx ctx = pt_layout_context_for(inner);
+    float measured_w = 0.0f;
+    float measured_h = 0.0f;
+    pt_widget_measure(inner, &ctx, 100.0f, 20.0f, &measured_w, &measured_h);
+    check_padding(inner, 0.0, 4.0, 0.0, 3.0);
+    pt_check_near(measured_w, 100.0, 0.01);
+    pt_widget_set_ui_direction(inner, pt_ui_direction_inherit);
+    pt_widget_measure(inner, &ctx, 100.0f, 20.0f, &measured_w, &measured_h);
+    check_padding(inner, 0.0, 3.0, 0.0, 4.0);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* The physical and logical setters share the four edges: the last call wins. */
+static void test_logical_padding_last_call_wins(pt_app *app) {
+    pt_window *window = pt_window_create(app, "logical-wins", 400, 240);
+    pt_check(window != NULL);
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *card = pt_box_create(root, pt_direction_row);
+    pt_widget_set_size(card, 300.0f, 60.0f);
+    pt_widget_set_align_self(card, pt_align_start);
+    pt_canvas *canvas = pt_canvas_create(400, 240, 1.0f);
+    pt_check(canvas != NULL);
+
+    /* Logical set, then physical: the physical values survive a layout even
+     * though the widget sits in RTL. */
+    pt_widget_set_padding_logical(card, 1.0f, 10.0f, 2.0f, 20.0f);
+    pt_widget_set_padding(card, 3.0f, 30.0f, 4.0f, 40.0f);
+    pt_check(!card->padding_logical);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 3.0, 30.0, 4.0, 40.0);
+
+    /* Physical set, then logical: the logical mapping is active. */
+    pt_widget_set_padding(card, 3.0f, 30.0f, 4.0f, 40.0f);
+    pt_widget_set_padding_logical(card, 1.0f, 10.0f, 2.0f, 20.0f);
+    pt_check(card->padding_logical);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 1.0, 10.0, 2.0, 20.0);
+
+    /* A physical call also drops the stored logical pair from the next pass. */
+    pt_widget_set_padding(card, 0.0f, 5.0f, 0.0f, 6.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_ltr);
+    pt_check(pt_window_paint(window, canvas));
+    check_padding(card, 0.0, 5.0, 0.0, 6.0);
+
+    /* NULL is a no-op. */
+    pt_widget_set_padding_logical(NULL, 1.0f, 2.0f, 3.0f, 4.0f);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.layout");
@@ -251,6 +445,10 @@ int main(void) {
     test_hidden_and_wrap(app);
     test_min_max(app);
     test_wrapped_rtl(app);
+    test_logical_padding_ltr(app);
+    test_logical_padding_rtl(app);
+    test_logical_padding_direction_change(app);
+    test_logical_padding_last_call_wins(app);
     pt_app_destroy(app);
     return pt_test_finish("layout");
 }

@@ -1245,6 +1245,10 @@ void pt_widget_layout(pt_widget *root, float x, float y, float width, float heig
         return;
     }
     pt_layout_ctx local = ctx ? *ctx : pt_layout_context_for(root);
+    /* Direct entry point: unlike the window paint path it does not mark a
+     * layout-dirty subtree, and a direction setter only marks it dirty, so
+     * resolve the whole subtree here. The prepass is bounded and writes only
+     * logically padded widgets. */
     pt_widget_resolve_logical_padding(root);
     layout_widget_internal(root, x, y, width, height, &local);
 }
