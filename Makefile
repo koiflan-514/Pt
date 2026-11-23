@@ -574,3 +574,20 @@ run-java-rtl-direction: java-example
 
 .PHONY: run-rtl-gallery run-cpp-rtl-direction run-python-rtl-direction \
 	run-java-rtl-direction
+
+run-ergonomics-gallery: $(EXAMPLES)/c/ergonomics_gallery
+	$(EXAMPLES)/c/ergonomics_gallery
+
+run-cpp-ergonomics: $(EXAMPLES)/cpp/ergonomics
+	$(EXAMPLES)/cpp/ergonomics
+
+run-python-ergonomics: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/ergonomics.py
+
+run-java-ergonomics: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpt.library=$(abspath $(BUILD)/libpt.so) -cp $(BUILD)/java Ergonomics
+
+.PHONY: run-ergonomics-gallery run-cpp-ergonomics run-python-ergonomics \
+	run-java-ergonomics
