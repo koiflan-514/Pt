@@ -19,6 +19,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <SheenBidi/SheenBidi.h>
 
@@ -343,4 +344,99 @@ const char *pt_bidi_engine_version(void) {
 
 const char *pt_bidi_unicode_version(void) {
     return PT_BIDI_UNICODE_VERSION;
+}
+
+/* Bidi control inventory and sanitization (2.1).
+ *
+ * Pure functions over caller-owned memory. They do not use the engine, do not
+ * allocate for the inventory and are never called by a text, shape, layout or
+ * paint path. The scan decodes with the shared bounded UTF-8 decoder so a
+ * control split by an invalid sequence is not reported, and then classifies
+ * the code point exactly. Only the nine explicit controls are reported; BN
+ * characters stay ordinary text here even though pt_bidi_is_removed skips them
+ * when painting. */
+
+static pt_bidi_control_kind pt_bidi_control_classify(uint32_t codepoint) {
+    switch (codepoint) {
+    case 0x202Au:
+        return pt_bidi_control_lre;
+    case 0x202Bu:
+        return pt_bidi_control_rle;
+    case 0x202Cu:
+        return pt_bidi_control_pdf;
+    case 0x202Du:
+        return pt_bidi_control_lro;
+    case 0x202Eu:
+        return pt_bidi_control_rlo;
+    case 0x2066u:
+        return pt_bidi_control_lri;
+    case 0x2067u:
+        return pt_bidi_control_rli;
+    case 0x2068u:
+        return pt_bidi_control_fsi;
+    case 0x2069u:
+        return pt_bidi_control_pdi;
+    default:
+        return pt_bidi_control_none;
+    }
+}
+
+size_t pt_bidi_control_inventory(const char *text, size_t length, pt_bidi_control_span *spans,
+                                 size_t capacity) {
+    if (!text || length == 0) return 0;
+    size_t total = 0;
+    size_t at = 0;
+    while (at < length) {
+        size_t next = at;
+        uint32_t codepoint = pt_utf8_decode(text, length, at, &next);
+        if (next <= at) {
+            ++at;
+            continue;
+        }
+        pt_bidi_control_kind kind = pt_bidi_control_classify(codepoint);
+        if (kind != pt_bidi_control_none) {
+            if (spans && total < capacity) {
+                spans[total].offset = at;
+                spans[total].length = next - at;
+                spans[total].kind = kind;
+                spans[total].codepoint = codepoint;
+            }
+            ++total;
+        }
+        at = next;
+    }
+    return total;
+}
+
+char *pt_bidi_sanitize(const char *text, size_t length, pt_bidi_sanitize_mode mode,
+                       size_t *out_length) {
+    if (mode != pt_bidi_sanitize_strip && mode != pt_bidi_sanitize_neutralize) return NULL;
+    if (!text && length != 0) return NULL;
+    /* Worst case: every control is one byte of input that grows to three. */
+    if (length > (SIZE_MAX - 1) / 3) return NULL;
+
+    /* pt_alloc is fatal on failure, matching the rest of Pt. */
+    char *out = pt_alloc(length * 3 + 1);
+
+    size_t written = 0;
+    size_t at = 0;
+    while (at < length) {
+        size_t next = at;
+        uint32_t codepoint = pt_utf8_decode(text, length, at, &next);
+        if (next <= at) next = at + 1;
+        if (pt_bidi_control_classify(codepoint) != pt_bidi_control_none) {
+            if (mode == pt_bidi_sanitize_neutralize) {
+                out[written++] = (char)0xEF;
+                out[written++] = (char)0xBF;
+                out[written++] = (char)0xBD;
+            }
+        } else {
+            memcpy(out + written, text + at, next - at);
+            written += next - at;
+        }
+        at = next;
+    }
+    out[written] = '\0';
+    if (out_length) *out_length = written;
+    return out;
 }
