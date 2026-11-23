@@ -94,10 +94,10 @@ typedef enum pt_bidi_sanitize_mode {
  *
  * An empty input returns an allocated empty string with out_length 0. A NULL
  * text with a non-zero length, a length past SIZE_MAX / 3, or a mode other
- * than strip and neutralize returns NULL without allocating. Every other byte, including invalid
- * UTF-8 and the BN characters above, is copied unchanged. This function is
- * never called automatically by a text setter and does not validate the rest
- * of the UTF-8. Since 2.1. */
+ * than strip and neutralize returns NULL without allocating. Every other
+ * byte, including invalid UTF-8 and the BN characters above, is copied
+ * unchanged. This function is never called automatically by a text setter
+ * and does not validate the rest of the UTF-8. Since 2.1. */
 pt_api char *pt_bidi_sanitize(const char *text, size_t length, pt_bidi_sanitize_mode mode,
                               size_t *out_length);
 

@@ -116,6 +116,18 @@ enum pt_align_center = 2
 enum pt_align_end = 3
 enum pt_align_start = 1
 enum pt_align_stretch = 4
+enum pt_bidi_control_fsi = 8
+enum pt_bidi_control_lre = 1
+enum pt_bidi_control_lri = 6
+enum pt_bidi_control_lro = 4
+enum pt_bidi_control_none = 0
+enum pt_bidi_control_pdf = 3
+enum pt_bidi_control_pdi = 9
+enum pt_bidi_control_rle = 2
+enum pt_bidi_control_rli = 7
+enum pt_bidi_control_rlo = 5
+enum pt_bidi_sanitize_neutralize = 1
+enum pt_bidi_sanitize_strip = 0
 enum pt_button_danger = 3
 enum pt_button_ghost = 2
 enum pt_button_primary = 0
@@ -380,6 +392,8 @@ func pt_app_set_ui_direction voidpt_app_set_ui_direction(pt_app*app,pt_ui_direct
 func pt_app_unwatch_fd voidpt_app_unwatch_fd(pt_app*app,uint64_twatch_id)
 func pt_app_watch_fd uint64_tpt_app_watch_fd(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
 func pt_app_watch_fd_owned uint64_tpt_app_watch_fd_owned(pt_app*app,intfd,uint32_tevents,pt_fd_callbackcallback,void*user_data)
+func pt_bidi_control_inventory size_tpt_bidi_control_inventory(constchar*text,size_tlength,pt_bidi_control_span*spans,size_tcapacity)
+func pt_bidi_sanitize char*pt_bidi_sanitize(constchar*text,size_tlength,pt_bidi_sanitize_modemode,size_t*out_length)
 func pt_box_create pt_widget*pt_box_create(pt_widget*parent,pt_directiondirection)
 func pt_box_set_align voidpt_box_set_align(pt_widget*box,pt_alignalign)
 func pt_box_set_direction voidpt_box_set_direction(pt_widget*box,pt_directiondirection)
@@ -926,6 +940,7 @@ opaque pt_toast
 opaque pt_tree_node
 opaque pt_widget
 opaque pt_window
+struct pt_bidi_control_span size_toffset|size_tlength|pt_bidi_control_kindkind|uint32_tcodepoint
 struct pt_date int32_tyear|uint8_tmonth|uint8_tday
 struct pt_drag_data constchar*mime_type|constchar*data|size_tsize
 struct pt_drop_target pt_drop_enter_callbackenter|pt_drop_motion_callbackmotion|pt_drop_leave_callbackleave|pt_drop_callbackdrop|void*user_data|pt_drop_offer_enter_callbackenter_offer|pt_drop_offer_drop_callbackdrop_offer

@@ -30,6 +30,7 @@ MODULE_SUMMARIES = {
     "a11y.h": "Accessibility model and bridge",
     "app.h": "Application lifecycle, timers and preference",
     "base.h": "Core types, errors and memory",
+    "bidi.h": "Bidi control inventory and sanitization",
     "custom.h": "Custom painting, IME, file-descriptor watches and raw input",
     "dnd.h": "External drag and drop",
     "interaction.h": "Gestures, momentum and stylus input",
