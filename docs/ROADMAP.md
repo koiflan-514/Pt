@@ -2306,7 +2306,23 @@ Achieved on `m23/w5-gate` (W5, all of the above):
 **M23 is closed.** The tree on `m23/w5-gate` is tag-ready; tag creation and
 the landing on `main` are the owner's step, exactly as for 2.0.
 
-## M24 - 2.2.0: documented RTL editing limitations (proposed; design only)
+## M24 - 2.2.0: RTL editing behavior polish (delivered — M24 closed)
+
+**Status: delivered on `m24/w3-gate` (2026-11-24), tag-ready for 2.2.0.**
+Wave evidence: W1 `7b47558` (Shift crosses a soft wrap one visual row in RTL,
+multi-line selection paints its visual edge), W2 `56bbd95` (horizontal wheel
+routing to tables through the internal axis-kind path), W3 `m24/w3-gate`
+(review observations closed: dead `axis_h_velocity` state removed, axis-kind
+aware overlay consumption, `-j2` gate builds; docs rewrite; version 2.2.0;
+`tools/ci.sh` exit 0; ABI 576 → 576 / 0 / 0 / 0; reproducible tarball). All
+completion criteria below are met: LTR 11/11 `SAME` against 1.4.0 and 2.1.0,
+`api/pt.api` still 576/952, binding parity 576/576 in three languages,
+`ABI_MAJOR` 1 with SONAME `libpt.so.1`, `make check` green with additive tests
+only, the three `rtl.md` bullets rewritten (the wheel one narrowed to device
+dependence), `VERSION` and `pt_version_*` at 2.2.0 and
+`tools/release-check.sh` green.
+
+The scope and wave contract below is the historical design record.
 
 Target release **2.2.0**, `ABI_MAJOR` stays 1 (SONAME `libpt.so.1`). Baseline
 on the landed 2.1.0 tree (`a3aea38`): `api/pt.api` reads **576 functions /

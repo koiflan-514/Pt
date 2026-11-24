@@ -1158,7 +1158,125 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
-## 2.1.0 validation record (2026-11-23, final — tag-ready)
+## 2.2.0 validation record (2026-11-24, final — tag-ready)
+
+Environment: the final gate tree on `m24/w3-gate` on the reference machine
+(CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1, Python 3.14.10
+and OpenJDK 25.0.2. The wave branches `m24/w1` (W1 `7b47558`, Shift across a
+soft wrap), `m24/w2-axis` (W2 `56bbd95`, horizontal wheel routing) and the W3
+gate branch land on top of the published 2.1.0 tree `a3aea38`.
+
+2.2.0 is a **behaviour-only** release: it adds **no public function, enum or
+struct**. The three editing limitations that `rtl.md` recorded at 2.1.0 are
+implemented inside existing declarations, and a plain vertical wheel, LTR text
+editing and every other default keep the 2.1 behavior and pixels. The surface
+stays at **576 functions / 952 entries** (576 `func`, 303 `enum`, 43
+`callback`, 11 `struct`, 12 `opaque`, 6 `define`, 1 `type`), 0 removed,
+0 changed and 0 added against 2.1.0. SONAME stays `libpt.so.1`; `ABI_MAJOR`
+stays `1`.
+
+### Scope
+
+- **W1 - multi-line selection paints its visual edge.** A mapped selection
+  that spans several wrapped rows no longer leaves the collapsed boundary edge
+  unpainted in RTL; the highlight rectangles follow the visual edge at the
+  mapped boundary while the logical range stays the source of truth.
+- **W1 - Shift crosses a soft wrap in RTL.** One Shift+arrow press that reaches
+  a soft wrap moves one visual row instead of stalling inside the line, with the
+  affinity pinned to the landing line, so a selection extends row by row in RTL
+  and mixed-direction text.
+- **W2 - the horizontal wheel axis reaches tables.** `wl_pointer`'s
+  `horizontal_scroll` (axis value 1, present since protocol v1) was discarded;
+  2.2 routes it through an internal axis-kind path (`pt_window_input_axis_kind`,
+  `pt_axis_horizontal`) to `pt_table_scroll_horizontal` with delta × 48 and the
+  sign flipped for RTL tables, fills the existing `pt_pointer_event.delta_x`,
+  and lets the horizontal axis fall through an open overlay instead of being
+  consumed as a vertical scroll. The public four-argument
+  `pt_window_input_axis` is unchanged.
+- **W3 - the review observations are closed.** The write-only
+  `axis_h_velocity` state and its stale comment are removed (horizontal deltas
+  stay discrete per event, no fling); `pt_window_overlays_axis` is axis-kind
+  aware; `tools/ltr-compat.sh` and `tools/ci.sh` build with `-j2` by default.
+
+### Behaviour changes
+
+These are the points an upgrading application must read:
+
+- **A horizontal wheel now scrolls a table.** The axis is device-dependent:
+  tilt wheels and trackpad sideways swipes emit it, a plain vertical wheel does
+  not. Vertical wheel handling, momentum and flings are unchanged.
+- **A horizontal wheel is never consumed by an open overlay.** It falls through
+  to the window, so a table under an overlay still pans instead of the overlay
+  swallowing it as a vertical scroll.
+- **Shift+arrow at a soft wrap in RTL moves one visual row.** The previously
+  stalling in-line move is gone; selections that already worked are unchanged.
+- **No default, no public signature and no stored byte moved.** A
+  zero-initialized application keeps the 2.1 pixels and editing behavior for
+  LTR input.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass: `include/pt/base.h` (`pt_version_major/minor/patch` = 2/2/0 and `pt_version_string` `"2.2.0"`), `Makefile` `VERSION := 2.2.0`, the README status line and the generated reference say 2.2.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| API baseline | pass: `api/pt.api` reads 576 functions / 952 entries; `tools/gen-api-reference.py --check` is clean at 2.2.0 |
+| Binding parity | pass: 576/576 (C++, Python and Java), 0 missing, 0 allowlisted; the C++ suite is 863 checks, Python 68 tests and Java 701 checks, 0 failures |
+| Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| LTR byte stability | pass: `tools/ltr-compat.sh 1.4.0 HEAD` and `tools/ltr-compat.sh 2.1.0 HEAD` each report 11/11 `SAME`, so 2.2 is byte-identical to 1.4 and 2.1 in LTR |
+| `make check` | pass: 41 C executables (586,228 checks in total, including the 454,380-check property sweep), 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
+| `make perf-check` | pass: every guard ceiling holds (`startup first frame 14.704 ms`, `idle 300 ms CPU 0.623 ms`, `dense layout 2.890 ms`, `dense full paint 5.636 ms`, `dense damage share 3.012%`, `4K full paint 9.919 ms`, `views full paint 3.305 ms`) |
+| Sanitizers, staged install, reproducible tarball | pass end to end: bare `tools/ci.sh` (default `-j2`) exits 0 (`CI verification passed for Pt 2.2.0`) after the clean `werror=1` build, `make check`, `make perf-check`, the 11/11 LTR gate, staged install (SONAME `libpt.so.1`, pkg-config 2.2.0, the baseline ABI, the C/C++/Python/Java consumers and a clean `uninstall`), the ASan+UBSan rebuild (41 C binaries plus `test_cpp` 863 checks, the Python suite 68 tests and the Java suite 701 checks, nothing reported) and the reproducible tarball; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.2.0` and `tests/libwire_driver.so`; a separate serial pass over the core suites with `ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1` reports nothing |
+| Four live suites | pass under nested niri: `check-wayland` 45 checks; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `COMMIT=你好` (nihao + space); `check-rtl-live` RESULT PASS — the IME rectangle matches the visual caret map, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink |
+| Bilingual documentation | pass: 9 public guides with byte-identical code blocks, including the rewritten `rtl.md` pair |
+| ABI diff against 2.1.0 | pass at the symbol level: 576 → 576 exported `pt_*` symbols, 0 removed, 0 changed, 0 added; no non-`pt_*` export; SONAME `libpt.so.1` on both |
+| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduce `build/dist/pt-2.2.0.tar.gz` byte-identically (sidecar matches); the extracted tree rebuilds with `werror=1` and passes `make check`; the digests are recorded under "Release digests" below |
+
+### ABI statement
+
+2.2.0 adds no declaration and changes no signature: the release implements
+behavior inside existing functions. `ABI_MAJOR := 1` keeps SONAME
+`libpt.so.1`. The final gate compared a fresh `make lib` build of `a3aea38`
+(2.1.0) against the gate build of the 2.2.0 tree with `nm -D --defined-only`:
+both libraries define only `pt_*` dynamic symbols (576 each), the counts are
+**576 → 576**, and the sorted symbol sets are **identical — 0 removed,
+0 changed, 0 added**. `readelf -d` reports `libpt.so.1` on both and `Makefile`
+reads `ABI_MAJOR := 1` with `VERSION := 2.2.0`. A header diff of `include/pt/`
+against 2.1.0 changes only the version macros; no declaration, enum value or
+struct layout moved. `abidiff` (libabigail) is still unavailable on the
+reference machine, so the release-time run is symbol-level; a type-level run is
+recommended where libabigail exists.
+
+### Release digests
+
+Because this record ships inside the release archive, editing it changes the
+archive digest. Two digests are therefore recorded, in the 2.0/2.1 style:
+
+- **Gate-time.** `tools/ci.sh` reproduced `43e9d2f5ab96d76ab7767012f143ac7cfc413740cae8f4550366708fee71471a`
+  on the pre-record gate tree (`e6f2d25` plus the W3 gate work), twice, at
+  `SOURCE_DATE_EPOCH=1767225600`, with the sidecar matching both runs.
+- **Committed-tree.** The frozen tree that carries this record reproduces the
+  digest recorded in the tag-time sidecar; `make dist` on the tagged tree
+  reproduces its own digest exactly, so re-measure there rather than trusting a
+  digest quoted from inside the archive. The tag-time sidecar
+  (`pt-2.2.0.tar.gz.sha256`) is the authoritative value.
+
+### Known issues
+
+- **Table horizontal wheel scrolling is device-dependent.** The axis is routed
+  and tested headlessly, but whether a device emits it depends on the hardware:
+  tilt wheels and trackpad sideways swipes do, a plain vertical wheel does not.
+  Recorded in [rtl.md](rtl.md), not a table defect.
+- **`pt_text_span` has no direction field** and stays frozen; paragraph
+  direction comes from the widget or Unicode isolate controls.
+- **Missing Arabic/Hebrew glyphs are fallback/tofu**, reported by
+  `pt_app_font_uncovered_count`, not a hard configuration error.
+- **Sanitization is opt-in.** `pt_bidi_sanitize` and
+  `pt_bidi_control_inventory` stay the toolkit, not a policy: no text path calls
+  them automatically.
+- **The locale table is small and CLDR-derived on purpose.** A missing language
+  or script resolves to LTR.
+
+
 
 Environment: the final gate tree on `m23/w5-gate` on the reference machine
 (CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1, Python 3.14.10

@@ -1,10 +1,12 @@
-# M24 - 2.2.0 design: documented RTL editing limitations (scaffold)
+# M24 - 2.2.0 design: documented RTL editing limitations
 
-Status: **design only**. No functional code is in this wave. This document
-records the feasibility of each residual limitation in
-[rtl.md](rtl.md) `Known limitations` (as of 2.1.0, `a3aea38`), the proposed
-M24 scope, and the evidence a later implementation wave must re-confirm before
-it changes behavior.
+Status: **delivered** (2.2.0, tag-ready on `m24/w3-gate`, 2026-11-24). The
+three editing limitations this document proved feasible are implemented in W1
+(`7b47558`) and W2 (`56bbd95`); W3 closed the implementation-review
+observations (see [Implementation review decisions](#implementation-review-decisions)).
+This document is kept as the feasibility and scope record it was written as:
+what was read, the verdicts, the waves and the evidence each wave had to
+re-confirm before it changed behavior.
 
 Baseline on this tree: `api/pt.api` reads **576 functions / 952 entries**,
 `ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.1.0. M24 targets 2.2.0 with the
@@ -229,6 +231,32 @@ ignore the horizontal axis; with overflow it scrolls and clamps) and
 `delta_x` is set for a horizontal axis and `delta_y` stays 0). `make check`
 runs headless; no pixel golden for the table needs to change because the table
 is already painted from `scroll_x`.
+
+## Implementation review decisions
+
+The W3 gate resolved the three observations the W1/W2 review raised. They are
+recorded here because they settle the design's open points:
+
+- **Dead horizontal velocity state removed.** W2 added an `axis_h_velocity`
+  accumulator with a comment claiming it was "only reported while a continuous
+  horizontal source is live", but nothing read it: no fling is started for the
+  horizontal axis (`pointer_axis_stop` flings the vertical axis only). The
+  field, its two timing companions and the false
+  comment are removed; a horizontal wheel stays **discrete per event**
+  (delta × 48), which is the documented semantics. Removing dead state is
+  cheaper and more honest than wiring a symmetric horizontal momentum that no
+  widget consumes.
+- **Overlay consumption is axis-kind aware.** The design note above left the
+  overlay rule as "consume all axes or no-op same as today". The chosen reading
+  is the one that cannot surprise: `pt_window_overlays_axis` takes the axis
+  kind and returns false for `pt_axis_horizontal`, so a horizontal wheel is
+  never consumed by an open overlay as a vertical scroll. It falls through to
+  the window, where a table inside the overlay (or under it) pans sideways.
+  Vertical wheel behavior over an overlay is unchanged.
+- **Gate builds default to `-j2`.** `tools/ltr-compat.sh` hard-coded `-j8` and
+  `tools/ci.sh` defaulted to `nproc`; both now default to two jobs because the
+  gate machine is memory-bound and parallel sanitizer/consumer links spiked past
+  its RAM budget. `JOBS` still overrides `ci.sh`.
 
 ## Out of scope (recorded, not planned)
 
