@@ -1084,6 +1084,201 @@ static void test_visual_collapse(pt_app *app) {
 }
 
 
+/* M24 W1: Shift+arrow crosses a soft-wrap boundary one visual row per press.
+ * At a mapped line's visual edge - where the in-line visual step has nowhere
+ * to go - the caret enters the next physical row (top-to-bottom) at the column
+ * nearest its current x. The logical anchor does not move, the range stays
+ * logical min/max, and the caret's affinity is re-pinned after
+ * entry_set_cursor so the box renders and navigates on the row it entered (the
+ * IME y is that row). A hard newline has its own byte and never crosses; an
+ * LTR line without bidi content keeps the plain code-unit step. */
+static void test_shift_cross_wrap(pt_app *app) {
+    pt_window *window = pt_window_create(app, "shift-cross-wrap", 420, 380);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 12.0f, 12.0f, 12.0f, 12.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 140.0f, 260.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    /* Ten three-letter Hebrew words: several wrapped rows at this width. */
+    const char *wrapped =
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E \xD7\xA0\xD7\xA1\xD7\xA2 "
+        "\xD7\xA3\xD7\xA4\xD7\xA5 \xD7\xA6\xD7\xA7\xD7\xA8 \xD7\xA9\xD7\xAA "
+        "\xD7\x90\xD7\x91\xD7\x92 \xD7\x93\xD7\x94\xD7\x95 \xD7\x96\xD7\x97\xD7\x98 "
+        "\xD7\x99\xD7\x9A\xD7\x9B \xD7\x9C\xD7\x9D\xD7\x9E \xD7\xA0\xD7\xA1\xD7\xA2 "
+        "\xD7\xA3\xD7\xA4\xD7\xA5 \xD7\xA6\xD7\xA7\xD7\xA8";
+    pt_widget_set_text(area, wrapped);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(420, 380, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.line_count >= 3);
+    if (layout.line_count < 3) {
+        pt_text_layout_free(&layout);
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    /* The visual edges of the first three rows, from the same x0/x1 rule the
+     * widget's visual_line_edge uses. Every row here is RTL, so a row's
+     * logical start sits at its visual right and its logical end at its
+     * visual left. */
+    size_t vleft[3] = {0};
+    size_t vright[3] = {0};
+    float vleft_x[3] = {0.0f};
+    float vright_x[3] = {0.0f};
+    bool edges_ok = true;
+    for (int l = 0; l < 3; ++l) {
+        if (!visual_map_edges(layout.maps[l], &vleft[l], &vleft_x[l], &vright[l],
+                              &vright_x[l])) {
+            edges_ok = false;
+            break;
+        }
+    }
+    size_t line2_start = layout.lines[2].start;
+    size_t line2_end = layout.lines[2].end;
+    size_t line1_start = layout.lines[1].start;
+    pt_check(layout.lines[0].end == line1_start);
+    pt_check(layout.lines[1].end == line2_start);
+    float line_h = layout.line_height;
+    pt_text_layout_free(&layout);
+    if (!edges_ok) {
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    /* Sanity: the wrap boundaries hold and each row's visual edges straddle
+     * its byte range (RTL: visual left is the logical end). */
+    pt_check(line1_start > 0 && line2_start > line1_start);
+    pt_check(vright[1] == line1_start && vleft[1] == line2_start);
+    pt_check(vleft[1] > vright[1]);
+
+    int area_x = (int)lroundf(area->x);
+    int area_y = (int)lroundf(area->y);
+    int line_y[3] = {
+        area_y + (int)lroundf(area->padding_top),
+        area_y + (int)lroundf(area->padding_top + line_h),
+        area_y + (int)lroundf(area->padding_top + 2.0f * line_h),
+    };
+    pt_check(line_y[1] > line_y[0] && line_y[2] > line_y[1]);
+    int x = 0;
+    int y = 0;
+
+    /* Forward across the wrap: from the start of row 2 (its logical start ==
+     * visual right) Shift+Right has no in-line visual stop and crosses to row 3
+     * at the column nearest its x. The anchor is the original byte and the
+     * caret renders on row 3 (one row down). */
+    pt_text_area_set_selection(area, line2_start, line2_start);
+    pt_check(area->caret_affinity == pt_text_bias_leading);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line_y[2]);
+    pt_check_near((float)x, (float)area_x + area->padding_left + vright_x[2], 1.0f);
+    pt_window_input_key(window, XKB_KEY_Right, (uint32_t)pt_key_modifier_shift, NULL, true);
+    pt_check(area->cursor == line2_end); /* row 3's visual right == its logical start */
+    pt_check(area->selection_anchor == line2_start);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line_y[2] + (int)lroundf(line_h)); /* row 3, one row below */
+    uint32_t sel_start = 0;
+    uint32_t sel_end = 0;
+    pt_check(pt_text_area_get_selection(area, &sel_start, &sel_end));
+    pt_check(sel_start == (uint32_t)line2_start && sel_end == (uint32_t)line2_end);
+
+    /* One row per press: a second Shift+Right crosses exactly one more row, and
+     * the anchor never moves. */
+    size_t after_one = area->cursor;
+    pt_window_input_key(window, XKB_KEY_Right, (uint32_t)pt_key_modifier_shift, NULL, true);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(area->cursor != after_one);
+    pt_check(y == line_y[2] + (int)lroundf(2.0f * line_h)); /* row 4 */
+    pt_check(area->selection_anchor == line2_start);
+
+    /* Backward across the wrap: from row 2's logical end (its visual left, byte
+     * line2_end with trailing affinity) Shift+Left crosses up to row 1. The
+     * anchor stays and the caret renders one row above. */
+    pt_text_area_set_selection(area, line2_end, line2_end);
+    area->caret_affinity = pt_text_bias_trailing;
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line_y[2]);
+    pt_window_input_key(window, XKB_KEY_Left, (uint32_t)pt_key_modifier_shift, NULL, true);
+    pt_check(area->cursor == line2_start); /* row 1's visual left byte */
+    pt_check(area->selection_anchor == line2_end);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line_y[2] - (int)lroundf(line_h)); /* row 1, one row above */
+
+    /* Logical caret movement keeps the plain logical step: Shift+Right at the
+     * end of a row stays a code-point step on the same row, crossing nothing
+     * special (here it lands on the next byte of the same run). */
+    pt_widget_set_caret_movement(area, pt_caret_movement_logical);
+    pt_text_area_set_selection(area, line2_start, line2_start);
+    pt_window_input_key(window, XKB_KEY_Right, (uint32_t)pt_key_modifier_shift, NULL, true);
+    /* One logical code point (the Hebrew letters are two bytes), on the same
+     * row: no visual re-derivation, no wrap crossing. */
+    pt_check(area->cursor > line2_start);
+    pt_check(area->cursor == line2_start + 2);
+    pt_check(area->selection_anchor == line2_start);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line_y[2]);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+
+    /* A plain LTR area without bidi content keeps the code-unit step across a
+     * wrap: Shift+Right from a row's end reaches the next byte, not a
+     * re-derived column on the following row. */
+    window = pt_window_create(app, "ltr-cross", 420, 320);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    root = pt_window_root(window);
+    pt_widget_set_padding(root, 14.0f, 12.0f, 14.0f, 12.0f);
+    area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 120.0f, 200.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_widget_set_text(area, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    pt_window_show(window);
+    canvas = pt_canvas_create(420, 320, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+    pt_layout_ctx lctx = pt_layout_context_for(area);
+    pt_text_layout ltr = {0};
+    pt_check(pt_text_layout_build(area, &lctx, pt_text_area_content_width(area), &ltr));
+    pt_check(ltr.line_count >= 2);
+    if (ltr.line_count >= 2) {
+        size_t l0_end = ltr.lines[0].end;
+        /* Place on the trailing edge of row 0, then Shift+Right: plain step to
+         * the next byte, still a code unit (no visual re-derivation). */
+        pt_text_area_set_selection(area, l0_end - 1, l0_end - 1);
+        area->caret_affinity = pt_text_bias_trailing;
+        pt_window_input_key(window, XKB_KEY_Right, (uint32_t)pt_key_modifier_shift, NULL, true);
+        pt_check(area->cursor == l0_end);
+        pt_check(area->selection_anchor == l0_end - 1);
+    }
+    pt_text_layout_free(&ltr);
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.textarea");
@@ -1111,6 +1306,7 @@ int main(void) {
     test_logical_editing(app);
     test_soft_wrap_affinity(app);
     test_visual_collapse(app);
+    test_shift_cross_wrap(app);
 
     pt_canvas_destroy(canvas);
     pt_window_free(window);

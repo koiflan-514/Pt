@@ -4236,6 +4236,57 @@ static int selection_end_line(const pt_text_layout *layout, size_t end, pt_text_
     return line;
 }
 
+/* Next/previous physical line of a caret move, but only across a soft wrap. A
+ * hard newline has its own byte and keeps the caret on the line; a document
+ * edge has no line at all. `*out_from` is the caret's x on its current line and
+ * is the goal column for the landing. */
+static bool text_area_wrap_neighbor(const pt_text_layout *layout, int line, bool forward,
+                                    size_t position, pt_text_bias bias, float *out_from,
+                                    float *out_goal, int *out_target) {
+    int target = forward ? line + 1 : line - 1;
+    if (target < 0 || target >= layout->line_count) {
+        return false;
+    }
+    size_t boundary = forward ? layout->lines[line].end : layout->lines[target].end;
+    if (boundary != (forward ? layout->lines[target].start : layout->lines[line].start)) {
+        return false;
+    }
+    if (out_from) {
+        *out_from = pt_text_layout_x_for_position_bias(layout, line, position, bias);
+    }
+    if (out_goal) {
+        *out_goal = pt_text_layout_x_for_position_bias(layout, target, boundary,
+                                                       pt_text_bias_leading);
+    }
+    if (out_target) {
+        *out_target = target;
+    }
+    return true;
+}
+
+/* Visual landing on `target` at the goal column: the byte nearest the goal, its
+ * affinity chosen by the nearer of the two visual x values (the vertical-motion
+ * rule), then pinned to `target` so a landing on a shared soft-wrap boundary
+ * renders and navigates on the row the move entered. Returns the byte and, via
+ * `out_bias`, the affinity the caret must store after entry_set_cursor. */
+static size_t text_area_landing_at_x(const pt_text_layout *layout, int target, float goal,
+                                     pt_text_bias *out_bias) {
+    size_t position = pt_text_layout_position_for_x(layout, target, goal);
+    float leading_x = pt_text_layout_x_for_position_bias(layout, target, position,
+                                                         pt_text_bias_leading);
+    float trailing_x = pt_text_layout_x_for_position_bias(layout, target, position,
+                                                          pt_text_bias_trailing);
+    pt_text_bias bias = pt_text_bias_leading;
+    if (fabsf(trailing_x - goal) < fabsf(leading_x - goal)) {
+        bias = pt_text_bias_trailing;
+    }
+    bias = pt_text_layout_bias_for_line(layout, target, position, bias);
+    if (out_bias) {
+        *out_bias = bias;
+    }
+    return position;
+}
+
 static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
     size_t len = entry_length(area);
     pt_layout_ctx ctx = {0};
@@ -4316,6 +4367,17 @@ static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
                               &target_bias)) {
             position = target;
             bias = target_bias;
+        } else {
+            /* At a visual line edge: cross one soft-wrapped row per press in the
+             * direction of travel, entering it at the column nearest the
+             * current x (the vertical-motion rule). A hard newline or a
+             * document edge has no soft-wrap neighbour and stays put. */
+            float goal_x = 0.0f;
+            int wrap_line = line;
+            if (text_area_wrap_neighbor(&layout, line, right, position, bias, NULL, &goal_x,
+                                        &wrap_line)) {
+                position = text_area_landing_at_x(&layout, wrap_line, goal_x, &bias);
+            }
         }
     } else if (!shift && entry_has_selection(area)) {
         size_t start = 0;
