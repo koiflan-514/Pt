@@ -7,7 +7,6 @@
 #include "internal.h"
 
 #include <float.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -4180,6 +4179,63 @@ static bool text_area_line_edge(pt_widget *area, bool end, bool shift, bool docu
     return true;
 }
 
+/* Start line of a multi-line mapped selection in top-to-bottom visual order.
+ * A shared soft-wrap boundary belongs to both adjacent lines; the caret's
+ * affinity decides which of the two the selection really starts on. */
+static bool selection_line_range(const pt_text_layout *layout, size_t start, size_t end,
+                                 pt_text_bias bias, int *out_start, int *out_end) {
+    int start_line = pt_text_layout_line_for_position_bias(layout, start, bias);
+    int end_line = pt_text_layout_line_for_position_bias(layout, end, bias);
+    if (start_line > end_line) {
+        int swap = start_line;
+        start_line = end_line;
+        end_line = swap;
+    }
+    if (out_start) {
+        *out_start = start_line;
+    }
+    if (out_end) {
+        *out_end = end_line;
+    }
+    return start_line != end_line;
+}
+
+/* Visual byte at one end of a line for selection purposes: the visual edge of a
+ * mapped line, the logical line edge for a plain (unmapped) line so a bidi
+ * paragraph next to ASCII keeps the documented collapse there. */
+static size_t selection_visual_edge(const pt_text_layout *layout, int line, bool left,
+                                    pt_text_bias *out_bias) {
+    size_t position = left ? layout->lines[line].start : layout->lines[line].end;
+    pt_text_bias bias = pt_text_bias_leading;
+    if (text_area_line_is_mapped(layout, line)) {
+        size_t mapped_position = position;
+        if (visual_line_edge(layout->maps[line], left, &mapped_position, &bias)) {
+            position = mapped_position;
+        }
+    }
+    if (out_bias) {
+        *out_bias = bias;
+    }
+    return position;
+}
+
+/* The line that carries a selection endpoint's visual edge. The caret's
+ * affinity places a soft-wrap boundary on the lower line, so a range that ends
+ * exactly on the boundary would look one line short and collapse into its own
+ * first row; the end sample is taken on the upper line so the selection's own
+ * end row supplies the visual edge. Only a soft-wrap boundary qualifies (a hard
+ * newline has its own byte and never extends a range onto the next line). A
+ * start point at a boundary already stays on the lower line under
+ * leading/trailing. */
+static int selection_end_line(const pt_text_layout *layout, size_t end, pt_text_bias bias) {
+    int line = pt_text_layout_line_for_position_bias(layout, end, bias);
+    if (line > 0 && line < layout->line_count &&
+        layout->lines[line].start == end && layout->lines[line - 1].end == end) {
+        return line - 1;
+    }
+    return line;
+}
+
 static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
     size_t len = entry_length(area);
     pt_layout_ctx ctx = {0};
@@ -4197,20 +4253,42 @@ static bool text_area_horizontal(pt_widget *area, bool right, bool shift) {
         size_t start = 0;
         size_t end = 0;
         entry_selection_range(area, &start, &end);
-        int start_line = pt_text_layout_line_for_position(&layout, start);
-        int end_line = pt_text_layout_line_for_position(&layout, end);
-        if (start_line == end_line && text_area_line_is_mapped(&layout, start_line)) {
+        int start_line = 0;
+        int end_line = 0;
+        bool multi_line = selection_line_range(&layout, start, end,
+                                               (pt_text_bias)area->caret_affinity,
+                                               &start_line, &end_line);
+        if (multi_line) {
+            end_line = selection_end_line(&layout, end, (pt_text_bias)area->caret_affinity);
+            if (start_line > end_line) {
+                start_line = end_line;
+            }
+        }
+        if (multi_line && (right ? text_area_line_is_mapped(&layout, end_line)
+                                 : text_area_line_is_mapped(&layout, start_line))) {
+            /* Multi-line: the visual start of the range is the start line's
+             * visual edge in the direction of travel, the visual end the end
+             * line's. Both bytes come from the per-line map the painter uses,
+             * so painting (logical min/max) and the collapse agree; a plain
+             * endpoint line keeps its logical edge. */
+            int edge_line = right ? end_line : start_line;
+            position = selection_visual_edge(&layout, edge_line, !right, &bias);
+            /* Keep the caret on the endpoint row even when its visual edge is a
+             * shared soft-wrap boundary (byte 22 is row 0's right edge and row
+             * 1's left edge); the affinity decides which row the box renders
+             * and navigates on, exactly as Home/End do. */
+            bias = pt_text_layout_bias_for_line(&layout, edge_line, position, bias);
+        } else if (start_line == end_line && text_area_line_is_mapped(&layout, start_line)) {
             const pt_text_visual_map *map = layout.maps[start_line];
             float start_x = pt_text_visual_map_x_for_position(map, start, pt_text_bias_leading);
             float end_x = pt_text_visual_map_x_for_position(map, end, pt_text_bias_leading);
             position = right ? (end_x > start_x ? end : start)
                              : (start_x < end_x ? start : end);
+            bias = pt_text_bias_leading;
         } else {
-            /* Multi-line selections collapse by logical edge, matching the
-             * top-to-bottom visual order of wrapped lines. */
             position = right ? end : start;
+            bias = pt_text_bias_leading;
         }
-        bias = pt_text_bias_leading;
     } else if (mapped && !shift && !entry_has_selection(area)) {
         size_t target = position;
         pt_text_bias target_bias = bias;

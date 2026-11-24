@@ -8,6 +8,7 @@
 #include "../src/internal.h"
 #include "harness.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -800,14 +801,17 @@ static void test_soft_wrap_affinity(pt_app *app) {
     pt_check(y == line0_y);
     pt_widget_pointer_up(area, true);
 
-    /* A selection spanning wrapped lines still collapses to its logical edge:
-     * the documented multi-line order, not the in-line visual x comparison. */
+    /* A selection spanning wrapped RTL lines collapses to its visual edge:
+     * Right to the end line's visual right byte (the line's logical start), Left
+     * to the start line's visual left byte (the line's logical end). */
     pt_text_area_set_selection(area, 10, 60);
     pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
-    pt_check(area->cursor == 60);
+    pt_check(area->cursor == 49);
+    pt_check(area->selection_anchor == area->cursor);
     pt_text_area_set_selection(area, 10, 60);
     pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
-    pt_check(area->cursor == 10);
+    pt_check(area->cursor == 49);
+    pt_check(area->selection_anchor == area->cursor);
 
     /* Pure LTR wrap: the un-biased query keeps the old upper-line answer for
      * existing callers, while a trailing caret still renders and navigates on
@@ -873,6 +877,213 @@ static void test_soft_wrap_affinity(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Visual edges of one line's map as the editor sees them (the same arithmetic
+ * as widget.c's static visual_line_edge): the cluster with the smallest x0
+ * starts the visual left edge, the cluster with the largest x1 ends the visual
+ * right edge, and an RTL cluster's logical start sits at its visual right. The
+ * right byte is the visual edge's own start, exactly what the collapse lands
+ * on. Returns the byte and the local x of each edge. */
+static bool visual_map_edges(const pt_text_visual_map *map, size_t *left, float *left_x,
+                             size_t *right, float *right_x) {
+    if (!map || map->count == 0) {
+        return false;
+    }
+    const pt_text_visual_cluster *best_left = &map->clusters[0];
+    const pt_text_visual_cluster *best_right = &map->clusters[0];
+    for (size_t i = 1; i < map->count; ++i) {
+        if (map->clusters[i].x0 < best_left->x0) {
+            best_left = &map->clusters[i];
+        }
+        if (map->clusters[i].x1 > best_right->x1) {
+            best_right = &map->clusters[i];
+        }
+    }
+    *left = (best_left->level & 1u) ? best_left->end : best_left->start;
+    *left_x = best_left->x0;
+    *right = (best_right->level & 1u) ? best_right->start : best_right->end;
+    *right_x = best_right->x1;
+    return true;
+}
+
+/* M24 W1: a plain arrow over a multi-line mapped selection collapses to the
+ * selection's visual edge - the start line's visual edge on the way out of the
+ * range and the end line's on the way in - and the logical range, its painting
+ * and the anchor stay the documented logical min/max until the collapse clears
+ * them. The bidi paragraph wraps inside a pure LTR area, so every endpoint row
+ * carries a visual map while the paragraph base stays LTR. */
+static void test_visual_collapse(pt_app *app) {
+    pt_window *window = pt_window_create(app, "visual-collapse", 420, 320);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 14.0f, 12.0f, 14.0f, 12.0f);
+    pt_widget *area = pt_text_area_create(root, "note");
+    pt_check(area != NULL);
+    pt_widget_set_size(area, 140.0f, 200.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    /* abc <alef-bet-gimel> def <dalet-he-vav> ghi <zayin-het-tet> klmn */
+    const char *mixed =
+        "abc \xD7\x90\xD7\x91\xD7\x92 def \xD7\x93\xD7\x94\xD7\x95 ghi "
+        "\xD7\x96\xD7\x97\xD7\x98 klmn";
+    pt_widget_set_text(area, mixed);
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(420, 320, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.line_count == 2);
+    if (layout.line_count != 2) {
+        pt_text_layout_free(&layout);
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    size_t boundary = layout.lines[0].end;
+    pt_check(boundary == layout.lines[1].start);
+    /* The visual edges of both endpoint lines, read from the maps the painter
+     * uses: LTR-base rows still reorder their Hebrew runs (the cluster with the
+     * smallest x0 starts the visual left edge, the smallest start_x the right
+     * one). */
+    const pt_text_visual_map *map0 = layout.maps[0];
+    const pt_text_visual_map *map1 = layout.maps[1];
+    pt_check(map0 != NULL && map0->count > 0);
+    pt_check(map1 != NULL && map1->count > 0);
+    if (!map0 || !map1 || map0->count == 0 || map1->count == 0) {
+        pt_text_layout_free(&layout);
+        pt_canvas_destroy(canvas);
+        pt_window_free(window);
+        return;
+    }
+    size_t line0_left = 0;
+    size_t line0_right = 0;
+    size_t line1_left = 0;
+    size_t line1_right = 0;
+    float left0_x = 0.0f;
+    float right0_x = 0.0f;
+    float left1_x = 0.0f;
+    float right1_x = 0.0f;
+    pt_check(visual_map_edges(map0, &line0_left, &left0_x, &line0_right, &right0_x));
+    pt_check(visual_map_edges(map1, &line1_left, &left1_x, &line1_right, &right1_x));
+    pt_check(line0_left == 0 && line0_right == boundary);
+    pt_check(line1_left == boundary && line1_right == layout.display_len);
+    pt_check(left0_x < right0_x && left1_x < right1_x);
+    float line_h = layout.line_height;
+    float line0_left_x = pt_text_layout_x_for_position_bias(&layout, 0, line0_left,
+                                                           pt_text_bias_leading);
+    float line0_right_x = pt_text_layout_x_for_position_bias(&layout, 0, line0_right,
+                                                            pt_text_bias_leading);
+    pt_text_layout_free(&layout);
+
+    float inner_x = area->x + area->padding_left;
+    int line0_y = (int)lroundf(area->y + area->padding_top);
+    int line1_y = (int)lroundf(area->y + area->padding_top + line_h);
+    pt_check(line1_y > line0_y);
+
+    /* A selection covering the whole first row still paints that logical range
+     * (its highlight is present before any key), so a collapse that fired too
+     * early would be caught as a missing highlight. */
+    pt_text_area_set_selection(area, 0, boundary);
+    uint32_t sel_start = 0;
+    uint32_t sel_end = 0;
+    pt_check(pt_text_area_get_selection(area, &sel_start, &sel_end));
+    pt_check(sel_start == 0 && sel_end == boundary);
+    pt_check(pt_window_paint(window, canvas));
+    uint32_t unselected = pt_canvas_get_pixel(canvas, (int)lroundf(inner_x + 1.0f),
+                                              (int)lroundf(area->y + area->padding_top + 1.0f));
+    int row0_x = (int)lroundf(inner_x + line0_left_x + 4.0f);
+    int row0_y = line0_y + (int)(line_h * 0.5f);
+    uint32_t painted = pt_canvas_get_pixel(canvas, row0_x, row0_y);
+    pt_check(painted != unselected);
+    /* Right collapses to the range's visual right: the range ends exactly on the
+     * shared soft-wrap boundary, so its end row is the upper line and the
+     * landing is that line's visual right byte. */
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == boundary);
+    pt_check(area->selection_anchor == area->cursor);
+    pt_check(!pt_text_area_get_selection(area, &sel_start, &sel_end));
+    int x = 0;
+    int y = 0;
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line0_y);
+    pt_check_near((float)x, inner_x + line0_right_x, 1.0f);
+
+    /* The same range on Left collapses to the visual left of its first row. */
+    pt_text_area_set_selection(area, 0, boundary);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(area->cursor == line0_left);
+    pt_check(area->selection_anchor == area->cursor);
+    pt_widget_ime_rect(area, &x, &y, NULL, NULL);
+    pt_check(y == line0_y);
+    pt_check_near((float)x, inner_x + line0_left_x, 1.0f);
+
+    /* A three-stop range spanning the wrap (start on row 0, end inside row 1)
+     * collapses at the endpoint rows, not at the row the caret happens to sit
+     * on: Right lands on row 1's visual right, Left on row 0's visual left. */
+    pt_text_area_set_selection(area, 10, 30);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == line1_right);
+    pt_check(area->selection_anchor == area->cursor);
+    pt_text_area_set_selection(area, 10, 30);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(area->cursor == line0_left);
+    pt_check(area->selection_anchor == area->cursor);
+
+    /* A single-line mapped selection keeps its in-line visual edge rule. */
+    pt_text_area_set_selection(area, 0, 22);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == 22);
+    pt_text_area_set_selection(area, 0, 22);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(area->cursor == 0);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+
+    /* An LTR area without bidi content keeps the logical collapse. */
+    window = pt_window_create(app, "ltr-collapse", 420, 320);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    root = pt_window_root(window);
+    pt_widget_set_padding(root, 14.0f, 12.0f, 14.0f, 12.0f);
+    area = pt_text_area_create(root, "note");
+    pt_widget_set_size(area, 140.0f, 200.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_widget_set_text(area, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    pt_window_show(window);
+    canvas = pt_canvas_create(420, 320, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_check(pt_window_paint(window, canvas));
+    pt_check(pt_widget_focus(area));
+    pt_text_area_set_selection(area, 5, 25);
+    pt_window_input_key(window, XKB_KEY_Right, 0, NULL, true);
+    pt_check(area->cursor == 25);
+    pt_check(area->selection_anchor == area->cursor);
+    pt_text_area_set_selection(area, 5, 25);
+    pt_window_input_key(window, XKB_KEY_Left, 0, NULL, true);
+    pt_check(area->cursor == 5);
+    pt_check(area->selection_anchor == area->cursor);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.textarea");
@@ -899,6 +1110,7 @@ int main(void) {
     test_rtl_editing(app);
     test_logical_editing(app);
     test_soft_wrap_affinity(app);
+    test_visual_collapse(app);
 
     pt_canvas_destroy(canvas);
     pt_window_free(window);
