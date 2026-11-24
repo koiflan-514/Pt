@@ -1736,7 +1736,32 @@ void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pre
 }
 
 void pt_window_input_axis(pt_window *window, float x, float y, float delta) {
+    pt_window_input_axis_kind(window, pt_axis_vertical, x, y, delta);
+}
+
+void pt_window_input_axis_kind(pt_window *window, pt_axis_kind axis, float x, float y,
+                               float delta) {
     if (!window) {
+        return;
+    }
+    if (axis == pt_axis_horizontal) {
+        /* A horizontal wheel is a local scroll, never a fling: the vertical
+         * momentum timer is neither stopped nor armed here. */
+        if (pt_window_overlays_axis(window, x, y, delta)) {
+            return;
+        }
+        if (emit_pointer_event(window, pt_pointer_phase_axis, x, y, delta, 0.0f, 0)) {
+            window->needs_draw = true;
+            pt_platform_window_schedule_draw(window);
+            return;
+        }
+        pt_widget *h_hit = window->hovered;
+        if (!h_hit) {
+            h_hit = pt_widget_hit_test(window->root, x, y);
+        }
+        if (h_hit) {
+            pt_widget_wheel_horizontal(h_hit, delta);
+        }
         return;
     }
     pt_window_momentum_stop(window);

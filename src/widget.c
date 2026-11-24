@@ -5221,6 +5221,28 @@ void pt_widget_wheel(pt_widget *widget, float delta) {
     pt_widget_scroll_pixels(widget, delta * 48.0f);
 }
 
+bool pt_widget_wheel_horizontal(pt_widget *widget, float delta) {
+    /* Only a table consumes the horizontal axis. LTR scroll_x counts inward
+     * from the left edge, so a positive (rightwards) axis advances it. An RTL
+     * table's scroll_x counts inward from the right edge, so the physical
+     * direction is negated to keep the same visual motion. The vertical path
+     * above is untouched. */
+    for (pt_widget *cursor = widget; cursor; cursor = cursor->parent) {
+        if (cursor->kind != pt_widget_table) {
+            continue;
+        }
+        float pixels = delta * 48.0f;
+        if (pt_widget_resolved_ui_direction(cursor) == pt_ui_direction_rtl) {
+            pixels = -pixels;
+        }
+        if (pt_table_scroll_horizontal(cursor, pixels)) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 pt_cursor pt_widget_cursor(const pt_widget *widget) {
     if (!widget || !widget->enabled) {
         return pt_cursor_default;

@@ -1326,6 +1326,10 @@ void pt_widget_pointer_drag(pt_widget *widget, float x, float y);
 void pt_widget_pointer_multi_click(pt_widget *widget, float x, float y, uint32_t click_count);
 pt_widget *pt_widget_interaction_target(pt_widget *widget);
 void pt_widget_wheel(pt_widget *widget, float delta);
+/* Horizontal wheel dispatch (a horizontal wl_pointer axis only). Tables scroll
+ * their columns; everything else ignores the axis. Returns true when a table
+ * in the ancestor chain actually moved. */
+bool pt_widget_wheel_horizontal(pt_widget *widget, float delta);
 bool pt_widget_scroll_pixels(pt_widget *widget, float pixels);
 char *pt_entry_selection_text_at(pt_widget *entry, float x, float y);
 pt_cursor pt_widget_cursor(const pt_widget *widget);
@@ -1762,6 +1766,17 @@ void pt_window_input_pointer_leave(pt_window *window);
 void pt_window_input_pointer_button(pt_window *window, uint32_t button, bool pressed, float x,
                                     float y, uint32_t serial, uint32_t time);
 void pt_window_input_axis(pt_window *window, float x, float y, float delta);
+/* The axis kind an axis event belongs to. Only the vertical axis feeds the
+ * public 4-arg pt_window_input_axis contract; the platform forwards a
+ * horizontal wl_pointer axis here so the widget dispatch can route it without
+ * touching the public struct or callbacks (delta_x stays 0 in the vertical
+ * case, byte-identical to 2.1). */
+typedef enum pt_axis_kind {
+    pt_axis_vertical = 0,
+    pt_axis_horizontal = 1,
+} pt_axis_kind;
+void pt_window_input_axis_kind(pt_window *window, pt_axis_kind axis, float x, float y,
+                               float delta);
 void pt_window_input_keyboard_focus(pt_window *window, bool focused, uint32_t serial);
 /* Records the serial of a key press before raw/focused dispatch, so a consumed
  * key still updates the serial a primary-selection set can use. */
