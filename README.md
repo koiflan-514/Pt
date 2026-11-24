@@ -6,17 +6,17 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **2.1.0**. The right-to-left ergonomics and safety release: a caret
-movement policy that adds logical arrows without taking visual editing away, a
-bounded locale-to-direction helper, bidi control inventory and sanitization for
-untrusted text (Trojan Source), and logical start/end padding, all on top of the
-2.0 bidi engine with 100% Unicode conformance and the byte-for-byte LTR
-compatibility gate.
+Status: **2.2.0**. The RTL editing-polish release: multi-line selection paints
+its collapsed visual edge, Shift crosses a soft wrap one visual row per press in
+RTL, and the horizontal wheel axis is routed to tables with RTL direction. It
+adds **no public API**: the surface stays at **576 functions**, 0 removed and 0
+changed against 2.1.0.
 The surface is a 576-function C ABI wrapped in C++/Python/Java with
 binding parity enforced;
-SONAME stays `libpt.so.1` because 2.1 only adds declarations and every default
-keeps 2.0 behavior (`ABI_MAJOR` is tracked separately from `VERSION`). The
-release record is a draft with the final gate run markers still open; see
+SONAME stays `libpt.so.1` because 2.2 only changes behavior inside existing
+declarations and every default keeps 2.1 behavior (`ABI_MAJOR` is tracked
+separately from `VERSION`). The
+release record is tag-ready with the gate run markers filled in; see
 [docs/release.md](docs/release.md). The API
 is tracked by a reviewed baseline, a generated function reference and a
 compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
@@ -69,6 +69,32 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 2.2.0
+
+2.2.0 is the RTL editing-polish release. It changes behavior only, inside
+existing declarations: **no public function, enum or struct is added**, so the
+surface stays at **576 functions and 952 baseline entries**, 0 removed and 0
+changed against 2.1.0. The SONAME stays `libpt.so.1`. A zero-initialized
+application keeps the 2.1 pixels and editing behavior for LTR input, and the
+LTR compatibility gate reports no pixel or event difference against 1.4.0 and
+2.1.0.
+
+- **Multi-line selection paints its visual edge.** A mapped selection that
+  spans several wrapped rows no longer leaves the collapsed boundary edge
+  unpainted in RTL: the highlight rectangles follow the visual edge at the
+  mapped boundary.
+- **Shift crosses a soft wrap in RTL.** One Shift+arrow press that reaches a
+  soft wrap now moves one visual row instead of stalling inside the line, so a
+  selection can be extended row by row in RTL and in mixed-direction text.
+- **The horizontal wheel axis reaches tables.** `wl_pointer`'s
+  `horizontal_scroll` has existed since protocol v1 and was previously
+  discarded; 2.2 routes it through an internal axis-kind path to the table
+  (delta × 48), flips the sign for RTL tables, fills `pt_pointer_event.delta_x`,
+  and lets it fall through overlays instead of being swallowed as a vertical
+  scroll. The public four-argument `pt_window_input_axis` is unchanged.
+  Whether a device emits the axis is hardware-dependent: tilt wheels and
+  trackpad sideways swipes do, a plain vertical wheel does not.
 
 ## What is new in 2.1.0
 
@@ -981,13 +1007,13 @@ English-only.
   comes from the widget or window, and an opposite-direction phrase inside a
   paragraph uses Unicode isolate controls. The text area edits plain text with
   one logical range while wrapped lines may have different paragraph bases.
-- Bidi and RTL have documented limits rather than hidden fallbacks. A table
-  needs its scrollbar or keyboard for horizontal scrolling because the tested
-  Wayland compositors expose no horizontal wheel axis. Shift+arrow across a
-  soft wrap in RTL stays an in-line visual move, and a multi-line mapped
-  selection collapses toward the logical edge at the mapped boundary while the
-  painted rectangles stay correct. `pt_text_span` has no direction field.
-  Missing Arabic/Hebrew glyphs are documented tofu with
+- Bidi and RTL have documented limits rather than hidden fallbacks. Table
+  horizontal wheel scrolling is device-dependent as of 2.2: the axis is routed
+  to tables (delta × 48, sign flipped for RTL), and tilt wheels or trackpad
+  sideways swipes emit it while a plain vertical wheel does not; the scrollbar
+  and keyboard always work. Shift+arrow across a soft wrap in RTL and a
+  multi-line mapped selection are resolved in 2.2. `pt_text_span` has no
+  direction field. Missing Arabic/Hebrew glyphs are documented tofu with
   `pt_app_font_uncovered_count`, not a hard error; install a covering font such
   as Noto Sans Arabic/Hebrew or DejaVu Sans. Bidi control characters can
   reorder displayed text (the Trojan-Source class of problem): 2.1 exposes

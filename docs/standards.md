@@ -375,15 +375,16 @@ facilities into the artifact, tracked in [ROADMAP.md](ROADMAP.md) under M22:
   `tools/ci.sh` provides its `build/tests` path and `PT_WIRE_DRIVER`; bare
   `tools/ci.sh` on `6775485` exits 0. The annotated tag is the owner's
   remaining step.
-- **The RTL limitations are documented, not defects.** The tested Wayland
-  compositors expose no horizontal wheel axis, so a table scrolls horizontally
-  by scrollbar or keyboard; Shift+arrow across a soft wrap stays an in-line
-  visual move; a multi-line mapped selection collapses toward the logical edge
-  at the boundary while its painted rectangles stay correct; `pt_text_span`
-  stays frozen without a direction field; missing Arabic/Hebrew glyphs are
-  fallback/tofu reported by `pt_app_font_uncovered_count`; and bidi control
-  characters are not sanitized automatically. These are settled 2.0 decisions
-  in [rtl.md](rtl.md), not unfinished work.
+- **The RTL limitations are documented, not defects.** A horizontal wheel is
+  routed to tables since 2.2 and is device-dependent: tilt wheels and trackpad
+  sideways swipes emit the `horizontal_scroll` axis, a plain vertical wheel
+  does not, and the scrollbar or keyboard always work; Shift+arrow across a
+  soft wrap and a multi-line mapped selection are resolved in 2.2;
+  `pt_text_span` stays frozen without a direction field; missing Arabic/Hebrew
+  glyphs are fallback/tofu reported by `pt_app_font_uncovered_count`; and bidi
+  control characters are not sanitized automatically. The span, font and
+  sanitize entries are settled decisions in [rtl.md](rtl.md), not unfinished
+  work.
 - **The SVG subset is documented, not complete.** `pt_icon_image` accepts SVG
   and, since 1.4, SVGZ through vendored nanosvg and resolves hicolor
   `scalable/` in `.svg`, `.svgz`, `.png` order, but text, raster images,

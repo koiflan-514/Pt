@@ -1501,9 +1501,11 @@ recommended where libabigail exists.
 
 ### Known issues
 
-- **Table horizontal scrolling needs the scrollbar or keyboard.** The tested
-  Wayland compositors expose no horizontal wheel axis; this is a platform limit
-  recorded in [rtl.md](rtl.md), not a table defect.
+- **Table horizontal wheel scrolling is device-dependent.** The tested
+  compositors agree on the protocol but not on the hardware: a tilt wheel or a
+  trackpad sideways swipe emits `horizontal_scroll` and now scrolls the table
+  (routed in 2.2, delta × 48), a plain vertical wheel does not. The scrollbar
+  and keyboard always work; see [rtl.md](rtl.md).
 - **Shift+arrow across a soft wrap in RTL stays an in-line visual move**, and a
   multi-line mapped selection collapses toward its logical edge at the mapped
   boundary while the painted rectangles stay correct.

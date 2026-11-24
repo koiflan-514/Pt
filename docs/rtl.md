@@ -448,16 +448,16 @@ frame still does no work because painting is damage-driven.
 
 These are documented behavior, not hidden surprises:
 
-- Table horizontal wheel scrolling needs a platform axis that Wayland's
-  `wl_pointer` does not provide in the tested compositors. The table scrolls
-  horizontally with its scrollbar and keyboard; a horizontal wheel over a table
-  is not a 2.0 feature.
-- A Shift+arrow selection that reaches a soft wrap in RTL stays a visual move
-  within the line; crossing the wrap with Shift expands by the visual rule, not
-  by a document-order run. Multi-line selection is logical once it is set.
-- A selection that spans multiple mapped lines collapses toward the logical
-  edge at the mapped boundary; the painted rectangles are correct, but a
-  programmatic range across lines should be set from logical offsets.
+- Table horizontal wheel scrolling is **device-dependent**, not unsupported.
+  The `wl_pointer` protocol has had `horizontal_scroll` (axis value 1) since
+  v1, and 2.2 routes it to tables (delta × 48, sign flipped for RTL). Whether
+  a real device emits it depends on the hardware: tilt wheels and trackpad
+  sideways swipes do, a plain vertical wheel does not. The scrollbar and
+  keyboard keep working either way.
+- Shift+arrow across a soft wrap is **resolved in 2.2**: one press crosses one
+  visual row in RTL, and a multi-line mapped selection no longer collapses
+  toward the logical edge at the mapped boundary. The painted rectangles and
+  the extended range agree.
 - `pt_text_span` has no direction field and stays frozen. Paragraph direction
   comes from the widget, and an embedded opposite-direction phrase uses Unicode
   isolate controls in the text.

@@ -126,8 +126,9 @@ widths and can be hidden but the application still owns row order, multi-column
 sorting reports up to four priorities without reordering the model, tree nodes
 hold plain text, and rows are owned by Pt. Bidi paragraph layout, visual caret
 movement, mirrored UI geometry and the AT-SPI direction attribute are delivered
-in 2.0; its RTL limits are the horizontal table wheel axis, Shift selection
-across a soft wrap, a frozen `pt_text_span`, and bidi controls that are not
+in 2.0; 2.2 routes the horizontal table wheel axis (device-dependent) and
+resolves Shift selection across a soft wrap; its remaining RTL limits are a
+frozen `pt_text_span` and bidi controls that are not
 sanitized. Stylus
 tool, eraser and barrel buttons are delivered as input data; drawing and
 gesture semantics remain application-defined. Projects that need more than
