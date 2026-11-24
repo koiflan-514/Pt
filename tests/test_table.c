@@ -818,6 +818,133 @@ static void test_table_rtl_icon_padding(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Horizontal wheel routing (M24 W2): a horizontal axis only moves a table's
+ * column offset, never a list's row offset, and an RTL table maps the physical
+ * direction through its right-edge scroll origin. The axis itself is
+ * device-dependent (tilt wheel, trackpad swipe); this drives the internal
+ * axis-kind entry directly to pin the routing. */
+static void test_table_horizontal_wheel(pt_app *app) {
+    pt_window *window = pt_window_create(app, "table-horizontal-wheel", 400, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_width(table, 300.0f);
+    pt_widget_set_height(table, 120.0f);
+    pt_table_set_column_width(table, 0, 150.0f);
+    pt_table_set_column_width(table, 1, 150.0f);
+    pt_table_set_column_width(table, 2, 150.0f);
+    pt_table_set_row_height(table, 40.0f);
+    pt_table_set_header_height(table, 38.0f);
+    pt_table_set_row_count(table, 6);
+
+    pt_widget *list = pt_list_view_create(root);
+    pt_check(list != NULL);
+    if (list) {
+        pt_widget_set_align_self(list, pt_align_start);
+        pt_widget_set_width(list, 300.0f);
+        pt_widget_set_height(list, 120.0f);
+        pt_list_view_set_row_count(list, 40);
+        pt_list_view_set_row_height(list, 30.0f);
+    }
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(400, 300, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+
+    float tx = table->x + table->width * 0.5f;
+    float ty = table->y + table->height * 0.5f;
+    /* Vertical axis: the existing table row scroll, untouched by the new path. */
+    pt_window_input_axis(window, tx, ty, 1.0f);
+    pt_check_near(table->scroll_y, 48.0, 0.01);
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+
+    /* Horizontal axis advances the 150 px of width overflow, then clamps. */
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, 1.0f);
+    pt_check_near(table->scroll_x, 48.0, 0.01);
+    pt_check_near(table->scroll_y, 48.0, 0.01);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, 1.0f);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, 1.0f);
+    pt_check_near(table->scroll_x, 144.0, 0.01);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, 1.0f);
+    pt_check_near(table->scroll_x, 150.0, 0.01);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, -4.0f);
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+
+    /* A list ignores the horizontal axis even though it scrolls vertically. */
+    if (list) {
+        float lx = list->x + list->width * 0.5f;
+        float ly = list->y + 10.0f;
+        pt_window_input_axis(window, lx, ly, 1.0f);
+        pt_check_near(list->scroll_y, 48.0, 0.01);
+        pt_window_input_axis_kind(window, pt_axis_horizontal, lx, ly, 3.0f);
+        pt_check_near(list->scroll_y, 48.0, 0.01);
+        pt_check_near(list->scroll_x, 0.0, 0.01);
+    }
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
+/* RTL tables count scroll_x from the right edge, so the same physical
+ * direction must produce the mirrored offset. */
+static void test_table_horizontal_wheel_rtl(pt_app *app) {
+    pt_window *window = pt_window_create(app, "table-horizontal-wheel-rtl", 400, 300);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_width(table, 300.0f);
+    pt_widget_set_height(table, 200.0f);
+    pt_table_set_column_width(table, 0, 150.0f);
+    pt_table_set_column_width(table, 1, 150.0f);
+    pt_table_set_column_width(table, 2, 150.0f);
+    pt_table_set_row_height(table, 40.0f);
+    pt_table_set_header_height(table, 38.0f);
+    pt_table_set_row_count(table, 6);
+    pt_check(table != NULL);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(400, 300, 1.0f);
+    pt_check(canvas != NULL);
+    pt_check(pt_window_paint(window, canvas));
+
+    float tx = table->x + table->width * 0.5f;
+    float ty = table->y + table->height * 0.5f;
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+    /* Positive physical axis maps to a negative logical step at the origin. */
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, 1.0f);
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+    /* Leftward physical axis advances the mirrored offset, then clamps. */
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, -1.0f);
+    pt_check_near(table->scroll_x, 48.0, 0.01);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, -1.0f);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, -1.0f);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, -1.0f);
+    pt_check_near(table->scroll_x, 150.0, 0.01);
+    pt_window_input_axis_kind(window, pt_axis_horizontal, tx, ty, 4.0f);
+    pt_check_near(table->scroll_x, 0.0, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.table");
@@ -828,6 +955,8 @@ int main(void) {
     test_table(app);
     test_table_rtl(app);
     test_table_rtl_icon_padding(app);
+    test_table_horizontal_wheel(app);
+    test_table_horizontal_wheel_rtl(app);
     pt_app_destroy(app);
     return pt_test_finish("table");
 }

@@ -87,6 +87,25 @@ static void wire_count_click(pt_widget *widget, void *user_data) {
     ++*(int *)user_data;
 }
 
+/* Records the axis kind the window routes: a vertical axis fills delta_y and
+ * leaves delta_x 0, a horizontal axis fills delta_x and leaves delta_y 0. */
+typedef struct wire_axis_log {
+    int axis_count;
+    float last_axis_x;
+    float last_axis_y;
+} wire_axis_log;
+
+static bool wire_log_pointer(pt_window *window, const pt_pointer_event *event, void *user_data) {
+    (void)window;
+    wire_axis_log *log = user_data;
+    if (event->phase == pt_pointer_phase_axis) {
+        log->last_axis_x = event->delta_x;
+        log->last_axis_y = event->delta_y;
+        ++log->axis_count;
+    }
+    return false;
+}
+
 /* ---------- facility self-test ---------- */
 
 /* The three new interface tables must append after the existing kinds so every
@@ -1188,6 +1207,181 @@ static void test_wire_rtl_editing(void) {
     fake_compositor_stop(&fc);
 }
 
+/* Table horizontal wheel (M24 W2). The synthetic wl_pointer.axis event uses
+ * WL_POINTER_AXIS_HORIZONTAL_SCROLL, which the protocol has carried since v1,
+ * so the routing between the compositor and pt_table_scroll_horizontal is
+ * exercised end to end. Real hardware only sends this axis when the input
+ * device has one (a tilt wheel, a trackpad horizontal swipe, some mice); a
+ * plain vertical wheel never does, so the live path is device-dependent while
+ * this routing is what Pt guarantees. */
+static void test_wire_horizontal_axis(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n", fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.wire.horizontal-axis");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_window *window = wire_open_window(&fc, app, "horizontal-axis-wire", 400, 300);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_width(table, 300.0f);
+    pt_widget_set_height(table, 200.0f);
+    pt_table_set_column_width(table, 0, 150.0f);
+    pt_table_set_column_width(table, 1, 150.0f);
+    pt_table_set_column_width(table, 2, 150.0f);
+    pt_table_set_row_count(table, 6);
+    if (!table) {
+        pt_window_free(window);
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+
+    /* A pointer callback that consumes axis events would hide the routing;
+     * install one that records delta_x/delta_y and returns false. */
+    wire_axis_log log = {0};
+    pt_window_set_pointer_callback(window, wire_log_pointer, &log);
+
+    pt_canvas *canvas = wire_paint(window, 400, 300);
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+    float cx = table->x + table->width * 0.5f;
+    float cy = table->y + table->height * 0.5f;
+    fake_compositor_pointer_enter(&fc, 9200u, surface, cx, cy);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(window->pointer_x, cx, 1.0);
+
+    /* Pure vertical axis: the table scrolls down and delta_y is reported. */
+    float scroll_y_before = table->scroll_y;
+    float scroll_x_before = table->scroll_x;
+    fake_compositor_pointer_axis(&fc, 100u, 0u, 15.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_y, scroll_y_before + 72.0f, 0.01);
+    pt_check_near(table->scroll_x, scroll_x_before, 0.01);
+    pt_check(log.axis_count >= 1);
+    if (log.axis_count >= 1) {
+        pt_check_near(log.last_axis_x, 0.0f, 0.01);
+        pt_check_near(log.last_axis_y, 1.5f, 0.05);
+    }
+
+    /* Horizontal axis, positive (rightwards) in LTR: scroll_x advances by the
+     * same 48 px per unit factor and the vertical offset does not move. */
+    float scroll_y_after_vertical = table->scroll_y;
+    int axis_before = log.axis_count;
+    fake_compositor_pointer_axis(&fc, 110u, 1u, 15.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, 72.0f, 0.01);
+    pt_check_near(table->scroll_y, scroll_y_after_vertical, 0.01);
+    pt_check(log.axis_count == axis_before + 1);
+    if (log.axis_count == axis_before + 1) {
+        pt_check_near(log.last_axis_x, 1.5f, 0.05);
+        pt_check_near(log.last_axis_y, 0.0f, 0.01);
+    }
+
+    /* Negative horizontal axis scrolls back, clamped at 0. */
+    fake_compositor_pointer_axis(&fc, 120u, 1u, -30.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, 0.0f, 0.01);
+
+    /* Column 2 is off the right edge at scroll_x 0; the axis brings it in and
+     * clamps at the 150 px of overflow (450 px of columns in a 300 px table). */
+    fake_compositor_pointer_axis(&fc, 130u, 1u, 30.0);
+    fake_compositor_pointer_axis(&fc, 140u, 1u, 30.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, 150.0f, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
+/* RTL mapping: scroll_x counts inward from the right edge, so the same
+ * positive (rightwards) physical axis must move scroll_x the other way to keep
+ * the visual motion identical. */
+static void test_wire_horizontal_axis_rtl(void) {
+    static fake_compositor fc;
+    pt_check(fake_compositor_start(&fc, FC_OPT_ALL));
+    if (fake_compositor_error(&fc)) {
+        fprintf(stderr, "fake compositor start failed: %s\n", fake_compositor_error(&fc));
+        return;
+    }
+    unsetenv("PT_HEADLESS");
+    pt_app *app = pt_app_create("pt.tests.wire.horizontal-axis-rtl");
+    pt_check(app != NULL);
+    if (!app) {
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_check(fake_compositor_settle(&fc, app));
+    pt_window *window = wire_open_window(&fc, app, "horizontal-axis-rtl-wire", 400, 300);
+    if (!window) {
+        pt_app_destroy(app);
+        fake_compositor_stop(&fc);
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 0.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(root, 0.0f);
+    pt_widget_set_ui_direction(root, pt_ui_direction_rtl);
+    pt_widget *table = pt_table_create(root);
+    pt_check(table != NULL);
+    pt_widget_set_align_self(table, pt_align_start);
+    pt_widget_set_width(table, 300.0f);
+    pt_widget_set_height(table, 200.0f);
+    pt_table_set_column_width(table, 0, 150.0f);
+    pt_table_set_column_width(table, 1, 150.0f);
+    pt_table_set_column_width(table, 2, 150.0f);
+    pt_table_set_row_count(table, 6);
+    pt_canvas *canvas = wire_paint(window, 400, 300);
+    uint32_t surface = fake_compositor_toplevel_surface(&fc);
+    pt_check(surface != 0);
+    float cx = table->x + table->width * 0.5f;
+    float cy = table->y + table->height * 0.5f;
+    fake_compositor_pointer_enter(&fc, 9300u, surface, cx, cy);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, 0.0f, 0.01);
+
+    /* Positive physical axis in RTL maps to a negative logical step, which is
+     * already clamped at the right-edge origin: nothing moves. */
+    float before = table->scroll_x;
+    fake_compositor_pointer_axis(&fc, 200u, 1u, 15.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, before, 0.01);
+
+    /* A negative physical axis (leftwards tilt/swipe) advances an RTL table. */
+    fake_compositor_pointer_axis(&fc, 210u, 1u, -15.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, 72.0f, 0.01);
+
+    /* Back the other way: positive physical axis now returns to the origin. */
+    fake_compositor_pointer_axis(&fc, 220u, 1u, 15.0);
+    pt_check(fake_compositor_sync(&fc, app));
+    pt_check_near(table->scroll_x, 0.0f, 0.01);
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+    pt_app_destroy(app);
+    fake_compositor_stop(&fc);
+}
+
 int main(void) {
     test_facility_tables();
     test_touch_wire();
@@ -1195,5 +1389,7 @@ int main(void) {
     test_dnd_wire();
     test_primary_wire();
     test_wire_rtl_editing();
+    test_wire_horizontal_axis();
+    test_wire_horizontal_axis_rtl();
     return pt_test_finish("wire_input");
 }
