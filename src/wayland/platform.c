@@ -400,8 +400,6 @@ static void pointer_leave(void *data, struct wl_pointer *pointer, uint32_t seria
     platform->pointer_offset_y = 0.0f;
     platform->axis_momentum_armed = false;
     platform->axis_velocity = 0.0f;
-    platform->axis_h_armed = false;
-    platform->axis_h_velocity = 0.0f;
 }
 
 static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
@@ -444,25 +442,12 @@ static void pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time, 
     }
     pt_window *window = platform->pointer_focus;
     if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
-        /* The vertical path never saw horizontal events, so track their timing
-         * separately and leave the vertical accumulator untouched. A horizontal
-         * wheel is device-dependent: tilt wheels, trackpad swipes and some mice
-         * emit it, plain vertical wheels do not. */
+        /* Horizontal wheel deltas are discrete per-event (delta*48, sign
+         * flipped for RTL later on). No fling is started for this axis, so
+         * there is no velocity accumulator to drive. A horizontal wheel is
+         * device-dependent: tilt wheels, trackpad swipes and some mice emit
+         * it, plain vertical wheels do not. */
         float delta = (float)wl_fixed_to_double(value) / 10.0f;
-        if (platform->axis_h_armed && time > platform->axis_h_last_time) {
-            uint32_t elapsed = time - platform->axis_h_last_time;
-            if (elapsed >= 1 && elapsed <= 120) {
-                float instant = delta * 48.0f * 1000.0f / (float)elapsed;
-                platform->axis_h_velocity =
-                    platform->axis_h_velocity * 0.35f + instant * 0.65f;
-                platform->axis_h_velocity =
-                    pt_clamp_float(platform->axis_h_velocity, -6000.0f, 6000.0f);
-            }
-        } else {
-            platform->axis_h_velocity = 0.0f;
-        }
-        platform->axis_h_last_time = time;
-        platform->axis_h_armed = true;
         pt_window_input_axis_kind(window, pt_axis_horizontal, window->pointer_x,
                                   window->pointer_y, delta);
         return;
@@ -495,8 +480,6 @@ static void pointer_axis_source(void *data, struct wl_pointer *pointer, uint32_t
     if (platform->axis_source != source) {
         platform->axis_velocity = 0.0f;
         platform->axis_momentum_armed = false;
-        platform->axis_h_velocity = 0.0f;
-        platform->axis_h_armed = false;
     }
     platform->axis_source = source;
 }

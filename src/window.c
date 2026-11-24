@@ -1747,7 +1747,7 @@ void pt_window_input_axis_kind(pt_window *window, pt_axis_kind axis, float x, fl
     if (axis == pt_axis_horizontal) {
         /* A horizontal wheel is a local scroll, never a fling: the vertical
          * momentum timer is neither stopped nor armed here. */
-        if (pt_window_overlays_axis(window, x, y, delta)) {
+        if (pt_window_overlays_axis(window, axis, x, y, delta)) {
             return;
         }
         if (emit_pointer_event(window, pt_pointer_phase_axis, x, y, delta, 0.0f, 0)) {
@@ -1765,7 +1765,7 @@ void pt_window_input_axis_kind(pt_window *window, pt_axis_kind axis, float x, fl
         return;
     }
     pt_window_momentum_stop(window);
-    if (pt_window_overlays_axis(window, x, y, delta)) {
+    if (pt_window_overlays_axis(window, axis, x, y, delta)) {
         return;
     }
     if (emit_pointer_event(window, pt_pointer_phase_axis, x, y, 0.0f, delta, 0)) {

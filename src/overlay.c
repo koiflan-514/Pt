@@ -1656,8 +1656,16 @@ bool pt_window_overlays_key(pt_window *window, uint32_t keysym, uint32_t modifie
     return true;
 }
 
-bool pt_window_overlays_axis(pt_window *window, float x, float y, float delta) {
+bool pt_window_overlays_axis(pt_window *window, pt_axis_kind axis, float x, float y,
+                             float delta) {
     if (!pt_window_overlays_active(window)) {
+        return false;
+    }
+    if (axis == pt_axis_horizontal) {
+        /* Overlays scroll vertically. A horizontal wheel is not their input:
+         * let it fall through to the window so a table inside the overlay
+         * (or under it) still pans sideways instead of being swallowed as a
+         * vertical scroll. */
         return false;
     }
     pt_widget *hit = window->hovered;

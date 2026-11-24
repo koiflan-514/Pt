@@ -72,7 +72,7 @@ prepare() {
     git -C "$ROOT" archive "$ref" | tar -x -C "$dir"
 
     echo "ltr-compat: [$label] building libpt"
-    if ! timeout 900 make -C "$dir" -j8 lib >"$dir/build.log" 2>&1; then
+    if ! timeout 900 make -C "$dir" -j2 lib >"$dir/build.log" 2>&1; then
         echo "ltr-compat: [$label] build failed; last 40 lines:" >&2
         tail -n 40 "$dir/build.log" >&2
         exit 1

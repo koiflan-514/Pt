@@ -1939,7 +1939,8 @@ bool pt_window_overlays_pointer(pt_window *window, uint32_t button, bool pressed
                                 float y, uint32_t serial, uint32_t time);
 bool pt_window_overlays_key(pt_window *window, uint32_t keysym, uint32_t modifiers,
                             const char *utf8);
-bool pt_window_overlays_axis(pt_window *window, float x, float y, float delta);
+bool pt_window_overlays_axis(pt_window *window, pt_axis_kind axis, float x, float y,
+                             float delta);
 void pt_window_overlays_update_tooltip(pt_window *window);
 void pt_window_overlays_dismiss_tooltip(pt_window *window);
 pt_widget *pt_window_overlays_focus_scope(const pt_window *window);

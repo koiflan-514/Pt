@@ -254,12 +254,6 @@ struct pt_platform {
     uint32_t axis_last_time;
     float axis_velocity;
     bool axis_momentum_armed;
-    /* Horizontal wheel velocity estimate. A horizontal wheel never starts a
-     * fling (pt_window_input_axis_kind routes it explicitly), so this is
-     * only reported while a continuous horizontal source is live. */
-    float axis_h_velocity;
-    uint32_t axis_h_last_time;
-    bool axis_h_armed;
 
     char *clipboard_mime;
     char *clipboard_data;

@@ -11,7 +11,9 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-jobs=${JOBS:-$(nproc 2>/dev/null || echo 4)}
+# Default to two jobs: the gate machine is memory-bound and parallel
+# sanitizer/consumer links were observed to spike past its RAM budget.
+jobs=${JOBS:-2}
 base=${PT_CI_BUILD:-$root/build/ci}
 case $base in
 /*) ;;
