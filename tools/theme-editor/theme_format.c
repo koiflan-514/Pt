@@ -1310,7 +1310,62 @@ te_format_error te_load_json_file(te_theme_doc *doc, const char *path,
     free(buffer);
     return error;
 }/* ------------------------------------------------------------------------- */
+/* Canonical writer                                                           */
+/* ------------------------------------------------------------------------- */
 
+typedef struct te_output {
+    char *buffer;
+    size_t capacity;
+    size_t length;
+    bool overflow;
+} te_output;
+
+static void te_out_bytes(te_output *out, const char *text, size_t length) {
+    if (out->overflow) {
+        return;
+    }
+    if (out->buffer == NULL) {
+        if (out->length > SIZE_MAX - length) {
+            out->overflow = true;
+            return;
+        }
+        out->length += length;
+        return;
+    }
+    if (out->capacity == 0 || length > out->capacity - 1 - out->length) {
+        out->overflow = true;
+        return;
+    }
+    memcpy(out->buffer + out->length, text, length);
+    out->length += length;
+}
+
+static void te_out_char(te_output *out, char c) {
+    te_out_bytes(out, &c, 1);
+}
+
+static void te_out_cstr(te_output *out, const char *text) {
+    te_out_bytes(out, text, strlen(text));
+}
+
+static void te_outf(te_output *out, const char *format, ...) {
+    char temp[128];
+    va_list args;
+    va_start(args, format);
+    int count = vsnprintf(temp, sizeof temp, format, args);
+    va_end(args);
+    if (count < 0 || (size_t)count >= sizeof temp) {
+        out->overflow = true;
+        return;
+    }
+    te_out_bytes(out, temp, (size_t)count);
+}
+
+/* %.9g with a locale-neutral decimal point and a positive-zero canonical form.
+ * The only locale-dependent byte printf may introduce is the decimal
+ * separator, so any byte outside the JSON/C number alphabet is folded to '.'.
+ * A value whose %.9g form uses an exponent is rejected by the metric reader,
+ * which keeps every parsed document canonicalisable and re-readable. */
 static void te_format_float(float value, char *buffer, size_t capacity) {
     if (buffer == NULL || capacity == 0) {
         return;
@@ -1348,11 +1403,98 @@ static void te_format_float(float value, char *buffer, size_t capacity) {
     }
 }
 
+static const char *te_scheme_or_dark(pt_color_scheme scheme) {
+    const char *name = te_scheme_name(scheme);
+    return name != NULL ? name : "dark";
+}
+
+/* Escapes a theme name for a JSON string. Names are at most 95 bytes by
+ * contract, but the writer stops at the array bound even for a malformed doc. */
+static void te_json_string(te_output *out, const char *name) {
+    te_out_char(out, '"');
+    for (size_t i = 0; i < TE_THEME_NAME_MAX_BYTES && name[i] != 0; ++i) {
+        unsigned char c = (unsigned char)name[i];
+        switch (c) {
+        case '"':
+            te_out_cstr(out, "\\\"");
+            break;
+        case '\\':
+            te_out_cstr(out, "\\\\");
+            break;
+        case '\b':
+            te_out_cstr(out, "\\b");
+            break;
+        case '\f':
+            te_out_cstr(out, "\\f");
+            break;
+        case '\n':
+            te_out_cstr(out, "\\n");
+            break;
+        case '\r':
+            te_out_cstr(out, "\\r");
+            break;
+        case '\t':
+            te_out_cstr(out, "\\t");
+            break;
+        default:
+            if (c < 0x20) {
+                te_outf(out, "\\u%04x", (unsigned)c);
+            } else {
+                te_out_char(out, (char)c);
+            }
+            break;
+        }
+    }
+    te_out_char(out, '"');
+}
+
+static void te_write_json(const te_theme_doc *doc, te_output *out) {
+    te_out_cstr(out, "{\n");
+    te_out_cstr(out, "  \"schema\": \"");
+    te_out_cstr(out, TE_THEME_SCHEMA_V1);
+    te_out_cstr(out, "\",\n");
+    te_out_cstr(out, "  \"name\": ");
+    te_json_string(out, doc->name);
+    te_out_cstr(out, ",\n");
+    te_out_cstr(out, "  \"scheme\": \"");
+    te_out_cstr(out, te_scheme_or_dark(doc->scheme));
+    te_out_cstr(out, "\",\n");
+    te_out_cstr(out, "  \"colors\": {\n");
+    for (int i = 0; i < pt_theme_token_count; ++i) {
+        te_outf(out, "    \"%s\": \"%08X\"", te_color_names[i],
+                (unsigned)(doc->colors[i] & 0xFFFFFFFFu));
+        if (i + 1 < pt_theme_token_count) {
+            te_out_char(out, ',');
+        }
+        te_out_char(out, '\n');
+    }
+    te_out_cstr(out, "  },\n");
+    te_out_cstr(out, "  \"metrics\": {\n");
+    for (int i = 0; i < pt_theme_metric_count; ++i) {
+        te_outf(out, "    \"%s\": ", te_metric_names[i]);
+        char metric[64];
+        te_format_float(doc->metrics[i], metric, sizeof metric);
+        te_out_cstr(out, metric);
+        if (i + 1 < pt_theme_metric_count) {
+            te_out_char(out, ',');
+        }
+        te_out_char(out, '\n');
+    }
+    te_out_cstr(out, "  }\n");
+    te_out_cstr(out, "}\n");
+}
+
 size_t te_serialize_json_size(const te_theme_doc *doc) {
     if (doc == NULL) {
         return 0;
     }
-    return 0;
+    te_output out;
+    memset(&out, 0, sizeof out);
+    te_write_json(doc, &out);
+    if (out.overflow || out.length == SIZE_MAX) {
+        return 0;
+    }
+    return out.length + 1;
 }
 
 te_format_error te_serialize_json(const te_theme_doc *doc, char *buffer,
@@ -1363,15 +1505,59 @@ te_format_error te_serialize_json(const te_theme_doc *doc, char *buffer,
     if (doc == NULL || buffer == NULL || capacity == 0) {
         return TE_ERR_ARGUMENT;
     }
-    return TE_ERR_NOT_IMPLEMENTED;
+    size_t required = te_serialize_json_size(doc);
+    if (required == 0 || capacity < required) {
+        return TE_ERR_ARGUMENT;
+    }
+    te_output out;
+    memset(&out, 0, sizeof out);
+    out.buffer = buffer;
+    out.capacity = capacity;
+    te_write_json(doc, &out);
+    if (out.overflow || out.length + 1 > capacity) {
+        buffer[0] = 0;
+        return TE_ERR_ARGUMENT;
+    }
+    buffer[out.length] = 0;
+    if (written != NULL) {
+        *written = out.length;
+    }
+    return TE_ERR_OK;
+}
+
+static te_format_error te_write_text_file(const char *path, const char *text, size_t length) {
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return TE_ERR_IO;
+    }
+    size_t wrote = fwrite(text, 1, length, file);
+    bool failed = wrote != length || ferror(file) != 0;
+    if (fclose(file) != 0) {
+        failed = true;
+    }
+    return failed ? TE_ERR_IO : TE_ERR_OK;
 }
 
 te_format_error te_save_json_file(const te_theme_doc *doc, const char *path) {
     if (doc == NULL || path == NULL) {
         return TE_ERR_ARGUMENT;
     }
-    return TE_ERR_NOT_IMPLEMENTED;
-}
+    size_t required = te_serialize_json_size(doc);
+    if (required == 0) {
+        return TE_ERR_ARGUMENT;
+    }
+    char *buffer = malloc(required);
+    if (buffer == NULL) {
+        return TE_ERR_IO;
+    }
+    size_t written = 0;
+    te_format_error error = te_serialize_json(doc, buffer, required, &written);
+    if (error == TE_ERR_OK) {
+        error = te_write_text_file(path, buffer, written);
+    }
+    free(buffer);
+    return error;
+}/* ------------------------------------------------------------------------- */
 
 size_t te_export_c_size(const te_theme_doc *doc) {
     if (doc == NULL) {

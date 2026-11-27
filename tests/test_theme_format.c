@@ -184,7 +184,7 @@ static void test_stub_error_paths(void) {
     pt_check(written == 0);
     pt_check(te_serialize_json(&doc, buffer, 0, &written) == TE_ERR_ARGUMENT);
     pt_check(te_serialize_json(&doc, buffer, sizeof buffer, &written) ==
-             TE_ERR_NOT_IMPLEMENTED);
+             TE_ERR_ARGUMENT);
     pt_check(written == 0);
     pt_check(te_save_json_file(NULL, "x.json") == TE_ERR_ARGUMENT);
     pt_check(te_save_json_file(&doc, NULL) == TE_ERR_ARGUMENT);
