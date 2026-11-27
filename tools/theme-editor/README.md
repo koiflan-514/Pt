@@ -45,14 +45,14 @@ a Wayland compositor.
 ## CLI
 
 ```text
-theme-editor                       open the GUI with the built-in dark palette
-theme-editor <file.json>           open the GUI with an imported document
-theme-editor --check <file.json>   validate, print the WCAG pair table, no window
-theme-editor --check --strict ...  warnings and failed pairs are errors
-theme-editor --export-json <in> <out>
-theme-editor --export-c <in> <out.c>
-theme-editor --help                usage
-theme-editor --version             tool and schema version
+theme-editor                          open the GUI with the built-in dark palette
+theme-editor <file.json>              open the GUI with an imported document
+theme-editor --check [--strict] [file...]
+                                      validate, print the WCAG pair table, no window
+theme-editor --export-json <in> [out]
+theme-editor --export-c <in> [out.c]
+theme-editor --help                   usage
+theme-editor --version                tool and schema version
 ```
 
 Exit codes:
@@ -61,11 +61,19 @@ Exit codes:
 | --- | --- |
 | `0` | success, and every floored WCAG pair passed (`--check`) |
 | `1` | a floored WCAG pair failed (`--check`) |
-| `2` | malformed input or a usage error |
+| `2` | malformed input, a usage error, or an I/O error |
 
-`--check` prints the pair table and exits `0` when every floored pair passes,
-`1` when one fails, and `2` for a malformed file. `--strict` promotes parser
-warnings (for example an unknown key from a newer schema) to errors. The
+`--check` accepts zero or more files. With no file it validates the bundled
+`themes/dark.json` and `themes/light.json` in one run; otherwise each file is
+reported in turn, separated by a blank line. It prints the pair table and exits
+`0` when every floored pair passes, `1` when one fails, and `2` for a malformed
+file. When several files are checked, `2` wins over `1`. `--strict` promotes
+parser warnings (for example an unknown key from a newer schema) to errors.
+
+For `--export-json` and `--export-c` the output path is optional and may be
+given either positionally or after `-o`; it cannot be given both ways. With no
+output path the canonical text is written to standard output. An input or output
+I/O failure, including a failed write to standard output, also exits `2`. The
 exporter never writes a file implicitly in GUI mode; the headless
 `--export-json` / `--export-c` forms are the only way to write a file.
 
@@ -89,7 +97,8 @@ A theme file is one JSON object with five keys:
   [docs/theming.md](../../docs/theming.md) for the full role table.
 - `metrics` has one entry per metric; keys are the short metric names
   (`radius_small`, `focus_width`, `control_height`, ...), values are finite
-  JSON numbers in logical pixels.
+  JSON numbers in logical pixels with a canonical `%.9g` fixed-point form (see
+  below; exponent-form values are rejected).
 - `scheme` is `dark` or `light` and records the base palette that seeded the
   document; it is never inferred from the colors.
 - Every known role and metric must be present. Unknown keys are warnings
@@ -99,14 +108,35 @@ A theme file is one JSON object with five keys:
   Exporting the same document twice is byte-identical and re-parses to the same
   values.
 - Limits: file size 1 MiB, JSON nesting depth 8, theme name 95 UTF-8 bytes, and
-  no trailing bytes after the top-level object. The parser is hand-written and
-  bounded; it does not use `strtod`, so a user's decimal separator cannot change
-  a value.
+  no trailing bytes after the top-level object apart from JSON whitespace
+  (space, tab, carriage return, line feed). Any other trailing byte is
+  `TE_ERR_SYNTAX`. The parser is hand-written and bounded; it does not use
+  `strtod`, so a user's decimal separator cannot change a value.
 
 The C export (`--export-c`) writes one complete C23 translation unit with
 `#include <pt/pt.h>` and `void theme_apply_<slug>(pt_app *app)` that sets the
 scheme, every color and every metric through public API. The slug is a
 lowercase `[a-z0-9_]` form of `name` (empty becomes `custom_theme`).
+
+### Metric numbers and the fixed-point limit
+
+Metrics are logical pixels and the writer serializes them with `%.9g`. The
+reader accepts a metric only when that canonical `%.9g` form is fixed-point:
+a finite JSON number whose printed form does not use an exponent. A value whose
+`%.9g` form would use an exponent is rejected with `TE_ERR_RANGE` and the
+message "metric has no canonical fixed-point representation". In practice that
+means values below roughly `0.0001` and values at or above `1e9` are rejected:
+the float nearest `0.0001` is `9.99999975e-05`, so even the literal `0.0001`
+has an exponent form, while `1000000000` prints as `1e+09`. Negative metrics,
+non-finite values, overflow and underflow to zero are rejected as well.
+
+This is a format invariant, not a recommendation for the UI: metrics are
+logical pixels, and a value below `0.001` px has no visible effect. Pickers and
+generated themes should stay in ordinary pixel ranges. Because the reader
+enforces exactly the `%.9g` canonical form that the writer emits, every
+document that parses can be exported canonically and re-read to the same
+values; a parsed document never carries a metric that the writer would turn
+into exponent notation.
 
 ## WCAG checks
 
