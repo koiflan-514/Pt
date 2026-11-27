@@ -386,7 +386,13 @@ int main(void) {
         pt_check(window->platform_window != NULL);
         pt_check(child->platform_window != NULL);
         pt_window_close(child);
-        pt_check(child->platform_window == NULL);
+        bool child_listed = false;
+        for (pt_window *listed = app->first_window; listed; listed = listed->next) {
+            if (listed == child) {
+                child_listed = true;
+            }
+        }
+        pt_check(!child_listed);
     }
 
     int pixel_width = (int)((float)window->width * window->render_scale);
