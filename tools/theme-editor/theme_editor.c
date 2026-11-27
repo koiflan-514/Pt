@@ -8,12 +8,16 @@
  * WCAG module as the GUI; there is no second code path to drift.
  */
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include <pt/pt.h>
+
+#include "preview.h"
 #include "theme_format.h"
 #include "theme_wcag.h"
 
@@ -347,10 +351,552 @@ static int te_run_export_c(int argc, char **argv) {
     return status;
 }
 
+/* ------------------------------------------------------------------------- */
+/* GUI                                                                       */
+/* ------------------------------------------------------------------------- */
+
+typedef struct te_editor_state te_editor_state;
+
+typedef struct te_color_row {
+    te_editor_state *state;
+    pt_theme_token token;
+} te_color_row;
+
+typedef struct te_metric_row {
+    te_editor_state *state;
+    pt_theme_metric metric;
+} te_metric_row;
+
+struct te_editor_state {
+    pt_app *app;
+    pt_window *window;
+    te_preview *preview;
+    te_theme_doc doc;
+    bool updating;
+
+    te_color_row color_rows[pt_theme_token_count];
+    te_metric_row metric_rows[pt_theme_metric_count];
+    pt_widget *color_pickers[pt_theme_token_count];
+    pt_widget *metric_pickers[pt_theme_metric_count];
+
+    pt_widget *name_entry;
+    pt_widget *scheme_label;
+    pt_widget *preview_button;
+    pt_widget *json_path;
+    pt_widget *c_path;
+    pt_widget *status_label;
+    pt_widget *contrast_summary;
+    pt_widget *contrast_rows[TE_WCAG_MAX_PAIRS];
+};
+
+static void te_editor_status(te_editor_state *state, const char *format, ...) {
+    if (state->status_label == NULL) {
+        return;
+    }
+    char message[320];
+    va_list args;
+    va_start(args, format);
+    (void)vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    pt_widget_set_text(state->status_label, message);
+}
+
+/* Copies a user-entered name into the fixed document buffer. The entry can
+ * exceed the 95-byte format limit; keep the longest valid UTF-8 prefix so the
+ * document never carries a truncated sequence. */
+static void te_editor_copy_name(char destination[TE_THEME_NAME_MAX], const char *source) {
+    size_t length = source != NULL ? strlen(source) : 0;
+    if (length >= TE_THEME_NAME_MAX) {
+        length = TE_THEME_NAME_MAX - 1;
+        while (length > 0 && ((unsigned char)source[length] & 0xC0u) == 0x80u) {
+            --length;
+        }
+    }
+    memcpy(destination, source != NULL ? source : "", length);
+    destination[length] = '\0';
+}
+
+static void te_editor_update_contrast(te_editor_state *state) {
+    te_wcag_report report = {0};
+    bool passed = te_wcag_check_palette(state->doc.colors, &report);
+    unsigned informational = 0;
+    for (unsigned i = 0; i < report.count && i < TE_WCAG_MAX_PAIRS; ++i) {
+        const te_wcag_result *row = &report.rows[i];
+        if (row->informational) {
+            ++informational;
+        }
+        if (state->contrast_rows[i] == NULL) {
+            continue;
+        }
+        char line[256];
+        const char *status = row->informational ? "info" : (row->pass ? "pass" : "FAIL");
+        (void)snprintf(line, sizeof(line), "%-46s %6.3f  %-5s  %5.1f  %s",
+                       row->pair->label != NULL ? row->pair->label : "?", row->ratio,
+                       te_wcag_grade_name(row->grade), row->pair->floor, status);
+        pt_widget_set_text(state->contrast_rows[i], line);
+    }
+    if (state->contrast_summary != NULL) {
+        char summary[160];
+        (void)snprintf(summary, sizeof(summary), "WCAG: %u pairs, %u informational, %u failed - %s",
+                       report.count, informational, report.failed, passed ? "PASS" : "FAIL");
+        pt_widget_set_text(state->contrast_summary, summary);
+    }
+}
+
+/* Applies the live document to the preview window. If the user closed the
+ * preview window, the stale handle is retired first. */
+static void te_editor_apply_preview(te_editor_state *state, bool reset_first) {
+    if (state->preview == NULL) {
+        return;
+    }
+    pt_window *window = te_preview_window(state->preview);
+    if (window == NULL || !pt_window_is_open(window)) {
+        te_preview_destroy(state->preview);
+        state->preview = NULL;
+        if (state->preview_button != NULL) {
+            pt_widget_set_text(state->preview_button, "Show preview");
+        }
+        return;
+    }
+    if (reset_first) {
+        te_preview_reset(state->preview);
+    }
+    te_preview_apply(state->preview, &state->doc);
+}
+
+static void te_editor_document_changed(te_editor_state *state) {
+    te_editor_apply_preview(state, false);
+    te_editor_update_contrast(state);
+}
+
+/* Rewrites every editor control from the document. Programmatic picker setters
+ * are silent, but pt_widget_set_text() on an entry reports a change, so the
+ * updating guard keeps the model stable. */
+static void te_editor_refresh(te_editor_state *state) {
+    state->updating = true;
+    if (state->name_entry != NULL) {
+        pt_widget_set_text(state->name_entry, state->doc.name);
+    }
+    if (state->scheme_label != NULL) {
+        const char *scheme = te_scheme_name(state->doc.scheme);
+        pt_widget_set_text(state->scheme_label, scheme != NULL ? scheme : "unknown");
+    }
+    for (int i = 0; i < pt_theme_token_count; ++i) {
+        pt_color_picker_set_color(state->color_pickers[i], state->doc.colors[i]);
+    }
+    for (int i = 0; i < pt_theme_metric_count; ++i) {
+        pt_number_picker_set_value(state->metric_pickers[i], (double)state->doc.metrics[i]);
+    }
+    state->updating = false;
+    te_editor_apply_preview(state, true);
+    te_editor_update_contrast(state);
+}
+
+/* Seeds the document from the built-in palette through the public getters.
+ * The editor's own window keeps this neutral scheme; the document is copied
+ * out and never writes back to the application palette. */
+static void te_editor_seed(te_editor_state *state, pt_color_scheme scheme) {
+    pt_app_set_color_scheme(state->app, scheme);
+    state->doc.scheme = scheme;
+    (void)snprintf(state->doc.name, sizeof(state->doc.name), "Default %s",
+                   scheme == pt_color_scheme_light ? "Light" : "Dark");
+    for (int i = 0; i < pt_theme_token_count; ++i) {
+        state->doc.colors[i] = pt_app_get_theme_color(state->app, (pt_theme_token)i);
+    }
+    for (int i = 0; i < pt_theme_metric_count; ++i) {
+        state->doc.metrics[i] = pt_app_get_theme_metric(state->app, (pt_theme_metric)i);
+    }
+}
+
+static void te_on_color_changed(pt_widget *picker, pt_color color, void *user_data) {
+    te_color_row *row = user_data;
+    te_editor_state *state = row->state;
+    if (state->updating) {
+        return;
+    }
+    state->doc.colors[row->token] = color;
+    te_editor_document_changed(state);
+    te_editor_status(state, "Colour %s = %s", te_color_name(row->token),
+                     pt_color_picker_get_hex(picker));
+}
+
+static void te_on_metric_changed(pt_widget *picker, double value, void *user_data) {
+    (void)picker;
+    te_metric_row *row = user_data;
+    te_editor_state *state = row->state;
+    if (state->updating) {
+        return;
+    }
+    float metric = (float)value;
+    if (metric < 0.0f) {
+        metric = 0.0f;
+    }
+    state->doc.metrics[row->metric] = metric;
+    te_editor_document_changed(state);
+    te_editor_status(state, "Metric %s = %.9g", te_metric_name(row->metric), (double)metric);
+}
+
+static void te_on_name_changed(pt_widget *entry, const char *text, void *user_data) {
+    (void)entry;
+    te_editor_state *state = user_data;
+    if (state->updating) {
+        return;
+    }
+    te_editor_copy_name(state->doc.name, text);
+    pt_window_set_title(state->window, state->doc.name[0] != '\0' ? state->doc.name
+                                                                  : "Pt theme editor");
+    te_editor_status(state, "Theme name: %s",
+                     state->doc.name[0] != '\0' ? state->doc.name : "(unnamed)");
+}
+
+static void te_editor_new_palette(te_editor_state *state, pt_color_scheme scheme) {
+    te_editor_seed(state, scheme);
+    te_editor_refresh(state);
+    te_editor_status(state, "Started a new %s palette from the built-in defaults",
+                     te_scheme_name(scheme));
+}
+
+static void te_on_new_dark(pt_widget *button, void *user_data) {
+    (void)button;
+    te_editor_new_palette(user_data, pt_color_scheme_dark);
+}
+
+static void te_on_new_light(pt_widget *button, void *user_data) {
+    (void)button;
+    te_editor_new_palette(user_data, pt_color_scheme_light);
+}
+
+static void te_on_import_json(pt_widget *button, void *user_data) {
+    (void)button;
+    te_editor_state *state = user_data;
+    const char *path = pt_widget_get_text(state->json_path);
+    if (path == NULL || path[0] == '\0') {
+        te_editor_status(state, "Import failed: enter a JSON file path first");
+        return;
+    }
+    te_theme_doc imported = {0};
+    te_parse_report report = {0};
+    te_format_error error = te_load_json_file(&imported, path, NULL, &report);
+    if (error != TE_ERR_OK) {
+        if (report.line > 0) {
+            te_editor_status(state, "Import failed: %s:%zu:%zu: %s", path, report.line,
+                             report.column > 0 ? report.column : 1u,
+                             report.message[0] != '\0' ? report.message
+                                                       : te_format_error_string(error));
+        } else {
+            te_editor_status(state, "Import failed: %s: %s", path,
+                             te_format_error_string(error));
+        }
+        return;
+    }
+    state->doc = imported;
+    pt_app_set_color_scheme(state->app, state->doc.scheme);
+    te_editor_refresh(state);
+    te_editor_status(state, "Imported %s (%s)", path, te_scheme_name(state->doc.scheme));
+}
+
+static void te_on_export_json(pt_widget *button, void *user_data) {
+    (void)button;
+    te_editor_state *state = user_data;
+    const char *path = pt_widget_get_text(state->json_path);
+    if (path == NULL || path[0] == '\0') {
+        te_editor_status(state, "Export failed: enter an output JSON path first");
+        return;
+    }
+    te_format_error error = te_save_json_file(&state->doc, path);
+    if (error != TE_ERR_OK) {
+        te_editor_status(state, "Export failed: %s: %s", path, te_format_error_string(error));
+        return;
+    }
+    te_editor_status(state, "Exported canonical JSON to %s", path);
+}
+
+static void te_on_export_c(pt_widget *button, void *user_data) {
+    (void)button;
+    te_editor_state *state = user_data;
+    const char *path = pt_widget_get_text(state->c_path);
+    if (path == NULL || path[0] == '\0') {
+        te_editor_status(state, "Export failed: enter an output C path first");
+        return;
+    }
+    te_format_error error = te_export_c_file(&state->doc, path);
+    if (error != TE_ERR_OK) {
+        te_editor_status(state, "Export failed: %s: %s", path, te_format_error_string(error));
+        return;
+    }
+    te_editor_status(state, "Exported C source to %s", path);
+}
+
+static void te_on_toggle_preview(pt_widget *button, void *user_data) {
+    (void)button;
+    te_editor_state *state = user_data;
+    if (state->preview != NULL) {
+        te_preview_destroy(state->preview);
+        state->preview = NULL;
+        pt_widget_set_text(state->preview_button, "Show preview");
+        te_editor_status(state, "Preview window closed");
+        return;
+    }
+    state->preview = te_preview_create(state->app, &state->doc);
+    if (state->preview == NULL) {
+        te_editor_status(state, "Preview failed: %s", pt_get_last_error());
+        return;
+    }
+    pt_window *window = te_preview_window(state->preview);
+    if (window != NULL) {
+        pt_window_show(window);
+    }
+    pt_widget_set_text(state->preview_button, "Hide preview");
+    te_editor_status(state, "Preview window opened; edits apply through per-window overrides");
+}
+
+static bool te_on_main_close(pt_window *window, void *user_data) {
+    (void)window;
+    te_editor_state *state = user_data;
+    if (state->preview != NULL) {
+        te_preview_destroy(state->preview);
+        state->preview = NULL;
+    }
+    return true;
+}
+
+static pt_widget *te_editor_muted_label(pt_widget *parent, const char *text) {
+    pt_widget *label = pt_label_create(parent, text);
+    pt_widget_set_font_size(label, 11.0f);
+    pt_widget_set_label_wrap(label, true);
+    return label;
+}
+
+static void te_editor_build_colors(te_editor_state *state, pt_widget *page) {
+    pt_widget_set_padding(page, 12.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(page, 8.0f);
+    te_editor_muted_label(
+        page, "One picker per semantic role. The hex field accepts #RRGGBB and "
+              "#RRGGBBAA; the palette popup offers presets.");
+    pt_widget *scroll = pt_scroll_create(page);
+    pt_widget_set_grow(scroll, 1.0f);
+    pt_widget *list = pt_column_create(scroll);
+    pt_widget_set_padding(list, 0.0f, 4.0f, 8.0f, 4.0f);
+    pt_widget_set_gap(list, 4.0f);
+
+    for (int i = 0; i < pt_theme_token_count; ++i) {
+        te_color_row *row = &state->color_rows[i];
+        row->state = state;
+        row->token = (pt_theme_token)i;
+
+        pt_widget *line = pt_row_create(list);
+        pt_widget_set_gap(line, 10.0f);
+        pt_widget_set_align_self(line, pt_align_stretch);
+
+        pt_widget *label = pt_label_create(line, te_color_name(row->token));
+        pt_widget_set_width(label, 200.0f);
+        pt_widget_set_font_size(label, 12.0f);
+
+        pt_widget *picker = pt_color_picker_create(line);
+        pt_widget_set_width(picker, 250.0f);
+        char accessible[96];
+        (void)snprintf(accessible, sizeof(accessible), "Colour %s", te_color_name(row->token));
+        pt_widget_set_a11y_name(picker, accessible);
+        pt_color_picker_set_color(picker, state->doc.colors[row->token]);
+        pt_color_picker_set_on_change(picker, te_on_color_changed, row);
+        state->color_pickers[i] = picker;
+    }
+}
+
+static void te_editor_build_metrics(te_editor_state *state, pt_widget *page) {
+    pt_widget_set_padding(page, 12.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(page, 8.0f);
+    te_editor_muted_label(
+        page, "Ten geometric metrics in logical pixels. Interactive values clamp at zero; "
+              "the format parser rejects negative values rather than clamping them.");
+    pt_widget *scroll = pt_scroll_create(page);
+    pt_widget_set_grow(scroll, 1.0f);
+    pt_widget *list = pt_column_create(scroll);
+    pt_widget_set_padding(list, 0.0f, 4.0f, 8.0f, 4.0f);
+    pt_widget_set_gap(list, 6.0f);
+
+    for (int i = 0; i < pt_theme_metric_count; ++i) {
+        te_metric_row *row = &state->metric_rows[i];
+        row->state = state;
+        row->metric = (pt_theme_metric)i;
+
+        pt_widget *line = pt_row_create(list);
+        pt_widget_set_gap(line, 10.0f);
+        pt_widget_set_align_self(line, pt_align_stretch);
+
+        pt_widget *label = pt_label_create(line, te_metric_name(row->metric));
+        pt_widget_set_width(label, 200.0f);
+        pt_widget_set_font_size(label, 12.0f);
+
+        pt_widget *picker = pt_number_picker_create(line);
+        pt_widget_set_width(picker, 160.0f);
+        char accessible[96];
+        (void)snprintf(accessible, sizeof(accessible), "Metric %s", te_metric_name(row->metric));
+        pt_widget_set_a11y_name(picker, accessible);
+        pt_number_picker_set_range(picker, 0.0, 512.0);
+        pt_number_picker_set_step(picker, 1.0);
+        pt_number_picker_set_value(picker, (double)state->doc.metrics[row->metric]);
+        pt_number_picker_set_on_change(picker, te_on_metric_changed, row);
+        state->metric_pickers[i] = picker;
+    }
+}
+
+static void te_editor_build_contrast(te_editor_state *state, pt_widget *page) {
+    pt_widget_set_padding(page, 12.0f, 0.0f, 0.0f, 0.0f);
+    pt_widget_set_gap(page, 8.0f);
+    te_editor_muted_label(
+        page, "WCAG 2.x ratios measured on the edited colours: AAA at 7.0, AA at 4.5. "
+              "text_disabled is informational and is expected below AA.");
+    state->contrast_summary = pt_label_create(page, "");
+    pt_widget_set_font_size(state->contrast_summary, 13.0f);
+    pt_widget_set_font_weight(state->contrast_summary, pt_font_weight_semibold);
+
+    pt_widget *scroll = pt_scroll_create(page);
+    pt_widget_set_grow(scroll, 1.0f);
+    pt_widget *list = pt_column_create(scroll);
+    pt_widget_set_padding(list, 0.0f, 4.0f, 8.0f, 4.0f);
+    pt_widget_set_gap(list, 3.0f);
+    for (unsigned i = 0; i < TE_WCAG_MAX_PAIRS; ++i) {
+        pt_widget *label = pt_label_create(list, "");
+        pt_widget_set_font_size(label, 11.0f);
+        state->contrast_rows[i] = label;
+    }
+}
+
+static void te_editor_build(te_editor_state *state) {
+    pt_widget *root = pt_window_root(state->window);
+    pt_widget_set_padding(root, 18.0f, 18.0f, 16.0f, 18.0f);
+    pt_widget_set_gap(root, 10.0f);
+
+    pt_widget *title = pt_label_create(root, "Pt theme editor");
+    pt_widget_set_font_size(title, 18.0f);
+    pt_widget_set_font_weight(title, pt_font_weight_semibold);
+    te_editor_muted_label(
+        root, "Edit the 38 colour roles and 10 metrics, inspect the WCAG pair table and "
+              "apply the result to a separate preview window. This window keeps the "
+              "neutral palette.");
+
+    pt_widget *identity = pt_row_create(root);
+    pt_widget_set_gap(identity, 8.0f);
+    pt_widget *name_caption = pt_label_create(identity, "Name");
+    pt_widget_set_width(name_caption, 46.0f);
+    state->name_entry = pt_entry_create(identity, "Theme name");
+    pt_widget_set_width(state->name_entry, 220.0f);
+    pt_widget_set_a11y_name(state->name_entry, "Theme name");
+    pt_widget_set_text(state->name_entry, state->doc.name);
+    pt_entry_set_on_change(state->name_entry, te_on_name_changed, state);
+
+    pt_widget *scheme_caption = pt_label_create(identity, "Scheme");
+    pt_widget_set_width(scheme_caption, 54.0f);
+    state->scheme_label = pt_label_create(identity, "");
+    pt_widget_set_width(state->scheme_label, 60.0f);
+    pt_widget_set_font_weight(state->scheme_label, pt_font_weight_medium);
+
+    pt_widget *new_dark = pt_button_create(identity, "New dark");
+    pt_button_set_variant(new_dark, pt_button_secondary);
+    pt_button_set_on_click(new_dark, te_on_new_dark, state);
+    pt_widget *new_light = pt_button_create(identity, "New light");
+    pt_button_set_variant(new_light, pt_button_secondary);
+    pt_button_set_on_click(new_light, te_on_new_light, state);
+
+    state->preview_button = pt_button_create(identity, "Show preview");
+    pt_button_set_on_click(state->preview_button, te_on_toggle_preview, state);
+    pt_widget_set_tooltip(state->preview_button, "Open the live per-window preview");
+
+    pt_widget *files = pt_row_create(root);
+    pt_widget_set_gap(files, 8.0f);
+    pt_widget *json_caption = pt_label_create(files, "JSON file");
+    pt_widget_set_width(json_caption, 66.0f);
+    state->json_path = pt_entry_create(files, "theme.json");
+    pt_widget_set_width(state->json_path, 280.0f);
+    pt_widget_set_a11y_name(state->json_path, "JSON file path");
+    pt_widget_set_text(state->json_path, "theme.json");
+    pt_widget *import = pt_button_create(files, "Import JSON");
+    pt_button_set_variant(import, pt_button_secondary);
+    pt_button_set_on_click(import, te_on_import_json, state);
+    pt_widget *export_json = pt_button_create(files, "Export JSON");
+    pt_button_set_on_click(export_json, te_on_export_json, state);
+
+    pt_widget *c_caption = pt_label_create(files, "C file");
+    pt_widget_set_width(c_caption, 46.0f);
+    state->c_path = pt_entry_create(files, "theme.c");
+    pt_widget_set_width(state->c_path, 200.0f);
+    pt_widget_set_a11y_name(state->c_path, "C output file path");
+    pt_widget_set_text(state->c_path, "theme.c");
+    pt_widget *export_c = pt_button_create(files, "Export C");
+    pt_button_set_variant(export_c, pt_button_secondary);
+    pt_button_set_on_click(export_c, te_on_export_c, state);
+
+    pt_widget *tabs = pt_tabs_create(root);
+    pt_widget_set_grow(tabs, 1.0f);
+    pt_widget_set_min_height(tabs, 380.0f);
+    pt_tabs_set_strip_height(tabs, 40.0f);
+    te_editor_build_colors(state, pt_tabs_add_page(tabs, "Colours"));
+    te_editor_build_metrics(state, pt_tabs_add_page(tabs, "Metrics"));
+    te_editor_build_contrast(state, pt_tabs_add_page(tabs, "Contrast"));
+
+    state->status_label = pt_label_create(root, "");
+    pt_widget_set_label_wrap(state->status_label, true);
+    pt_widget_set_font_size(state->status_label, 11.0f);
+}
+
 static int te_run_gui(const char *path) {
-    (void)path;
-    fprintf(stderr, "%s: the GUI is not implemented in this scaffold\n", TE_TOOL_NAME);
-    return 2;
+    te_theme_doc initial = {0};
+    bool have_initial = false;
+    if (path != NULL) {
+        te_parse_report report = {0};
+        te_format_error error = te_load_json_file(&initial, path, NULL, &report);
+        if (error != TE_ERR_OK) {
+            te_print_parse_error(path, &report);
+            return 2;
+        }
+        te_print_warnings(path, &report);
+        have_initial = true;
+    }
+
+    pt_app *app = pt_app_create("dev.pt.theme-editor");
+    if (app == NULL) {
+        fprintf(stderr, "%s: cannot open a display: %s\n", TE_TOOL_NAME, pt_get_last_error());
+        return 2;
+    }
+
+    pt_window *window = pt_window_create(app, "Pt theme editor", 1180, 820);
+    if (window == NULL) {
+        fprintf(stderr, "%s: cannot create the editor window: %s\n", TE_TOOL_NAME,
+                pt_get_last_error());
+        pt_app_destroy(app);
+        return 2;
+    }
+
+    te_editor_state state = {0};
+    state.app = app;
+    state.window = window;
+    if (have_initial) {
+        state.doc = initial;
+        pt_app_set_color_scheme(app, state.doc.scheme);
+    } else {
+        te_editor_seed(&state, pt_color_scheme_dark);
+    }
+
+    te_editor_build(&state);
+    pt_window_set_close_callback(window, te_on_main_close, &state);
+    pt_window_show(window);
+    te_editor_refresh(&state);
+    te_editor_status(&state,
+                     "Ready. Edits apply to the preview window only; this window keeps the "
+                     "neutral palette.");
+
+    int result = pt_app_run(app);
+    if (state.preview != NULL) {
+        te_preview_destroy(state.preview);
+        state.preview = NULL;
+    }
+    pt_app_destroy(app);
+    if (result < 0) {
+        fprintf(stderr, "%s: the compositor connection was lost\n", TE_TOOL_NAME);
+        return 2;
+    }
+    return 0;
 }
 
 int main(int argc, char **argv) {
