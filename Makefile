@@ -110,6 +110,8 @@ CPP_EXAMPLES := $(patsubst examples/cpp/%.cpp,$(EXAMPLES)/cpp/%,$(wildcard examp
 	run-font-fallback run-column-persist \
 	run-cpp-pickers run-cpp-popup-demo run-python-pickers run-python-popup-demo \
 	run-java-pickers run-java-popup-demo run-java-icon-button \
+	run-protocol-extensions run-cpp-protocol-extensions \
+	run-python-protocol-extensions run-java-protocol-extensions \
 	wire-driver api-check api-update api-docs
 
 all: lib examples
@@ -615,3 +617,20 @@ run-java-inline-images: java-example
 
 .PHONY: run-inline-images run-cpp-inline-images run-python-inline-images \
 	run-java-inline-images
+
+run-protocol-extensions: $(EXAMPLES)/c/protocol_extensions
+	$(EXAMPLES)/c/protocol_extensions
+
+run-cpp-protocol-extensions: $(EXAMPLES)/cpp/protocol_extensions
+	$(EXAMPLES)/cpp/protocol_extensions
+
+run-python-protocol-extensions: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/protocol_extensions.py
+
+run-java-protocol-extensions: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpt.library=$(abspath $(BUILD)/libpt.so) -cp $(BUILD)/java ProtocolExtensions
+
+.PHONY: run-protocol-extensions run-cpp-protocol-extensions \
+	run-python-protocol-extensions run-java-protocol-extensions
