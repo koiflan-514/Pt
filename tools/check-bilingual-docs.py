@@ -21,6 +21,7 @@ pairs = [
     ("docs/bindings.md", "docs/zh-CN/bindings.md"),
     ("docs/comparison.md", "docs/zh-CN/comparison.md"),
     ("docs/migration-1.0.md", "docs/zh-CN/migration-1.0.md"),
+    ("docs/inline-images.md", "docs/zh-CN/inline-images.md"),
 ]
 
 fence_re = re.compile(r"^( {0,3})(```+|~~~+).*?^\1\2\s*$", re.M | re.S)
