@@ -68,7 +68,7 @@ static void te_preview_build(pt_widget *root) {
         return;
     }
     pt_widget_set_padding(root, 20.0f, 20.0f, 20.0f, 20.0f);
-    pt_widget_set_gap(root, 12.0f);
+    pt_widget_set_gap(root, 8.0f);
 
     /* Labels: a heading in the default text role and a smaller muted caption.
      * Neither sets an explicit colour, so both track the window override. */
@@ -125,12 +125,19 @@ static void te_preview_build(pt_widget *root) {
     pt_widget_set_a11y_name(slider, "Preview slider");
     pt_slider_set_value(slider, 0.6f);
 
-    /* Tabs: a two-page strip showing the active indicator and tab text. */
+    /* Tabs: a two-page strip showing the active indicator and tab text. The
+     * explicit height keeps the sample compact (an empty page would otherwise
+     * claim its 160 px default and push the table below the window); the
+     * active page carries one short caption so the page area is not blank. */
     pt_widget *tabs = pt_tabs_create(root);
     pt_widget_set_a11y_name(tabs, "Preview tabs");
-    pt_tabs_add_page(tabs, "Colours");
+    pt_widget_set_height(tabs, 76.0f);
+    pt_widget *colours_page = pt_tabs_add_page(tabs, "Colours");
     pt_tabs_add_page(tabs, "Metrics");
     pt_tabs_set_active(tabs, 0);
+    pt_widget_set_padding(colours_page, 8.0f, 12.0f, 0.0f, 12.0f);
+    pt_widget *tabs_caption = pt_label_create(colours_page, "38 colours · 10 metrics");
+    pt_widget_set_font_size(tabs_caption, 12.0f);
 
     /* A small table: the column titles drive the real header and the bind
      * callback fills only the three data rows. Header cells, body cells, the
@@ -138,7 +145,6 @@ static void te_preview_build(pt_widget *root) {
      * and selection roles. */
     pt_widget *table = pt_table_create(root);
     pt_widget_set_a11y_name(table, "Preview table");
-    pt_widget_set_min_height(table, 132.0f);
     pt_table_set_column_count(table, TE_PREVIEW_TABLE_COLUMNS);
     pt_table_set_column_title(table, 0, "Role");
     pt_table_set_column_title(table, 1, "Value");
@@ -153,8 +159,9 @@ static void te_preview_build(pt_widget *root) {
     pt_table_set_selected(table, 0);
 
     /* One focused control so the focus ring and focus token are visible without
-     * the user having to tab. pt_widget_focus returns false when the window is
-     * not yet shown; that is fine, the control simply shows its resting state.
+     * the user having to tab. The window already exists, so pt_widget_focus
+     * succeeds here; pt_window_show then keeps this focus instead of moving it
+     * to the first control.
      */
     (void)pt_widget_focus(entry);
 }
@@ -167,7 +174,7 @@ te_preview *te_preview_create(pt_app *app, const te_theme_doc *initial) {
     if (preview == NULL) {
         return NULL;
     }
-    preview->window = pt_window_create(app, "Theme preview", 360, 560);
+    preview->window = pt_window_create(app, "Theme preview", 360, 600);
     if (preview->window == NULL) {
         free(preview);
         return NULL;
