@@ -772,6 +772,7 @@ pkg-config --modversion pt
 - [主题](docs/zh-CN/theming.md)
 - [无障碍](docs/zh-CN/accessibility.md)
 - [从右到左与双向文本](docs/zh-CN/rtl.md)
+- [文本内联图片](docs/zh-CN/inline-images.md)
 - [迁移到 1.0](docs/zh-CN/migration-1.0.md)
 - [API 兼容性策略](docs/api-policy.md)
 - [性能](docs/performance.md)

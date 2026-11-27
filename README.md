@@ -937,6 +937,7 @@ continuously, which 0.10.0 fixed. Details, methodology and memory caveats are in
 - [Theming](docs/theming.md)
 - [Accessibility](docs/accessibility.md)
 - [Right-to-left and bidirectional text](docs/rtl.md)
+- [Inline images in text](docs/inline-images.md)
 - [Migrating to 1.0](docs/migration-1.0.md)
 - [API compatibility policy](docs/api-policy.md)
 - [Performance](docs/performance.md)
