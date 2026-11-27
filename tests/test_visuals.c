@@ -509,6 +509,122 @@ static void test_snapshot_icon(pt_app *app) {
     pt_window_free(window);
 }
 
+/* Inline image goldens (2.3 W3c): single-line labels with baseline and middle
+ * alignment, a wrapped RTL text area mixing images with Hebrew/Latin, an atomic
+ * selection rectangle over one image, and a 2x canvas. The scenes are additive;
+ * every pre-2.3 snapshot above must stay byte-identical. */
+static void test_snapshot_inline_image(pt_app *app) {
+    const char *directory = snapshot_directory();
+    pt_window *window = pt_window_create(app, "inline-image-snapshots", 560, 400);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *root = pt_window_root(window);
+    pt_widget_set_padding(root, 16.0f, 16.0f, 16.0f, 16.0f);
+    pt_widget_set_gap(root, 12.0f);
+    pt_icon_image *icon = snapshot_icon_image();
+    pt_check(icon != NULL);
+    if (!icon) {
+        pt_window_free(window);
+        return;
+    }
+
+    pt_widget *baseline = pt_label_create(root, "Image " "\xEF\xBF\xBC" " baseline");
+    pt_widget_set_align_self(baseline, pt_align_start);
+    pt_text_image baseline_entry = {0};
+    baseline_entry.start = 6;
+    baseline_entry.image = icon;
+    baseline_entry.width = 20.0f;
+    baseline_entry.height = 20.0f;
+    baseline_entry.align = pt_text_image_align_baseline;
+    memcpy(baseline_entry.alt, "baseline icon", 14);
+    pt_check(pt_widget_set_text_images(baseline, &baseline_entry, 1));
+
+    pt_widget *middle = pt_label_create(root, "\xEF\xBF\xBC" " middle aligned");
+    pt_widget_set_align_self(middle, pt_align_start);
+    pt_text_image middle_entry = {0};
+    middle_entry.start = 0;
+    middle_entry.image = icon;
+    middle_entry.width = 20.0f;
+    middle_entry.height = 20.0f;
+    middle_entry.align = pt_text_image_align_middle;
+    memcpy(middle_entry.alt, "middle icon", 12);
+    pt_check(pt_widget_set_text_images(middle, &middle_entry, 1));
+
+    pt_widget *rtl = pt_label_create(root, "\xD7\x90\xD7\x91" "\xEF\xBF\xBC"
+                                            "\xD7\x92\xD7\x93 abc");
+    pt_widget_set_text_direction(rtl, pt_text_direction_rtl);
+    pt_widget_set_align_self(rtl, pt_align_start);
+    pt_text_image rtl_entry = {0};
+    rtl_entry.start = 4;
+    rtl_entry.image = icon;
+    rtl_entry.width = 20.0f;
+    rtl_entry.height = 20.0f;
+    memcpy(rtl_entry.alt, "rtl icon", 9);
+    pt_check(pt_widget_set_text_images(rtl, &rtl_entry, 1));
+
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_widget_set_size(area, 420.0f, 140.0f);
+    pt_widget_set_align_self(area, pt_align_start);
+    pt_widget_set_text(area, "one" "\xEF\xBF\xBC" "two\n" "\xEF\xBF\xBC" " three");
+    pt_text_image area_entries[2];
+    memset(area_entries, 0, sizeof(area_entries));
+    area_entries[0].start = 3;
+    area_entries[0].image = icon;
+    area_entries[0].width = 18.0f;
+    area_entries[0].height = 22.0f;
+    area_entries[0].align = pt_text_image_align_middle;
+    memcpy(area_entries[0].alt, "first", 6);
+    area_entries[1].start = 10;
+    area_entries[1].image = icon;
+    area_entries[1].width = 18.0f;
+    area_entries[1].height = 14.0f;
+    memcpy(area_entries[1].alt, "second", 7);
+    pt_check(pt_widget_set_text_images(area, area_entries, 2));
+    pt_icon_image_destroy(icon);
+
+    pt_window_show(window);
+    pt_canvas *canvas = pt_canvas_create(560, 400, 1.0f);
+    pt_check(canvas != NULL);
+    if (!canvas) {
+        pt_window_free(window);
+        return;
+    }
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+    uint64_t plain = 0;
+    snapshot_paint(window, canvas, directory, "inline-image", &plain);
+    uint64_t repeat = 0;
+    snapshot_paint(window, canvas, directory, "inline-image-repeat", &repeat);
+    pt_check(plain == repeat);
+
+    /* Selecting the first area image paints one atomic rectangle. */
+    pt_text_area_set_selection(area, 3, 6);
+    uint64_t selected = 0;
+    snapshot_paint(window, canvas, directory, "inline-image-selection", &selected);
+    pt_check(selected != plain);
+    uint64_t selected_repeat = 0;
+    snapshot_paint(window, canvas, directory, "inline-image-selection-repeat",
+                   &selected_repeat);
+    pt_check(selected == selected_repeat);
+
+    /* HiDPI: the same logical scene at scale 2 must not reuse the 1x pixels. */
+    pt_canvas *hidpi = pt_canvas_create(1120, 800, 2.0f);
+    pt_check(hidpi != NULL);
+    if (hidpi) {
+        uint64_t two_x = 0;
+        snapshot_paint(window, hidpi, directory, "inline-image-2x", &two_x);
+        uint64_t two_x_repeat = 0;
+        snapshot_paint(window, hidpi, directory, "inline-image-2x-repeat", &two_x_repeat);
+        pt_check(two_x == two_x_repeat);
+        pt_check(two_x != plain);
+        pt_canvas_destroy(hidpi);
+    }
+
+    pt_canvas_destroy(canvas);
+    pt_window_free(window);
+}
+
 /* Single-line RTL goldens (2.0 wave 2): forced RTL controls, an auto-direction
  * Hebrew label under an RTL root, and a mixed Latin/Hebrew label. The same
  * widgets are repainted under an LTR root base so the changed golden proves the
@@ -1176,6 +1292,7 @@ int main(void) {
     test_snapshot_gallery(app);
     test_snapshot_views(app);
     test_snapshot_icon(app);
+    test_snapshot_inline_image(app);
     test_snapshot_rtl(app);
     test_snapshot_rtl_wrapped(app);
     test_snapshot_rtl_editing(app);
