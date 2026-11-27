@@ -801,6 +801,14 @@ _lib = _ctypes.CDLL(_locate_library())
 
 _CLICK = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_void_p)
 _TEXT = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_char_p, _ctypes.c_void_p)
+# Activation token and foreign handle callbacks have the same borrowed-string
+# shape as _TEXT; keep distinct names for the public wrapper signatures.
+_ACTIVATION_TOKEN = _ctypes.CFUNCTYPE(
+    None, _ctypes.c_void_p, _ctypes.c_char_p, _ctypes.c_void_p
+)
+_FOREIGN_HANDLE = _ctypes.CFUNCTYPE(
+    None, _ctypes.c_void_p, _ctypes.c_char_p, _ctypes.c_void_p
+)
 _VALUE = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_float, _ctypes.c_void_p)
 _INDEX = _ctypes.CFUNCTYPE(None, _ctypes.c_void_p, _ctypes.c_uint32, _ctypes.c_void_p)
 _NULL_INDEX = _INDEX(0)
@@ -1736,6 +1744,34 @@ _pt_window_primary_set_serial = _proto(
     "pt_window_primary_set_serial", _c_bool, _c_void_p, _c_char_p, _c_uint32
 )
 _pt_window_primary_get = _proto("pt_window_primary_get", _c_void_p, _c_void_p)
+# Activation and foreign-surface extensions (pt/window.h, since 2.4).
+_pt_window_request_activation_token = _proto(
+    "pt_window_request_activation_token",
+    _c_bool,
+    _c_void_p,
+    _c_char_p,
+    _ACTIVATION_TOKEN,
+    _c_void_p,
+)
+_pt_window_activate = _proto(
+    "pt_window_activate", _c_bool, _c_void_p, _c_char_p
+)
+_pt_window_export_foreign_handle = _proto(
+    "pt_window_export_foreign_handle",
+    _c_bool,
+    _c_void_p,
+    _FOREIGN_HANDLE,
+    _c_void_p,
+)
+_pt_window_unexport_foreign_handle = _proto(
+    "pt_window_unexport_foreign_handle", None, _c_void_p
+)
+_pt_window_set_foreign_parent = _proto(
+    "pt_window_set_foreign_parent", _c_bool, _c_void_p, _c_char_p
+)
+_pt_window_clear_foreign_parent = _proto(
+    "pt_window_clear_foreign_parent", None, _c_void_p
+)
 
 # Offscreen painting (pt/custom.h).
 _pt_window_paint_pixels = _proto(
@@ -5948,6 +5984,62 @@ class Window:
         """
         return bool(_pt_window_primary_set_serial(self._ptr, _string(text),
                                                   int(serial)))
+
+    def request_activation_token(
+        self,
+        app_id: Optional[str],
+        callback: Callable[["Window", str], Any],
+    ) -> bool:
+        """Requests an xdg-activation-v1 token for another client.
+
+        ``app_id`` may be None. The callback receives the token as a Python
+        string valid only during the call; copy it if it must be kept. Returns
+        False when the protocol global is absent or the platform is headless.
+        """
+
+        def dispatch(_window: int, token: Optional[bytes], _data: int) -> None:
+            callback(self, _text_out(token))
+
+        trampoline = _ACTIVATION_TOKEN(dispatch)
+        self._callbacks.append(trampoline)
+        _callback_roots.append(trampoline)
+        return bool(
+            _pt_window_request_activation_token(
+                self._ptr, _string(app_id) if app_id is not None else None,
+                trampoline, None
+            )
+        )
+
+    def activate(self, token: str) -> bool:
+        """Requests activation; true means sent, not that focus moved."""
+        return bool(_pt_window_activate(self._ptr, _string(token)))
+
+    def export_foreign_handle(
+        self, callback: Callable[["Window", str], Any]
+    ) -> bool:
+        """Exports this toplevel and delivers an opaque borrowed handle once."""
+
+        def dispatch(_window: int, handle: Optional[bytes], _data: int) -> None:
+            callback(self, _text_out(handle))
+
+        trampoline = _FOREIGN_HANDLE(dispatch)
+        self._callbacks.append(trampoline)
+        _callback_roots.append(trampoline)
+        return bool(
+            _pt_window_export_foreign_handle(self._ptr, trampoline, None)
+        )
+
+    def unexport_foreign_handle(self) -> None:
+        """Revokes the export and drops any pending handle callback."""
+        _pt_window_unexport_foreign_handle(self._ptr)
+
+    def set_foreign_parent(self, handle: str) -> bool:
+        """Imports an opaque handle as this window's parent (best-effort)."""
+        return bool(_pt_window_set_foreign_parent(self._ptr, _string(handle)))
+
+    def clear_foreign_parent(self) -> None:
+        """Destroys the imported parent and invalidates the relationship."""
+        _pt_window_clear_foreign_parent(self._ptr)
 
     def paint_pixels_ex(self, width: int, height: int,
                         desc: Optional[PaintPixelsDesc] = None) -> list[int]:

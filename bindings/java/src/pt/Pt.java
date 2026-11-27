@@ -205,6 +205,18 @@ public final class Pt {
         void handle(MemorySegment window, boolean focused, MemorySegment data);
     }
 
+    /* xdg-activation-v1 and xdg-foreign-unstable-v2 callbacks. The String is
+     * decoded from a borrowed native buffer and is valid only during handle(). */
+    @FunctionalInterface
+    public interface ActivationTokenHandler {
+        void handle(MemorySegment window, String token, MemorySegment data);
+    }
+
+    @FunctionalInterface
+    public interface ForeignHandleHandler {
+        void handle(MemorySegment window, String handle, MemorySegment data);
+    }
+
     @FunctionalInterface
     public interface KeyEventHandler {
         boolean handle(MemorySegment window, int key, int modifiers, String utf8,
@@ -950,6 +962,19 @@ public final class Pt {
             "pt_window_set_key_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_focus_callback = bind(
             "pt_window_set_focus_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
+    /* Activation and foreign-surface extensions (since 2.4). */
+    private static final MethodHandle window_request_activation_token = bind(
+            "pt_window_request_activation_token", desc(bool, ptr, ptr, ptr, ptr));
+    private static final MethodHandle window_activate = bind(
+            "pt_window_activate", desc(bool, ptr, ptr));
+    private static final MethodHandle window_export_foreign_handle = bind(
+            "pt_window_export_foreign_handle", desc(bool, ptr, ptr, ptr));
+    private static final MethodHandle window_unexport_foreign_handle = bind(
+            "pt_window_unexport_foreign_handle", FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle window_set_foreign_parent = bind(
+            "pt_window_set_foreign_parent", desc(bool, ptr, ptr));
+    private static final MethodHandle window_clear_foreign_parent = bind(
+            "pt_window_clear_foreign_parent", FunctionDescriptor.ofVoid(ptr));
     private static final MethodHandle window_set_key_event_callback = bind(
             "pt_window_set_key_event_callback", FunctionDescriptor.ofVoid(ptr, ptr, ptr));
     private static final MethodHandle window_set_pointer_callback = bind(
@@ -1984,6 +2009,10 @@ public final class Pt {
             ptr);
     private static final FunctionDescriptor focus_descriptor = FunctionDescriptor.ofVoid(ptr, bool,
             ptr);
+    private static final FunctionDescriptor activation_token_descriptor =
+            FunctionDescriptor.ofVoid(ptr, ptr, ptr);
+    private static final FunctionDescriptor foreign_handle_descriptor =
+            FunctionDescriptor.ofVoid(ptr, ptr, ptr);
     private static final FunctionDescriptor key_event_descriptor = FunctionDescriptor.of(bool, ptr,
             i32, i32, ptr, ptr);
     private static final FunctionDescriptor pointer_descriptor = FunctionDescriptor.of(bool, ptr,
@@ -2151,6 +2180,41 @@ public final class Pt {
             return linker.upcallStub(target.bindTo(handler), focus_descriptor, arena);
         } catch (ReflectiveOperationException error) {
             throw new IllegalArgumentException("cannot create focus callback", error);
+        }
+    }
+
+    private static void activation_token_bridge(ActivationTokenHandler handler,
+            MemorySegment window, MemorySegment token, MemorySegment data) {
+        handler.handle(window, nativeText(token), data);
+    }
+
+    private static MemorySegment activation_token_upcall(ActivationTokenHandler handler,
+            Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class,
+                    "activation_token_bridge",
+                    MethodType.methodType(void.class, ActivationTokenHandler.class,
+                            MemorySegment.class, MemorySegment.class, MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), activation_token_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create activation token callback", error);
+        }
+    }
+
+    private static void foreign_handle_bridge(ForeignHandleHandler handler,
+            MemorySegment window, MemorySegment handle, MemorySegment data) {
+        handler.handle(window, nativeText(handle), data);
+    }
+
+    private static MemorySegment foreign_handle_upcall(ForeignHandleHandler handler, Arena arena) {
+        try {
+            MethodHandle target = MethodHandles.lookup().findStatic(Pt.class,
+                    "foreign_handle_bridge",
+                    MethodType.methodType(void.class, ForeignHandleHandler.class,
+                            MemorySegment.class, MemorySegment.class, MemorySegment.class));
+            return linker.upcallStub(target.bindTo(handler), foreign_handle_descriptor, arena);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("cannot create foreign handle callback", error);
         }
     }
 
@@ -3171,6 +3235,55 @@ public final class Pt {
         } finally {
             invoke(free, text);
         }
+    }
+
+    /**
+     * Requests an xdg-activation-v1 token. {@code appId} may be null. The
+     * handler receives a callback-scoped String; the arena must outlive the
+     * request and its callback. Returns false when the protocol is absent.
+     */
+    public static boolean window_request_activation_token(MemorySegment window, String appId,
+            ActivationTokenHandler handler, Arena arena) {
+        MemorySegment app = appId == null ? MemorySegment.NULL : cstring(arena, appId);
+        MemorySegment stub =
+                handler == null ? MemorySegment.NULL : activation_token_upcall(handler, arena);
+        return (boolean) invoke(window_request_activation_token, window, app, stub,
+                MemorySegment.NULL);
+    }
+
+    /** Sends an activation request; true means sent, never that focus moved. */
+    public static boolean window_activate(MemorySegment window, String token) {
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(window_activate, window,
+                    token == null ? MemorySegment.NULL : cstring(arena, token));
+        }
+    }
+
+    /**
+     * Exports this toplevel and delivers an opaque borrowed handle. The arena
+     * must outlive the request and its callback.
+     */
+    public static boolean window_export_foreign_handle(MemorySegment window,
+            ForeignHandleHandler handler, Arena arena) {
+        MemorySegment stub =
+                handler == null ? MemorySegment.NULL : foreign_handle_upcall(handler, arena);
+        return (boolean) invoke(window_export_foreign_handle, window, stub, MemorySegment.NULL);
+    }
+
+    public static void window_unexport_foreign_handle(MemorySegment window) {
+        invoke(window_unexport_foreign_handle, window);
+    }
+
+    /** Imports an opaque handle as this window's parent (best-effort). */
+    public static boolean window_set_foreign_parent(MemorySegment window, String handle) {
+        try (Arena arena = Arena.ofConfined()) {
+            return (boolean) invoke(window_set_foreign_parent, window,
+                    handle == null ? MemorySegment.NULL : cstring(arena, handle));
+        }
+    }
+
+    public static void window_clear_foreign_parent(MemorySegment window) {
+        invoke(window_clear_foreign_parent, window);
     }
 
     public static void window_set_focus_handler(MemorySegment window, FocusHandler handler,

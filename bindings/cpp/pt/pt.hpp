@@ -2219,6 +2219,36 @@ class window {
         std::string value = copy_string(text);
         return pt_window_primary_set_serial(handle_, value.c_str(), serial);
     }
+    /* Activation token request (xdg-activation-v1). The callback receives a
+     * borrowed token valid only during the call; copy it if it must outlive
+     * the callback. Returns false when the protocol is unavailable. */
+    bool request_activation_token(const char *app_id,
+                                  pt_activation_token_callback callback,
+                                  void *data = nullptr) const {
+        return pt_window_request_activation_token(handle_, app_id, callback, data);
+    }
+    /* Sends an activation request; true means sent, never "focused". */
+    bool activate(std::string_view token) const {
+        std::string value = copy_string(token);
+        return pt_window_activate(handle_, value.c_str());
+    }
+    /* xdg-foreign-unstable-v2. The handle is opaque and borrowed during the
+     * callback; the export stays alive until unexport or destruction. */
+    bool export_foreign_handle(pt_foreign_handle_callback callback,
+                               void *data = nullptr) const {
+        return pt_window_export_foreign_handle(handle_, callback, data);
+    }
+    void unexport_foreign_handle() const {
+        pt_window_unexport_foreign_handle(handle_);
+    }
+    /* Imports an opaque handle as this window's parent (best-effort). */
+    bool set_foreign_parent(std::string_view handle) const {
+        std::string value = copy_string(handle);
+        return pt_window_set_foreign_parent(handle_, value.c_str());
+    }
+    void clear_foreign_parent() const {
+        pt_window_clear_foreign_parent(handle_);
+    }
     /* The C entry point cannot know the caller's buffer capacity, so reject a
      * span that cannot hold width * height pixels instead of overrunning it. */
     bool paint_pixels(std::span<uint32_t> pixels, int width, int height) const {
