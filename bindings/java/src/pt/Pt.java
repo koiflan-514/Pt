@@ -206,12 +206,15 @@ public final class Pt {
     }
 
     /* xdg-activation-v1 and xdg-foreign-unstable-v2 callbacks. The String is
-     * decoded from a borrowed native buffer and is valid only during handle(). */
+     * decoded from a borrowed native buffer and is valid only during handle().
+     * Handlers run on the UI thread and must not block or re-enter Pt. */
     @FunctionalInterface
     public interface ActivationTokenHandler {
         void handle(MemorySegment window, String token, MemorySegment data);
     }
 
+    /* The foreign handle is opaque and compositor-defined: never parse, log or
+     * persist it beyond the exported object's lifetime. */
     @FunctionalInterface
     public interface ForeignHandleHandler {
         void handle(MemorySegment window, String handle, MemorySegment data);
@@ -3238,30 +3241,70 @@ public final class Pt {
     }
 
     /**
-     * Requests an xdg-activation-v1 token. {@code appId} may be null. The
-     * handler receives a callback-scoped String; the arena must outlive the
-     * request and its callback. Returns false when the protocol is absent.
+     * Requests an xdg-activation-v1 token for another client.
+     *
+     * <p>{@code appId} may be null or empty; both map to a NULL C string, which
+     * the native layer treats as "no app id". A non-null value names the client
+     * that will be activated. The request carries the most recent
+     * pointer-button or key-press serial when one exists, so a compositor that
+     * requires a fresh serial may still decline.
+     *
+     * <p>The {@code token} handed to the handler is a <b>borrowed</b> native
+     * buffer; the Java {@link String} is decoded (copied) before the handler
+     * runs, so keeping the value is safe, but never read the buffer after
+     * {@code handle} returns. An empty token means the compositor returned an
+     * invalid token. Only one request may be in flight per window: a new call
+     * destroys the pending token object and drops its callback.
+     *
+     * <p>The upcall stub is allocated in {@code arena}, which must outlive the
+     * request and its callback. A null {@code handler} is passed through as a
+     * NULL callback and the native layer returns false without creating an
+     * object.
+     *
+     * <p>Returns false when the protocol global is absent or the platform is
+     * headless.
      */
     public static boolean window_request_activation_token(MemorySegment window, String appId,
             ActivationTokenHandler handler, Arena arena) {
-        MemorySegment app = appId == null ? MemorySegment.NULL : cstring(arena, appId);
+        MemorySegment app = appId == null || appId.isEmpty()
+                ? MemorySegment.NULL
+                : cstring(arena, appId);
         MemorySegment stub =
                 handler == null ? MemorySegment.NULL : activation_token_upcall(handler, arena);
         return (boolean) invoke(window_request_activation_token, window, app, stub,
                 MemorySegment.NULL);
     }
 
-    /** Sends an activation request; true means sent, never that focus moved. */
+    /**
+     * Sends an activation request for this window using a token received out
+     * of band. The token is sent once and never retained, so the caller may
+     * drop it after the call.
+     *
+     * <p>A true return means the request was sent, <b>not</b> that the
+     * compositor honoured it or that keyboard focus moved; observe focus
+     * through the focus handler. Returns false for a null or empty token, an
+     * absent activation global or a headless platform.
+     */
     public static boolean window_activate(MemorySegment window, String token) {
         try (Arena arena = Arena.ofConfined()) {
             return (boolean) invoke(window_activate, window,
-                    token == null ? MemorySegment.NULL : cstring(arena, token));
+                    token == null || token.isEmpty() ? MemorySegment.NULL : cstring(arena, token));
         }
     }
 
     /**
-     * Exports this toplevel and delivers an opaque borrowed handle. The arena
-     * must outlive the request and its callback.
+     * Exports this toplevel and delivers its opaque handle once as a
+     * <b>borrowed</b> {@link String}. The handle is compositor-defined: never
+     * parse, log or persist it beyond the exported object's lifetime. The
+     * export object stays alive until {@link #window_unexport_foreign_handle}
+     * or window destruction, and destroying it invalidates every import built
+     * from its handle. Exporting again replaces the previous export (and
+     * invalidates its handle).
+     *
+     * <p>The upcall stub lives in {@code arena}, which must outlive the request
+     * and its callback. A null {@code handler} yields a NULL callback and a
+     * false return. False also means the exporter global is absent or the
+     * platform is headless.
      */
     public static boolean window_export_foreign_handle(MemorySegment window,
             ForeignHandleHandler handler, Arena arena) {
@@ -3270,18 +3313,39 @@ public final class Pt {
         return (boolean) invoke(window_export_foreign_handle, window, stub, MemorySegment.NULL);
     }
 
+    /**
+     * Revokes the export and drops any pending handle callback. The compositor
+     * invalidates relationships built from its handle. A no-op when nothing is
+     * exported, so it may be called any number of times.
+     */
     public static void window_unexport_foreign_handle(MemorySegment window) {
         invoke(window_unexport_foreign_handle, window);
     }
 
-    /** Imports an opaque handle as this window's parent (best-effort). */
+    /**
+     * Imports an opaque handle and makes this window its child, with the same
+     * stacking and positioning semantics as {@code xdg_toplevel.set_parent}.
+     * The handle is passed through unchanged and is not retained or logged.
+     * Replaces a previous imported parent; an invalid handle clears the import
+     * silently when the compositor sends {@code destroyed}.
+     *
+     * <p>Returns false for a null or empty handle or a NULL window, an absent
+     * importer global or a headless platform.
+     */
     public static boolean window_set_foreign_parent(MemorySegment window, String handle) {
         try (Arena arena = Arena.ofConfined()) {
             return (boolean) invoke(window_set_foreign_parent, window,
-                    handle == null ? MemorySegment.NULL : cstring(arena, handle));
+                    handle == null || handle.isEmpty()
+                            ? MemorySegment.NULL
+                            : cstring(arena, handle));
         }
     }
 
+    /**
+     * Destroys the imported parent object and invalidates the relationship. A
+     * no-op when no parent is imported, so it may be called any number of
+     * times.
+     */
     public static void window_clear_foreign_parent(MemorySegment window) {
         invoke(window_clear_foreign_parent, window);
     }
