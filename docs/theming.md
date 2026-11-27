@@ -267,9 +267,317 @@ afterwards; do not assume the previous custom colors survive.
 - The table is global per app or per window. There are no per-widget token
   overrides beyond the existing explicit color setters, and no theme
   inheritance chain between windows.
-- There is no theme file parser or visual editor in 1.0. A theme is code that
-  calls the setters.
+- 1.0 shipped no theme file parser or visual editor: a theme was code that
+  called the setters. **2.5.0 delivers the standalone theme editor** described
+  in [Theme editor (2.5.0)](#theme-editor-250); the parser and the editor live
+  entirely in the tool and add no core API.
 - `pt_app_set_color_scheme` is a wholesale palette load, not a merge. This is
   intentional: a partial switch would mix dark and light surfaces.
 - The built-in palette assumes sRGB output. The software renderer does not do
   color management, so wide-gamut displays see the numeric sRGB values.
+
+## Theme editor (2.5.0)
+
+Pt 2.5.0 ships a standalone theme editor under `tools/theme-editor/`. It is a
+Pt application itself — the editor dogfoods the public widget set — and it
+stays entirely outside the core ABI: the token table, the setters and getters
+and `api/pt.api` are unchanged, and the tool adds no core symbol. The tool
+owns its bounded pt-theme/1 reader and writer, its C exporter and a pure WCAG
+2.x module; the core's approximate `pt_theme_contrast_text` is deliberately
+left unchanged.
+
+The editor makes the token table editable without hand-writing 48 setter
+calls: a theme can be composed in the GUI, validated headlessly, stored as a
+`pt-theme/1` JSON file and exported as C.
+
+### Building, running and checking
+
+The tool is not part of `make all`; build it explicitly:
+
+- `make theme-editor` compiles `build/theme-editor` from the tool sources and
+  links `build/libpt.a` through public headers only, so no tool symbol can
+  enter `libpt.so`.
+- `make run-theme-editor` builds it if needed and opens the GUI with the
+  built-in dark palette.
+- `make check-theme-editor` runs the headless gate: `--check` on both golden
+  fixtures, `tools/theme-editor/themes/dark.json` and
+  `tools/theme-editor/themes/light.json`. It prints the WCAG pair table,
+  needs no display and fails if any floored pair misses its floor.
+
+The CLI modes (`theme-editor --help` prints the same text):
+
+```text
+Usage: theme-editor [options] [file.json]
+
+Standalone visual editor for the Pt theme token table.
+
+Modes:
+  theme-editor                              open the editor with the built-in dark palette
+  theme-editor <file.json>                  open the editor with an imported document
+  theme-editor --check [--strict] <file>    validate and print the WCAG pair table
+  theme-editor --export-json <in> <out>     write canonical pt-theme/1 JSON
+  theme-editor --export-c <in> <out.c>      write a compilable theme_apply_<slug> function
+
+Options:
+  --strict    promote unknown-key warnings to errors (--check)
+  --help      show this help and exit
+  --version   show the tool version and exit
+
+Exit codes: 0 success, 1 a floored WCAG pair failed, 2 malformed input
+or usage error. Headless modes never open a window.
+```
+
+### The pt-theme/1 format
+
+A theme file is one JSON object whose `schema` is exactly `pt-theme/1`.
+`scheme` is `dark` or `light`; it records the base palette that seeded the
+document and the scheme the C exporter applies first, and is never inferred
+from the colours. `colors` maps each of the 38 role names to an 8-hex-digit
+`RRGGBBAA` value, and `metrics` maps each of the 10 metric names to a finite,
+non-negative number. Role names are the short names from the token table above
+without the `pt_theme_` prefix; metric names drop the `pt_theme_metric_`
+prefix. Every known role and metric must be present.
+
+Import is tolerant so a file can be hand-edited or produced with the colour
+picker's own spellings: a colour may be written `#RRGGBBAA`, `#RRGGBB` (alpha
+`FF`), `0xRRGGBBAA` or lowercase. The bundled golden dark palette below is the
+canonical reference; its complete content is:
+
+```json
+{
+  "schema": "pt-theme/1",
+  "name": "Default Dark",
+  "scheme": "dark",
+  "colors": {
+    "background": "0B0E14FF",
+    "surface": "11151EFF",
+    "surface_raised": "161B26FF",
+    "surface_hover": "1D2431FF",
+    "border": "232B3AFF",
+    "border_strong": "39445AFF",
+    "text": "E9EEF7FF",
+    "text_muted": "94A1B8FF",
+    "accent": "3568E0FF",
+    "accent_hover": "3D6FE8FF",
+    "accent_text": "FFFFFFFF",
+    "danger": "F16B75FF",
+    "success": "4ACB8DFF",
+    "warning": "E5B454FF",
+    "shadow": "00000073",
+    "titlebar": "0E121BFF",
+    "scrollbar": "4A566EFF",
+    "focus": "8CB0FFFF",
+    "surface_sunken": "080B11FF",
+    "control": "1A2130FF",
+    "control_hover": "222B3CFF",
+    "accent_soft": "3568E033",
+    "selection": "3568E059",
+    "track": "2A3344FF",
+    "surface_container": "141924FF",
+    "surface_container_high": "1A2130FF",
+    "outline": "39445AFF",
+    "outline_variant": "232B3AFF",
+    "text_disabled": "5B6577FF",
+    "accent_pressed": "2F5BC0FF",
+    "control_pressed": "2A3447FF",
+    "danger_soft": "F16B7526",
+    "success_soft": "4ACB8D26",
+    "warning_soft": "E5B45426",
+    "scrim": "000000A6",
+    "skeleton": "1D2431FF",
+    "skeleton_highlight": "2A3447FF",
+    "selection_text": "FFFFFFFF"
+  },
+  "metrics": {
+    "radius_small": 6,
+    "radius_medium": 10,
+    "radius_large": 16,
+    "radius_pill": 999,
+    "focus_width": 2,
+    "focus_offset": 2,
+    "elevation_low": 8,
+    "elevation_high": 20,
+    "chip_height": 28,
+    "control_height": 34
+  }
+}
+```
+
+### Canonical output, safety limits and --strict
+
+Exports are deterministic and canonical:
+
+- colours are uppercase 8-digit hex without `#`;
+- metrics are printed with `%.9g`;
+- keys are in enum order (the order of the tables above), indented with two
+  spaces, with exactly one trailing newline;
+- exporting the same document twice is byte-identical, and re-parsing the
+  output recovers every value.
+
+The reader is bounded so an untrusted file cannot exhaust the tool: input is
+at most 1 MiB, JSON nesting is at most 8 levels, the theme name is at most 95
+UTF-8 bytes, trailing bytes after the top-level object are rejected, duplicate
+keys are rejected, and metrics must be finite and non-negative — a negative
+metric is an error, not a silent clamp. Numbers are parsed without `strtod`,
+so a locale decimal separator cannot change the document. Malformed JSON,
+unknown escapes, unpaired surrogates and invalid UTF-8 are rejected.
+
+Unknown keys — for example a role a future schema will add — are ignored with
+a warning, so a newer file still opens. `--strict` promotes those warnings to
+errors, which is what CI uses: a file that is not exactly the current v1 shape
+fails instead of passing with warnings.
+
+### C export
+
+`theme-editor --export-c <in.json> <out.c>` writes one complete, compilable
+C23 translation unit with a single apply function — no header — so the
+snippet can be pasted into an application or compiled directly. The function
+applies the scheme first, then every colour and every metric through the
+public setters in enum order. For the golden dark palette above the output is:
+
+```c
+/* Generated by pt-theme-editor; schema pt-theme/1; theme "Default Dark". */
+#include <pt/pt.h>
+
+void theme_apply_default_dark(pt_app *app) {
+    pt_app_set_color_scheme(app, pt_color_scheme_dark);
+    pt_app_set_theme_color(app, pt_theme_background, 0x0B0E14FFu);
+    pt_app_set_theme_color(app, pt_theme_surface, 0x11151EFF);
+    pt_app_set_theme_color(app, pt_theme_surface_raised, 0x161B26FF);
+    pt_app_set_theme_color(app, pt_theme_surface_hover, 0x1D2431FF);
+    pt_app_set_theme_color(app, pt_theme_border, 0x232B3AFF);
+    pt_app_set_theme_color(app, pt_theme_border_strong, 0x39445AFF);
+    pt_app_set_theme_color(app, pt_theme_text, 0xE9EEF7FF);
+    pt_app_set_theme_color(app, pt_theme_text_muted, 0x94A1B8FF);
+    pt_app_set_theme_color(app, pt_theme_accent, 0x3568E0FF);
+    pt_app_set_theme_color(app, pt_theme_accent_hover, 0x3D6FE8FF);
+    pt_app_set_theme_color(app, pt_theme_accent_text, 0xFFFFFFFF);
+    pt_app_set_theme_color(app, pt_theme_danger, 0xF16B75FF);
+    pt_app_set_theme_color(app, pt_theme_success, 0x4ACB8DFF);
+    pt_app_set_theme_color(app, pt_theme_warning, 0xE5B454FF);
+    pt_app_set_theme_color(app, pt_theme_shadow, 0x00000073);
+    pt_app_set_theme_color(app, pt_theme_titlebar, 0x0E121BFF);
+    pt_app_set_theme_color(app, pt_theme_scrollbar, 0x4A566EFF);
+    pt_app_set_theme_color(app, pt_theme_focus, 0x8CB0FFFF);
+    pt_app_set_theme_color(app, pt_theme_surface_sunken, 0x080B11FF);
+    pt_app_set_theme_color(app, pt_theme_control, 0x1A2130FF);
+    pt_app_set_theme_color(app, pt_theme_control_hover, 0x222B3CFF);
+    pt_app_set_theme_color(app, pt_theme_accent_soft, 0x3568E033);
+    pt_app_set_theme_color(app, pt_theme_selection, 0x3568E059);
+    pt_app_set_theme_color(app, pt_theme_track, 0x2A3344FF);
+    pt_app_set_theme_color(app, pt_theme_surface_container, 0x141924FF);
+    pt_app_set_theme_color(app, pt_theme_surface_container_high, 0x1A2130FF);
+    pt_app_set_theme_color(app, pt_theme_outline, 0x39445AFF);
+    pt_app_set_theme_color(app, pt_theme_outline_variant, 0x232B3AFF);
+    pt_app_set_theme_color(app, pt_theme_text_disabled, 0x5B6577FF);
+    pt_app_set_theme_color(app, pt_theme_accent_pressed, 0x2F5BC0FF);
+    pt_app_set_theme_color(app, pt_theme_control_pressed, 0x2A3447FF);
+    pt_app_set_theme_color(app, pt_theme_danger_soft, 0xF16B7526);
+    pt_app_set_theme_color(app, pt_theme_success_soft, 0x4ACB8D26);
+    pt_app_set_theme_color(app, pt_theme_warning_soft, 0xE5B45426);
+    pt_app_set_theme_color(app, pt_theme_scrim, 0x000000A6);
+    pt_app_set_theme_color(app, pt_theme_skeleton, 0x1D2431FF);
+    pt_app_set_theme_color(app, pt_theme_skeleton_highlight, 0x2A3447FF);
+    pt_app_set_theme_color(app, pt_theme_selection_text, 0xFFFFFFFF);
+    pt_app_set_theme_metric(app, pt_theme_metric_radius_small, 6.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_radius_medium, 10.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_radius_large, 16.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_radius_pill, 999.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_focus_width, 2.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_focus_offset, 2.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_elevation_low, 8.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_elevation_high, 20.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_chip_height, 28.0f);
+    pt_app_set_theme_metric(app, pt_theme_metric_control_height, 34.0f);
+}
+```
+
+The function name is `theme_apply_` plus the slug of the theme name: lowercase
+ASCII letters, digits and `_`, with every other byte replaced by `_`; an
+empty name exports as `theme_apply_custom_theme`. The GUI never writes a file
+implicitly — export is an explicit action. Themes are not unique across files,
+so the application owns any name collision.
+
+### WCAG checking
+
+`--check` prints every pair with its measured ratio, grade and pass/fail
+verdict and exits 0 when every floored pair passes, 1 when a pair fails and
+2 for a malformed file or a usage error; `--check --strict` also fails on
+parser warnings. The table holds the 12 documentation pairs from
+[Contrast](#contrast) above plus the two selection composites measured over
+`surface` and `background` — 14 floored pairs — and one informational row
+(`text_disabled` on `surface`, expected below AA, which never fails):
+
+| Pair | Floor |
+| --- | ---: |
+| `text` on `background` | 7.0 (AAA) |
+| `text` on `surface` | 7.0 |
+| `text` on `surface_raised` | 7.0 |
+| `text_muted` on `background` | 4.5 (AA) |
+| `text_muted` on `surface` | 4.5 |
+| `accent_text` on `accent` | 4.5 |
+| `accent_text` on `accent_hover` | 4.5 |
+| `accent_text` on `accent_pressed` | 4.5 |
+| `danger` on `surface` | 4.5 |
+| `success` on `surface` | 4.5 |
+| `warning` on `surface` | 4.5 |
+| `focus` on `background` | 4.5 |
+| `selection_text` on `selection` over `surface` | 4.5 |
+| `selection_text` on `selection` over `background` | 4.5 |
+
+A pair is never skipped silently: every row is reported with `pass`, `AA`,
+`AAA` or `fail`. Grades follow the WCAG 2.x levels — 7.0 and above is AAA,
+4.5 up to below 7.0 is AA, below 4.5 fails. The selection rows composite the
+translucent `selection` wash over the backdrop before measuring, so the
+reported ratio is what the renderer actually produces.
+
+The core's `pt_theme_contrast_text` — used by `pt_app_set_accent_color` to
+pick `accent_text` — is a fast gamma-encoded weighted sum
+(`0.2126R + 0.7152G + 0.0722B` over the 8-bit channels, threshold `0.62`),
+not a WCAG luminance calculation. Near that threshold the two can disagree.
+The core helper is not corrected in 2.5.0, because changing it would alter
+accent derivation and existing pixels. The editor therefore measures pairs
+with its own pure WCAG 2.x module — sRGB linearisation, the relative-luminance
+and contrast formulas — and reports the true ratio; when the core would pick
+a different `accent_text`, the contrast panel shows the failure and the user
+can override `accent_text` explicitly. This is a documented difference
+between a fast core heuristic and a standards-exact check, not a defect in
+either.
+
+### The editor workflow
+
+The GUI is a Pt application:
+
+- The main window shows the theme name, the scheme (read-only after
+  creation) and the actions New dark, New light, Import JSON, Export JSON,
+  Export C and Preview. A scrollable colour list has one `pt_color_picker`
+  per role with the role name beside it; the picker's hex entry accepts
+  `#RRGGBBAA` including alpha and its popup is the preset palette. A metrics
+  section edits the ten metrics; a Contrast section shows the pair table
+  with ratio and status.
+- New dark / New light seeds the document from the built-in palette through
+  the public app getters; the document then lives independently of the app.
+- The preview is a second top-level Pt window with a representative sample of
+  controls. Every edit is applied to that window only, through
+  `pt_window_set_theme_color` / `pt_window_set_theme_metric`, so the editor's
+  own window keeps the neutral default palette while the preview exercises the
+  real per-window override path. Colour picker changes update the model and
+  the preview immediately.
+- Import replaces the whole document; Export canonicalises it. There is no
+  direct theme-file write in GUI mode.
+- Every picker, number field and button carries an accessible name, tab order
+  follows the visual order, and status is text plus colour — never colour
+  alone.
+
+### Limits of the tool
+
+- The editor is a tool, not a core API: it links the static library through
+  public headers only and adds no symbol to `libpt.so`. Applications that do
+  not build the tool are unaffected.
+- The format is `pt-theme/1` and a file carries exactly one scheme.
+  Multi-scheme bundles and reading a live desktop theme are future schema
+  candidates.
+- `--check` validates the palette in the file headlessly; it does not open the
+  GUI or touch a compositor. Pixel-level verification of a custom palette is
+  still the application's visual test (see
+  [Testing a palette](#testing-a-palette) above).
