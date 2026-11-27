@@ -229,6 +229,8 @@ static void test_fixtures(void) {
         if (fixture_text[0] == 0) {
             continue;
         }
+        size_t length = strlen(fixture_text);
+        pt_check(length > 0 && fixture_text[length - 1] == '\n');
         pt_check(strstr(fixture_text, "\"schema\": \"pt-theme/1\"") != NULL);
         for (int i = 0; i < pt_theme_token_count; ++i) {
             const char *name = te_color_name((pt_theme_token)i);
