@@ -818,6 +818,438 @@ static void test_wrapped_rtl(pt_window *window) {
     pt_text_runs_free(&runs);
 }
 
+/* ---------- inline image pipeline (2.3 wave 3b) ---------- */
+
+#define image_placeholder "\xEF\xBF\xBC"
+
+static pt_icon_image *rich_make_image(int width, int height) {
+    size_t size = 0;
+    uint32_t *pixels = calloc((size_t)width * (size_t)height, sizeof(*pixels));
+    if (!pixels) {
+        return NULL;
+    }
+    for (int i = 0; i < width * height; ++i) {
+        pixels[i] = 0x80FF0000u | (uint32_t)(i & 0xFF);
+    }
+    uint8_t *png = pt_png_encode_argb_premultiplied(pixels, width, height, &size);
+    free(pixels);
+    if (!png) {
+        return NULL;
+    }
+    pt_icon_image *image = pt_icon_image_load_memory(png, size);
+    free(png);
+    return image;
+}
+
+static pt_text_image rich_image_descriptor(uint32_t start, pt_icon_image *image, float width,
+                                           float height, pt_text_image_align align) {
+    pt_text_image descriptor = {0};
+    descriptor.start = start;
+    descriptor.image = image;
+    descriptor.width = width;
+    descriptor.height = height;
+    descriptor.align = align;
+    return descriptor;
+}
+
+static void test_image_zero_regression(pt_window *window) {
+    pt_layout_ctx ctx = {.scale = 2.0f, .font_family = "sans-serif"};
+    pt_widget *label = pt_label_create(pt_window_root(window), "plain text");
+    pt_check(pt_widget_get_text_image_count(label) == 0);
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    /* No image: the pre-2.3 single logical font run and its measure are
+     * untouched. */
+    pt_check(runs.count == 1);
+    pt_check(runs.items[0].font != NULL);
+    pt_check(runs.items[0].image == NULL);
+    pt_check_near(pt_text_runs_natural_width(&runs),
+                  pt_font_measure(runs.items[0].font, "plain text", 10) / 2.0f, 0.01f);
+    pt_text_visual_map *map = NULL;
+    pt_check(pt_text_visual_map_build_runs(&runs, 0, runs.length, pt_bidi_base_ltr, &map));
+    if (map) {
+        pt_check(map->count > 0);
+        for (size_t i = 0; i < map->count; ++i) {
+            /* No fontless cluster: every cluster came from shaping. */
+            pt_check(map->clusters[i].end > map->clusters[i].start);
+        }
+        pt_text_visual_map_free(map);
+    }
+    pt_text_runs_free(&runs);
+
+    /* A raw placeholder without a descriptor keeps the 2.2 tofu path: it is
+     * shaped as one ordinary codepoint in the surrounding font run. */
+    pt_widget_set_text(label, "a" image_placeholder "b");
+    pt_check(pt_widget_get_text_image_count(label) == 0);
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.count == 1);
+    pt_check(runs.items[0].font != NULL);
+    pt_check(runs.items[0].image == NULL);
+    pt_check(pt_text_runs_measure(&runs, 1, 4) > 0.0f);
+    pt_text_runs_free(&runs);
+
+    pt_widget_destroy(label);
+}
+
+static void test_image_measure_metrics(pt_window *window) {
+    pt_widget *label = pt_label_create(pt_window_root(window), "A" image_placeholder "B");
+    pt_icon_image *icon = rich_make_image(4, 4);
+    pt_check(icon != NULL);
+    if (!icon) {
+        return;
+    }
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "sans-serif"};
+
+    /* Baseline: the whole height sits above the baseline and only the font's
+     * descent remains below it. The placeholder is a hard run boundary and the
+     * image run is fontless. */
+    pt_text_image entry =
+        rich_image_descriptor(1, icon, 10.0f, 40.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.count == 3);
+    pt_check(runs.items[0].start == 0 && runs.items[0].end == 1);
+    pt_check(runs.items[0].font != NULL && runs.items[0].image == NULL);
+    pt_check(runs.items[1].start == 1 && runs.items[1].end == 4);
+    pt_check(runs.items[1].font == NULL);
+    pt_check(runs.items[1].image == &label->images[0]);
+    pt_check(runs.items[2].start == 4 && runs.items[2].end == 5);
+    pt_check(runs.items[2].font != NULL);
+
+    float text_width = pt_text_runs_measure(&runs, 0, 1) +
+                       pt_text_runs_measure(&runs, 4, 5);
+    pt_check_near(pt_text_runs_measure(&runs, 1, 4), 10.0f, 0.001f);
+    pt_check_near(pt_text_runs_natural_width(&runs), text_width + 10.0f, 0.01f);
+    /* A partial overlap still counts the whole atomic box. */
+    pt_check_near(pt_text_runs_measure(&runs, 2, 4), 10.0f, 0.001f);
+    pt_check_near(pt_text_runs_measure(&runs, 1, 2), 10.0f, 0.001f);
+    pt_check(runs.ascent >= 40.0f);
+    pt_check(runs.line_height >= 40.0f + runs.descent);
+    float baseline_ascent = runs.ascent;
+    float baseline_descent = runs.descent;
+    pt_text_runs_free(&runs);
+
+    /* Middle: half above, half below the baseline. */
+    entry.align = pt_text_image_align_middle;
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.ascent >= 20.0f);
+    pt_check(runs.descent >= 20.0f);
+    pt_check(runs.ascent < baseline_ascent);
+    pt_check(runs.descent > baseline_descent);
+    pt_check(runs.line_height >= 40.0f);
+    pt_text_runs_free(&runs);
+
+    /* Intrinsic size and single-dimension aspect preservation. */
+    entry = rich_image_descriptor(1, icon, 0.0f, 0.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check_near(pt_text_runs_measure(&runs, 1, 4), 4.0f, 0.001f);
+    pt_check(runs.ascent >= 4.0f);
+    pt_text_runs_free(&runs);
+
+    entry = rich_image_descriptor(1, icon, 0.0f, 20.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check_near(pt_text_runs_measure(&runs, 1, 4), 20.0f, 0.001f);
+    pt_text_runs_free(&runs);
+
+    entry = rich_image_descriptor(1, icon, 30.0f, 0.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check_near(pt_text_runs_measure(&runs, 1, 4), 30.0f, 0.001f);
+    pt_check(runs.ascent >= 30.0f);
+    pt_text_runs_free(&runs);
+
+    /* A tall image and a large styled run compose by maxima, like two styled
+     * runs: the line height is never the sum of both. */
+    entry = rich_image_descriptor(1, icon, 12.0f, 30.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_text_span big = {0};
+    big.start = 4;
+    big.length = 1;
+    big.flags = pt_text_span_has_size;
+    big.size = 20.0f;
+    pt_check(pt_widget_set_text_spans(label, &big, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    float combined = runs.line_height;
+    pt_text_runs_free(&runs);
+    pt_widget_clear_text_images(label);
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    float text_only = runs.line_height;
+    pt_text_runs_free(&runs);
+    pt_check(combined >= 30.0f);
+    pt_check(combined >= text_only);
+    pt_check(combined < text_only + 30.0f);
+    pt_widget_clear_text_spans(label);
+
+    pt_widget_destroy(label);
+    pt_icon_image_destroy(icon);
+}
+
+static void test_image_hidpi_units(pt_window *window) {
+    pt_widget *label = pt_label_create(pt_window_root(window), "a" image_placeholder "b");
+    pt_icon_image *icon = rich_make_image(4, 4);
+    pt_check(icon != NULL);
+    if (!icon) {
+        return;
+    }
+    pt_text_image entry =
+        rich_image_descriptor(1, icon, 10.0f, 12.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+
+    pt_layout_ctx ctx = {.scale = 2.0f, .font_family = "sans-serif"};
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    /* measure stays logical even though the run list advanced in device space. */
+    pt_check_near(pt_text_runs_measure(&runs, 1, 4), 10.0f, 0.001f);
+    pt_check(runs.ascent >= 12.0f);
+
+    /* The map keeps its device-pixel x convention: one atomic cluster whose
+     * extent is the logical width times scale, applied exactly once. */
+    pt_text_visual_map *map = NULL;
+    pt_check(pt_text_visual_map_build_runs(&runs, 0, 5, pt_bidi_base_ltr, &map));
+    pt_check(map != NULL);
+    if (map) {
+        const pt_text_visual_cluster *image_cluster = NULL;
+        for (size_t i = 0; i < map->count; ++i) {
+            if (map->clusters[i].start == 1) {
+                image_cluster = &map->clusters[i];
+            }
+        }
+        pt_check(image_cluster != NULL);
+        if (image_cluster) {
+            pt_check(image_cluster->end == 4);
+            pt_check_near(image_cluster->x1 - image_cluster->x0, 20.0f, 0.01f);
+            pt_check_near(image_cluster->start_x, image_cluster->x0, 0.001f);
+            pt_check_near(image_cluster->end_x, image_cluster->x1, 0.001f);
+        }
+        /* The interior bytes of the placeholder are never cluster boundaries,
+         * and the two edges are. */
+        pt_check(pt_text_visual_map_is_boundary(map, 1));
+        pt_check(!pt_text_visual_map_is_boundary(map, 2));
+        pt_check(!pt_text_visual_map_is_boundary(map, 3));
+        pt_check(pt_text_visual_map_is_boundary(map, 4));
+        pt_check(pt_text_visual_map_next_boundary(map, 1) == 4);
+        pt_check(pt_text_visual_map_prev_boundary(map, 4) == 1);
+        pt_check_near(pt_text_visual_map_width(map),
+                      pt_text_runs_natural_width(&runs) * 2.0f, 0.02f);
+        pt_text_visual_map_free(map);
+    }
+    pt_text_runs_free(&runs);
+
+    /* The text-area layout composes logical metrics but keeps device x in the
+     * maps (the existing convention); the image width is scaled once. */
+    pt_widget *area = pt_text_area_create(pt_window_root(window), NULL);
+    pt_widget_set_text(area, "a" image_placeholder "b");
+    pt_check(pt_widget_set_text_images(area, &entry, 1));
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, 160.0f, &layout));
+    pt_check(layout.has_runs);
+    pt_check(layout.line_count == 1);
+    pt_check(layout.line_height >= 12.0f);
+    pt_check(layout.runs.ascent >= 12.0f);
+    float x0 = pt_text_layout_x_for_position(&layout, 0, 1);
+    float x1 = pt_text_layout_x_for_position(&layout, 0, 4);
+    pt_check_near(x1 - x0, 20.0f, 0.02f);
+    pt_text_layout_free(&layout);
+    pt_widget_destroy(area);
+
+    pt_widget_destroy(label);
+    pt_icon_image_destroy(icon);
+}
+
+static void test_image_wrap_atomic(pt_window *window) {
+    pt_widget *label = pt_label_create(pt_window_root(window), "A" image_placeholder "B");
+    pt_icon_image *icon = rich_make_image(4, 4);
+    pt_check(icon != NULL);
+    if (!icon) {
+        return;
+    }
+    pt_text_image entry =
+        rich_image_descriptor(1, icon, 10.0f, 10.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "sans-serif"};
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+
+    pt_text_line *lines = NULL;
+    int count = pt_text_runs_wrap(&runs, 25.0f, &lines);
+    pt_check(count == 2);
+    if (count == 2) {
+        pt_check(lines[0].start == 0 && lines[0].end == 4);
+        pt_check(lines[1].start == 4 && lines[1].end == 5);
+    }
+    for (int i = 0; i < count; ++i) {
+        pt_check(!(lines[i].start > 1 && lines[i].start < 4));
+        pt_check(!(lines[i].end > 1 && lines[i].end < 4));
+    }
+    free(lines);
+    pt_text_runs_free(&runs);
+
+    /* An image wider than the content box stays alone on its line, exactly like
+     * one oversized cluster. */
+    pt_widget_set_text(label, image_placeholder);
+    entry = rich_image_descriptor(0, icon, 100.0f, 10.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    count = pt_text_runs_wrap(&runs, 20.0f, &lines);
+    pt_check(count == 1);
+    if (count == 1) {
+        pt_check(lines[0].start == 0 && lines[0].end == 3);
+    }
+    pt_check_near(pt_text_runs_measure(&runs, 0, 3), 100.0f, 0.001f);
+    free(lines);
+    pt_text_runs_free(&runs);
+
+    /* Several images each move as one unit. */
+    pt_widget_set_text(label, "a" image_placeholder "b" image_placeholder);
+    pt_text_image pair[2];
+    pair[0] = rich_image_descriptor(1, icon, 10.0f, 10.0f, pt_text_image_align_baseline);
+    pair[1] = rich_image_descriptor(5, icon, 10.0f, 10.0f, pt_text_image_align_baseline);
+    /* The setter expects the side table sorted by start; both are already. */
+    pt_check(pt_widget_set_text_images(label, pair, 2));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.count == 4);
+    count = pt_text_runs_wrap(&runs, 15.0f, &lines);
+    pt_check(count >= 3);
+    bool saw_first = false;
+    bool saw_second = false;
+    for (int i = 0; i < count; ++i) {
+        pt_check(!(lines[i].start > 1 && lines[i].start < 4));
+        pt_check(!(lines[i].end > 1 && lines[i].end < 4));
+        pt_check(!(lines[i].start > 5 && lines[i].start < 8));
+        pt_check(!(lines[i].end > 5 && lines[i].end < 8));
+        if (lines[i].start == 1 && lines[i].end == 4) {
+            saw_first = true;
+        }
+        if (lines[i].start == 5 && lines[i].end == 8) {
+            saw_second = true;
+        }
+    }
+    pt_check(saw_first && saw_second);
+    free(lines);
+    pt_text_runs_free(&runs);
+
+    pt_widget_destroy(label);
+    pt_icon_image_destroy(icon);
+}
+
+static void test_image_visual_map_atomic(pt_window *window) {
+    pt_widget *label = pt_label_create(pt_window_root(window), "a" image_placeholder "b");
+    pt_icon_image *icon = rich_make_image(4, 4);
+    pt_check(icon != NULL);
+    if (!icon) {
+        return;
+    }
+    pt_text_image entry =
+        rich_image_descriptor(1, icon, 10.0f, 10.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "sans-serif"};
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_text_visual_map *ltr = NULL;
+    pt_check(pt_text_visual_map_build_runs(&runs, 0, 5, pt_bidi_base_ltr, &ltr));
+    pt_check(ltr != NULL);
+    float ltr_image_width = 0.0f;
+    if (ltr) {
+        const pt_text_visual_cluster *image_cluster = NULL;
+        for (size_t i = 0; i < ltr->count; ++i) {
+            if (ltr->clusters[i].start == 1) {
+                image_cluster = &ltr->clusters[i];
+            }
+        }
+        pt_check(image_cluster != NULL);
+        if (image_cluster) {
+            pt_check(image_cluster->end == 4);
+            pt_check_near(image_cluster->x0, pt_text_visual_map_x_for_position(ltr, 1,
+                                                                              pt_text_bias_leading),
+                          0.001f);
+            pt_check_near(image_cluster->x1, pt_text_visual_map_x_for_position(ltr, 4,
+                                                                              pt_text_bias_trailing),
+                          0.001f);
+            ltr_image_width = image_cluster->x1 - image_cluster->x0;
+        }
+        /* A click inside the box resolves to an edge, never an interior byte. */
+        size_t inside = pt_text_visual_map_position_for_x(
+            ltr, pt_text_visual_map_x_for_position(ltr, 1, pt_text_bias_leading) + 5.0f,
+            pt_text_bias_leading);
+        pt_check(inside == 1 || inside == 4);
+        /* The whole placeholder is one caret step. */
+        pt_check(pt_text_visual_map_next_boundary(ltr, 1) == 4);
+        pt_check(pt_text_visual_map_prev_boundary(ltr, 4) == 1);
+        pt_text_visual_map_free(ltr);
+    }
+    pt_text_runs_free(&runs);
+
+    /* RTL paragraph: U+FFFC is a neutral in the UBA. With Hebrew on both sides
+     * it resolves to the RTL level and the image box sits between the two
+     * letters in visual order, with start_x/end_x mirrored. */
+    pt_widget_set_text(label, "\xD7\x90" image_placeholder "\xD7\x91");
+    pt_widget_set_text_direction(label, pt_text_direction_rtl);
+    entry = rich_image_descriptor(2, icon, 10.0f, 10.0f, pt_text_image_align_baseline);
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.bidi);
+    pt_check(runs.base_level == 1);
+    bool has_image_run = false;
+    for (size_t i = 0; i < runs.count; ++i) {
+        if (runs.items[i].image) {
+            has_image_run = true;
+            pt_check(runs.items[i].start == 2 && runs.items[i].end == 5);
+            pt_check(runs.items[i].level == 1);
+        }
+    }
+    pt_check(has_image_run);
+
+    pt_text_visual_map *rtl = NULL;
+    pt_check(pt_text_visual_map_build_runs(&runs, 0, 7, pt_bidi_base_rtl, &rtl));
+    pt_check(rtl != NULL);
+    if (rtl) {
+        const pt_text_visual_cluster *alef = NULL;
+        const pt_text_visual_cluster *image_cluster = NULL;
+        const pt_text_visual_cluster *bet = NULL;
+        for (size_t i = 0; i < rtl->count; ++i) {
+            if (rtl->clusters[i].start == 0) {
+                alef = &rtl->clusters[i];
+            } else if (rtl->clusters[i].start == 2) {
+                image_cluster = &rtl->clusters[i];
+            } else if (rtl->clusters[i].start == 5) {
+                bet = &rtl->clusters[i];
+            }
+        }
+        pt_check(alef && image_cluster && bet);
+        if (alef && image_cluster && bet) {
+            pt_check(image_cluster->end == 5);
+            pt_check_near(image_cluster->x1 - image_cluster->x0, ltr_image_width, 0.01f);
+            /* Visual order is bet, image, alef from left to right. */
+            pt_check_near(image_cluster->x0, bet->x1, 0.01f);
+            pt_check_near(image_cluster->x1, alef->x0, 0.01f);
+            /* Logical start maps to the right edge in an RTL cluster. */
+            pt_check_near(image_cluster->start_x, image_cluster->x1, 0.001f);
+            pt_check_near(image_cluster->end_x, image_cluster->x0, 0.001f);
+            pt_check_near(pt_text_visual_map_x_for_position(rtl, 2, pt_text_bias_leading),
+                          image_cluster->x1, 0.001f);
+            pt_check_near(pt_text_visual_map_x_for_position(rtl, 5, pt_text_bias_trailing),
+                          image_cluster->x0, 0.001f);
+        }
+        pt_check(!pt_text_visual_map_is_boundary(rtl, 3));
+        pt_check(!pt_text_visual_map_is_boundary(rtl, 4));
+        pt_check(pt_text_visual_map_next_boundary(rtl, 2) == 5);
+        size_t inside = pt_text_visual_map_position_for_x(
+            rtl, pt_text_visual_map_x_for_position(rtl, 2, pt_text_bias_leading) - 5.0f,
+            pt_text_bias_leading);
+        pt_check(inside == 2 || inside == 5);
+        pt_text_visual_map_free(rtl);
+    }
+    pt_text_runs_free(&runs);
+    pt_widget_set_text_direction(label, pt_text_direction_auto);
+
+    pt_widget_destroy(label);
+    pt_icon_image_destroy(icon);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.rich_text");
@@ -836,6 +1268,11 @@ int main(void) {
     test_wrapped_rtl(window);
     test_layout(window);
     test_edit_maintenance(window);
+    test_image_zero_regression(window);
+    test_image_measure_metrics(window);
+    test_image_hidpi_units(window);
+    test_image_wrap_atomic(window);
+    test_image_visual_map_atomic(window);
     test_font_cache();
 
     pt_window_free(window);

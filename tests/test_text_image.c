@@ -708,6 +708,79 @@ static void test_insert_undo_text(pt_widget *root) {
     pt_widget_destroy(area);
 }
 
+/* The descriptor enters the run/measure/wrap/map pipeline as a fontless atomic
+ * run: no shaping, logical measure, device map extent, whole-placeholder
+ * clusters. W3c wires painting but the geometry is complete here. */
+static void test_pipeline_runs(pt_widget *root) {
+    pt_widget *label = pt_label_create(root, "x" placeholder "y");
+    pt_icon_image *icon = make_icon();
+    pt_check(icon != NULL);
+    if (!icon) {
+        return;
+    }
+    pt_text_image entry = descriptor(1, icon);
+    entry.width = 16.0f;
+    entry.height = 24.0f;
+    entry.align = pt_text_image_align_middle;
+    pt_check(pt_widget_set_text_images(label, &entry, 1));
+
+    pt_layout_ctx ctx = {.scale = 1.0f, .font_family = "sans-serif"};
+    pt_text_runs runs = {0};
+    pt_check(pt_text_runs_build(label, &ctx, &runs));
+    pt_check(runs.count == 3);
+    pt_check(runs.items[1].start == 1 && runs.items[1].end == 4);
+    pt_check(runs.items[1].font == NULL);
+    pt_check(runs.items[1].image != NULL);
+    pt_check_near(pt_text_runs_measure(&runs, 1, 4), 16.0f, 0.001f);
+    pt_check(runs.ascent >= 12.0f);
+    pt_check(runs.descent >= 12.0f);
+    pt_check(runs.line_height >= 24.0f);
+
+    pt_text_visual_map *map = NULL;
+    pt_check(pt_text_visual_map_build_runs(&runs, 0, 5, pt_bidi_base_ltr, &map));
+    pt_check(map != NULL);
+    if (map) {
+        bool saw_image = false;
+        for (size_t i = 0; i < map->count; ++i) {
+            if (map->clusters[i].start == 1) {
+                saw_image = true;
+                pt_check(map->clusters[i].end == 4);
+                pt_check_near(map->clusters[i].x1 - map->clusters[i].x0, 16.0f, 0.01f);
+            }
+        }
+        pt_check(saw_image);
+        pt_check(!pt_text_visual_map_is_boundary(map, 2));
+        pt_check(!pt_text_visual_map_is_boundary(map, 3));
+        pt_text_visual_map_free(map);
+    }
+
+    pt_text_line *lines = NULL;
+    int count = pt_text_runs_wrap(&runs, 12.0f, &lines);
+    pt_check(count >= 2);
+    for (int i = 0; i < count; ++i) {
+        pt_check(!(lines[i].start > 1 && lines[i].start < 4));
+        pt_check(!(lines[i].end > 1 && lines[i].end < 4));
+    }
+    free(lines);
+    pt_text_runs_free(&runs);
+
+    /* The text-area layout selects the run path on image_count alone even with
+     * no spans, and its composed metrics include the image box. */
+    pt_widget *area = pt_text_area_create(root, NULL);
+    pt_widget_set_text(area, "x" placeholder "y");
+    pt_check(pt_widget_set_text_images(area, &entry, 1));
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, 200.0f, &layout));
+    pt_check(layout.has_runs);
+    pt_check(layout.runs.count == 3);
+    pt_check(layout.line_height >= 24.0f);
+    pt_text_layout_free(&layout);
+    pt_widget_destroy(area);
+
+    pt_widget_destroy(label);
+    pt_icon_image_destroy(icon);
+}
+
 static void test_zero_regression(pt_widget *root) {
     pt_widget *label = pt_label_create(root, "plain text");
     pt_check(pt_widget_get_text_image_count(label) == 0);
@@ -750,6 +823,7 @@ int main(void) {
     test_insert_shift(root);
     test_insert_rejections(root);
     test_insert_undo_text(root);
+    test_pipeline_runs(root);
     test_zero_regression(root);
 
     pt_window_free(window);
