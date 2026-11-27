@@ -591,3 +591,20 @@ run-java-ergonomics: java-example
 
 .PHONY: run-ergonomics-gallery run-cpp-ergonomics run-python-ergonomics \
 	run-java-ergonomics
+
+run-inline-images: $(EXAMPLES)/c/inline_images
+	$(EXAMPLES)/c/inline_images
+
+run-cpp-inline-images: $(EXAMPLES)/cpp/inline_images
+	$(EXAMPLES)/cpp/inline_images
+
+run-python-inline-images: lib
+	PT_LIBRARY=$(abspath $(BUILD)/libpt.so) PYTHONPATH=bindings/python \
+		$(PYTHON) examples/python/inline_images.py
+
+run-java-inline-images: java-example
+	$(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpt.library=$(abspath $(BUILD)/libpt.so) -cp $(BUILD)/java InlineImages
+
+.PHONY: run-inline-images run-cpp-inline-images run-python-inline-images \
+	run-java-inline-images
