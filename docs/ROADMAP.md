@@ -2373,6 +2373,107 @@ this document), W1 ~80, W2 ~70, W3 ~40. If W2 cannot be verified live because th
 bench compositor/device never emits a horizontal axis, the routing still lands
 and W2's evidence is marked headless-only; the wave is not dropped.
 
+## M25 - 2.3.0: inline image runs (proposed)
+
+**Status: proposed, design only (2026-11-27).** This section and
+[m25-design.md](m25-design.md) are the scaffold for the next implementation
+round; no source, header, binding, test or generated baseline file is changed on
+this branch. The landed tree is `7c476bc` (2.2.0): `api/pt.api` reads **576
+functions / 952 entries**, `ABI_MAJOR = 1`, SONAME `libpt.so.1`.
+
+M25 delivers the first item of the post-2.0 structural horizon: inline image
+runs in styled text and the text area. The placeholder is the U+FFFC object
+replacement character in the widget's UTF-8 text; image descriptors live in a
+separate, sorted side table keyed by the placeholder's byte offset. This keeps
+text editing, byte offsets, bidi and accessibility character offsets unchanged,
+and leaves the frozen `pt_text_span` layout alone.
+
+### Scope
+
+- Inline image runs on labels and text areas: U+FFFC placeholder, image handle,
+  logical width/height, baseline or middle alignment, alt text.
+- Measurement, wrapping and line metrics include the image box; a wide image is
+  never split and a tall image raises the composed line metrics (the existing
+  styled-run rule).
+- Atomic caret, selection and deletion over the placeholder; selection paints
+  one rectangle through the existing visual map.
+- Copying a selection writes alt text in place of U+FFFC; an empty alt keeps
+  U+FFFC.
+- AT-SPI exposes a virtual named image child for each run; the Text interface
+  keeps raw U+FFFC and unchanged character offsets.
+- Reuse `pt_icon_image` and the bounded raster cache; no new decoder or cache.
+- Additive public surface: 5 functions, 1 enum, 1 struct. Final estimate **581 /
+  960** (W1 reaches 580 / 959, W3 adds the editing entry point). `pt_text_span`
+  is untouched; `ABI_MAJOR` and SONAME do not move.
+
+Out of scope: entries, per-line metrics, image tint/animation, rich clipboard
+MIME types, and any change to the frozen span struct. The full scope, feasibility
+evidence, API and risks are in [m25-design.md](m25-design.md).
+
+### Feasibility summary
+
+| Area | Verdict | Reason |
+| --- | --- | --- |
+| U+FFFC data model | **feasible**, medium risk | A parallel `pt_text_image` side table mirrors the existing span shift/clamp rules; the placeholder is one UTF-8 codepoint, so it is atomic by construction. Extending `pt_text_span` would break the 2.0 ABI. |
+| Baseline and measurement | **feasible**, medium risk | `pt_text_runs_build` already composes ascent/descent from runs; image extents join that maximum. `pt_text_runs_measure` adds a constant width; the wrapper already steps by codepoints. |
+| Painting | **feasible**, low-medium risk | `pt_text_runs_draw_line_base` already walks visual segments with a pen; one fontless image branch reuses `pt_icon_draw_canvas`. Selection already paints per-line map rectangles. |
+| Atomic selection and alt copy | **feasible**, medium risk | Interactive movement and visual clusters cannot split a codepoint. Programmatic selection needs a snap helper; copying needs a pure alt-range helper used by `widget.c` and the AT-SPI copy path. There is no `src/clipboard.c`; the platform clipboard API is unchanged. |
+| Embedded-object accessibility | **feasible**, medium risk | The AT-SPI object tree is widget-only; add a virtual image object type, ordinal path and named child. No public a11y API is added. |
+| Public API and ABI | **feasible**, additive | New enum, new struct and new symbols append to `libpt.so.1`; no existing layout or signature moves. |
+
+### Waves
+
+The text pipeline is the serial hot spot, as in M22 W3. Independent domains run
+in parallel after the foundation lands. File ownership is exclusive: no two
+active agents touch the same file.
+
+| Wave | Scope | Files owned | Depends on | Runs in parallel with | Owner |
+| --- | --- | --- | --- | --- | --- |
+| W0 | This proposal and the design record | `docs/ROADMAP.md`, `docs/m25-design.md` | - | - | scaffold |
+| W1 | Descriptor model, `src/image_run.c`, refcount/lifecycle, set/get/clear, alt helper, tests, baseline 580/959 | `include/pt/base.h`, `include/pt/widget.h`, `src/internal.h`, `src/image_run.c` (new), `src/widget.c` (destroy/set-text only), `tests/test_text_image.c`, `tests/test_abi.c`, `api/pt.api`, `docs/api-reference.md` | W0 | none (foundation) | DuMate |
+| W2 | AT-SPI virtual image child, role/name, structure events, alt-copy path | `src/a11y_bridge.c`, `src/a11y.c`, `tests/test_a11y_bridge.c` | W1 | W3, W4, W5 | Loomy (single agent) |
+| W3a | Header freeze for `pt_text_area_insert_image`; no behavior | `include/pt/widget.h` | W1 | W4, W5 (after commit) | DuMate |
+| W3b | Image runs, measure/wrap, fontless map clusters | `src/rich_text.c`, `src/font.c`, `src/text_layout.c`, `tests/test_rich_text.c`, `tests/test_font.c` | W1, W3a | W2, W4, W5 | DuMate (serial) |
+| W3c | Paint, history, atomic editing/selection, alt copy, goldens, baseline 581/960 | `src/paint.c`, `src/widget.c`, `tests/test_text_area.c`, `tests/test_editing.c`, `tests/test_visuals.c`, `api/pt.api`, `docs/api-reference.md` | W3b | W4, W5 | DuMate (serial) |
+| W4a | C++ wrappers and tests | `bindings/cpp/pt/pt.hpp`, `bindings/cpp/test_pt.cpp` | W3a | W3b, W3c, W4b, W5 | Q-CN |
+| W4b | Python and Java wrappers and tests | `bindings/python/pt.py`, `bindings/python/test_pt.py`, `bindings/java/src/pt/Pt.java`, `bindings/java/test/pt/PtTest.java` | W3a | W3b, W3c, W4a, W5 | WB-CN |
+| W5 | Public guides, four-language example, bilingual pairs, README "what is new" | `docs/quickstart.md` + zh, `docs/architecture.md` + zh, `docs/accessibility.md` + zh, `docs/bindings.md` + zh, `README.md` + `README.zh-CN.md`, `examples/`, `Makefile` (example targets only), `docs/m25-design.md` (status) | W3a | W2, W3b, W3c, W4 | Lobster |
+| W6 | Merge, full gate, 2.3.0 version/release record, tag-ready | `include/pt/base.h` (version macros only), `Makefile` (`VERSION`), `docs/release.md`, `docs/ROADMAP.md`, `docs/m25-design.md` (final) | W1-W5 | none | Lobster + DuMate |
+
+`src/rich_text.c`, `src/text_layout.c`, `src/font.c`, `src/paint.c`, `src/widget.c`,
+`src/internal.h`, `include/pt/base.h` and `include/pt/widget.h` are the serial
+domain: W1 and W3 are sequential and the same owner. `src/image_run.c`,
+`src/a11y_bridge.c`, each binding language file and the docs/examples tree are
+independent and can run concurrently. `api/pt.api` and
+`docs/api-reference.md` are updated only by W1 and W3c, after implementation.
+
+### Completion criteria
+
+- `api/pt.api` reads 581 / 960 (580 / 959 if the insert helper is deferred);
+  binding parity 581/581 in C++, Python and Java; `ABI_MAJOR` 1 and SONAME
+  `libpt.so.1`; no existing enum value or struct layout moves.
+- Text without images is byte-identical to 2.2.0: `tools/ltr-compat.sh` 11/11
+  `SAME`, existing snapshots unchanged, `make check` green with additive tests
+  only.
+- Labels and text areas render, wrap, measure, baseline-align and select inline
+  images atomically; caret movement skips the whole placeholder; the painted
+  selection is one rectangle; undo/redo restores text and image together.
+- Copying a selection replaces U+FFFC with alt text (or keeps U+FFFC when alt is
+  empty); cut removes the placeholder and descriptor.
+- AT-SPI exposes one named image child per run, keeps raw U+FFFC and unchanged
+  character offsets, and emits a structure event when the set changes.
+- `check-bilingual-docs.py`, `gen-api-reference.py --check`,
+  `gen-binding-stubs.py --check --strict`, the staged-install consumers and the
+  serial sanitizer pass are green; `git status` is clean.
+
+### Budget
+
+~750-850 credits. W0 ~60, W1 ~150, W2 ~120, W3 ~260 (serial hot spot), W4 ~70,
+W5 ~70, W6 ~70. DuMate carries W1 + W3 (~50%); Loomy runs W2 as a single agent
+(~15%); Q-CN and WB-CN split the binding files in parallel (~18%); Lobster
+takes docs/examples and integration/release (~17%). No wave may lower the 2.0
+LTR gate, the 2.2 RTL gate or binding parity to land images.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
