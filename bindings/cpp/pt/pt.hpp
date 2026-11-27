@@ -849,6 +849,13 @@ class widget {
     bool redo() const {
         return is_text_area() ? pt_text_area_redo(handle_) : pt_entry_redo(handle_);
     }
+    [[nodiscard]] std::optional<uint32_t> insert_image(const pt_text_image &image) {
+        uint32_t start = 0;
+        if (!pt_text_area_insert_image(handle_, &image, &start)) {
+            return std::nullopt;
+        }
+        return start;
+    }
     widget &set_grow_to_content(bool enabled) {
         pt_text_area_set_grow_to_content(handle_, enabled);
         return *this;

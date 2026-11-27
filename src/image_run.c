@@ -172,6 +172,40 @@ bool pt_widget_get_text_image(const pt_widget *widget, uint32_t index,
     return true;
 }
 
+/* Inserts one descriptor at start, keeping the table sorted. The text has
+ * already been changed and the existing descriptors have been shifted by the
+ * caller, so this never sees a duplicate start; a duplicate is still replaced
+ * defensively. Takes a reference to the handle. */
+void pt_widget_images_attach(pt_widget *widget, size_t start, const pt_text_image *image) {
+    if (!widget || !image || !image->image) {
+        return;
+    }
+    pt_text_image entry = *image;
+    entry.start = (uint32_t)start;
+    image_copy_alt(entry.alt, image->alt);
+    uint32_t at = 0;
+    while (at < widget->image_count && widget->images[at].start < entry.start) {
+        ++at;
+    }
+    if (at < widget->image_count && widget->images[at].start == entry.start) {
+        pt_icon_image_destroy(widget->images[at].image);
+        pt_icon_image_ref(entry.image);
+        widget->images[at] = entry;
+        return;
+    }
+    if (widget->image_count == widget->image_capacity) {
+        uint32_t capacity = widget->image_capacity ? widget->image_capacity * 2u : 4u;
+        widget->images = pt_realloc_mem(widget->images,
+                                        (size_t)capacity * sizeof(*widget->images));
+        widget->image_capacity = capacity;
+    }
+    memmove(&widget->images[at + 1u], &widget->images[at],
+            (size_t)(widget->image_count - at) * sizeof(*widget->images));
+    pt_icon_image_ref(entry.image);
+    widget->images[at] = entry;
+    ++widget->image_count;
+}
+
 /* ---------- edit hooks ---------- */
 
 void pt_widget_images_on_insert(pt_widget *widget, size_t position, size_t length) {

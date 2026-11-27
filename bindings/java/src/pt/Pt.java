@@ -1418,6 +1418,8 @@ public final class Pt {
             "pt_text_area_get_selection", desc(bool, ptr, ptr, ptr));
     private static final MethodHandle text_area_undo = bind("pt_text_area_undo", desc(bool, ptr));
     private static final MethodHandle text_area_redo = bind("pt_text_area_redo", desc(bool, ptr));
+    private static final MethodHandle text_area_insert_image = bind(
+            "pt_text_area_insert_image", desc(bool, ptr, ptr, ptr));
     private static final MethodHandle wrap_set_gap = bind("pt_wrap_set_gap",
             FunctionDescriptor.ofVoid(ptr, f32, f32));
     private static final MethodHandle grid_set_columns = bind("pt_grid_set_columns",
@@ -4048,24 +4050,27 @@ public final class Pt {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment array = arena.allocate(text_image_layout, images.length);
             for (int i = 0; i < images.length; ++i) {
-                TextImage image = images[i];
                 MemorySegment slot =
                         array.asSlice(i * text_image_layout.byteSize(), text_image_layout.byteSize());
-                slot.set(ValueLayout.JAVA_INT, 0, image.start());
-                slot.set(ValueLayout.JAVA_LONG, 8, image.image());
-                slot.set(ValueLayout.JAVA_FLOAT, 16, image.width());
-                slot.set(ValueLayout.JAVA_FLOAT, 20, image.height());
-                slot.set(ValueLayout.JAVA_INT, 24, image.align());
-                MemorySegment alt = slot.asSlice(28, 128);
-                alt.fill((byte) 0);
-                String text = image.alt();
-                if (text != null && !text.isEmpty()) {
-                    byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
-                    MemorySegment source = MemorySegment.ofArray(encoded);
-                    MemorySegment.copy(source, 0, alt, 0, Math.min(encoded.length, 127));
-                }
+                write_text_image(slot, images[i]);
             }
             return (boolean) invoke(widget_set_text_images, widget, array, images.length);
+        }
+    }
+
+    private static void write_text_image(MemorySegment slot, TextImage image) {
+        slot.set(ValueLayout.JAVA_INT, 0, image.start());
+        slot.set(ValueLayout.JAVA_LONG, 8, image.image());
+        slot.set(ValueLayout.JAVA_FLOAT, 16, image.width());
+        slot.set(ValueLayout.JAVA_FLOAT, 20, image.height());
+        slot.set(ValueLayout.JAVA_INT, 24, image.align());
+        MemorySegment alt = slot.asSlice(28, 128);
+        alt.fill((byte) 0);
+        String text = image.alt();
+        if (text != null && !text.isEmpty()) {
+            byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
+            MemorySegment source = MemorySegment.ofArray(encoded);
+            MemorySegment.copy(source, 0, alt, 0, Math.min(encoded.length, 127));
         }
     }
 
@@ -4469,6 +4474,30 @@ public final class Pt {
 
     public static boolean text_area_redo(MemorySegment area) {
         return (boolean) invoke(text_area_redo, area);
+    }
+
+    /**
+     * Inserts one inline image at the text-area caret.
+     *
+     * <p>Returns the UTF-8 byte offset of the new U+FFFC placeholder, or -1 when
+     * the call is rejected (not a text area, null image handle, caret inside an
+     * existing placeholder, or the text limit). The widget takes its own
+     * reference to {@code image.image()}; the caller may release its handle
+     * after a successful call.
+     */
+    public static int text_area_insert_image(MemorySegment area, TextImage image) {
+        if (image == null) {
+            return -1;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment slot = arena.allocate(text_image_layout);
+            write_text_image(slot, image);
+            MemorySegment start = arena.allocate(i32);
+            if (!(boolean) invoke(text_area_insert_image, area, slot, start)) {
+                return -1;
+            }
+            return start.get(i32, 0);
+        }
     }
 
     public static void wrap_set_gap(MemorySegment wrap, float row_gap, float column_gap) {

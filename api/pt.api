@@ -726,6 +726,7 @@ func pt_tabs_set_strip_height voidpt_tabs_set_strip_height(pt_widget*tabs,floath
 func pt_text_area_create pt_widget*pt_text_area_create(pt_widget*parent,constchar*placeholder)
 func pt_text_area_get_grow_to_content boolpt_text_area_get_grow_to_content(constpt_widget*area)
 func pt_text_area_get_selection boolpt_text_area_get_selection(constpt_widget*area,uint32_t*start,uint32_t*end)
+func pt_text_area_insert_image boolpt_text_area_insert_image(pt_widget*area,constpt_text_image*image,uint32_t*start)
 func pt_text_area_redo boolpt_text_area_redo(pt_widget*area)
 func pt_text_area_scroll_to_caret voidpt_text_area_scroll_to_caret(pt_widget*area)
 func pt_text_area_select_all voidpt_text_area_select_all(pt_widget*area)

@@ -493,6 +493,24 @@ pt_api bool pt_text_area_undo(pt_widget *area);
 /* Since 1.0. */
 pt_api bool pt_text_area_redo(pt_widget *area);
 
+/* Inserts one U+FFFC object replacement character at the text area's caret,
+ * replacing the current selection, and attaches image to it. image->start is
+ * ignored; the byte offset of the new placeholder is written to start when
+ * start is not NULL. The descriptor is copied, alt is truncated to 127 bytes
+ * like the setter, and the text area takes its own reference to image->image,
+ * so the caller may destroy its own handle after a successful call. The text
+ * change is recorded in undo history with the normal text-edit semantics.
+ *
+ * Returns false without changing the text or the image table when area is NULL
+ * or not a text area, image or image->image is NULL, the caret or a selection
+ * endpoint is not a UTF-8 boundary (this includes the interior of an existing
+ * U+FFFC placeholder, so a placeholder is never split), or the insertion would
+ * reach the text byte limit. A selection that fully covers an existing
+ * placeholder removes that descriptor together with its text; a new descriptor
+ * for the inserted placeholder takes its place. Since 2.3. */
+pt_api bool pt_text_area_insert_image(pt_widget *area, const pt_text_image *image,
+                                      uint32_t *start);
+
 /* Responsive containers. Wrap lays children into rows that fit the available
  * width; grid places them in equal-width columns. Defaults to stretch
  * children; use pt_widget_set_align_self for a different cross-axis rule. Since 1.0. */

@@ -422,6 +422,7 @@ void pt_widget_spans_clamp(pt_widget *widget);
 void pt_widget_images_clear(pt_widget *widget);
 void pt_widget_images_on_insert(pt_widget *widget, size_t position, size_t length);
 void pt_widget_images_on_delete(pt_widget *widget, size_t start, size_t end);
+void pt_widget_images_attach(pt_widget *widget, size_t start, const pt_text_image *image);
 void pt_widget_images_clamp(pt_widget *widget);
 bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_text_runs *out);
 /* Resolved paragraph base for single-line text without running the full UBA:

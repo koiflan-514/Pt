@@ -2617,6 +2617,45 @@ bool pt_text_area_redo(pt_widget *area) {
     return area && area->kind == pt_widget_text_area && entry_history_step(area, true);
 }
 
+bool pt_text_area_insert_image(pt_widget *area, const pt_text_image *image,
+                               uint32_t *start) {
+    if (!area || area->kind != pt_widget_text_area || !image || !image->image) {
+        return false;
+    }
+    const char *text = area->text ? area->text : "";
+    size_t len = strlen(text);
+    size_t at = entry_cursor_clamped(area, area->cursor);
+    size_t end = at;
+    if (entry_has_selection(area)) {
+        entry_selection_range(area, &at, &end);
+    }
+    /* Both endpoints must be UTF-8 boundaries. U+FFFC is EF BF BC, so an
+     * offset inside a placeholder is a continuation byte and is rejected
+     * before any text can split the object. */
+    if (at > len || (at < len && ((unsigned char)text[at] & 0xC0u) == 0x80u) ||
+        end > len || (end < len && ((unsigned char)text[end] & 0xC0u) == 0x80u)) {
+        return false;
+    }
+    size_t removed = end - at;
+    if (len - removed + 3u >= pt_entry_max_bytes) {
+        return false;
+    }
+    /* The normal text insertion path owns the history snapshot, span shift,
+     * text-changed event and on_change callback. The image table is updated
+     * afterwards because the history snapshot is text-only in this wave. */
+    entry_insert_text(area, "\xEF\xBF\xBC");
+    if (removed > 0) {
+        pt_widget_images_on_delete(area, at, end);
+    }
+    pt_widget_images_on_insert(area, at, 3);
+    pt_widget_images_attach(area, at, image);
+    pt_widget_a11y_emit(area, pt_a11y_event_structure_changed);
+    if (start) {
+        *start = (uint32_t)at;
+    }
+    return true;
+}
+
 bool pt_toggle_get_checked(const pt_widget *toggle) {
     return toggle && toggle->kind == pt_widget_toggle ? toggle->checked : false;
 }

@@ -13,6 +13,26 @@
 
 #define placeholder "\xEF\xBF\xBC"
 
+typedef struct insert_event_log {
+    int text_changed;
+    int structure_changed;
+    pt_widget *last_widget;
+} insert_event_log;
+
+static insert_event_log insert_events;
+
+static void on_insert_a11y_event(pt_window *window, pt_widget *widget,
+                                 pt_a11y_event_type event, void *data) {
+    (void)window;
+    insert_event_log *log = data;
+    log->last_widget = widget;
+    if (event == pt_a11y_event_text_changed) {
+        ++log->text_changed;
+    } else if (event == pt_a11y_event_structure_changed) {
+        ++log->structure_changed;
+    }
+}
+
 static pt_icon_image *make_icon(void) {
     size_t size = 0;
     uint32_t pixels[16];
@@ -461,6 +481,233 @@ static void test_edit_hooks(pt_widget *root) {
     pt_widget_destroy(label);
 }
 
+static void test_insert_roundtrip(pt_widget *root) {
+    size_t baseline = pt_icon_cache_entry_count();
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_icon_image *icon = make_icon();
+    pt_check(area != NULL && icon != NULL);
+    if (!area || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_widget_destroy(area);
+        return;
+    }
+    int stride = 0;
+    pt_check(pt_icon_image_raster(icon, 4, 4, &stride) != NULL);
+    pt_check(stride == 4);
+    pt_check(pt_icon_cache_entry_count() == baseline + 1);
+
+    pt_text_image entry = descriptor(999, icon);
+    entry.width = 12.5f;
+    entry.height = 6.0f;
+    entry.align = pt_text_image_align_middle;
+    memcpy(entry.alt, "chart", 6);
+
+    int text_before = insert_events.text_changed;
+    int structure_before = insert_events.structure_changed;
+    uint32_t start = 123;
+    pt_check(pt_text_area_insert_image(area, &entry, &start));
+    pt_check(start == 0);
+    pt_check(strcmp(pt_widget_get_text(area), placeholder) == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_text_image got = {0};
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 0);
+    pt_check(got.image == icon);
+    pt_check_near(got.width, 12.5f, 0.0001);
+    pt_check_near(got.height, 6.0f, 0.0001);
+    pt_check(got.align == pt_text_image_align_middle);
+    pt_check(strcmp(got.alt, "chart") == 0);
+
+    /* The caret sits after the three placeholder bytes. */
+    pt_check(area->cursor == 3);
+    pt_check(area->selection_anchor == 3);
+
+    /* One text-changed event from the normal insert path and one structure
+     * event from the side table update. */
+    pt_check(insert_events.text_changed == text_before + 1);
+    pt_check(insert_events.structure_changed == structure_before + 1);
+    pt_check(insert_events.last_widget == area);
+
+    /* The widget owns its own reference and start may be NULL. */
+    pt_icon_image_destroy(icon);
+    pt_check(pt_icon_cache_entry_count() == baseline + 1);
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.image == icon);
+    pt_check(pt_icon_image_width(got.image) == 4);
+    pt_check(pt_text_area_insert_image(area, &got, NULL));
+    pt_check(pt_widget_get_text_image_count(area) == 2);
+    pt_check(strcmp(pt_widget_get_text(area), placeholder placeholder) == 0);
+
+    pt_widget_destroy(area);
+    pt_check(pt_icon_cache_entry_count() == baseline);
+}
+
+static void test_insert_shift(pt_widget *root) {
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_icon_image *icon = make_icon();
+    pt_check(area != NULL && icon != NULL);
+    if (!area || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_widget_destroy(area);
+        return;
+    }
+    pt_widget_set_text(area, "ab");
+
+    /* Each insert lands at the caret; inserting before an existing image
+     * shifts it, inserting after it leaves it alone. */
+    pt_text_image item = descriptor(0, icon);
+    pt_text_area_set_selection(area, 2, 2);
+    pt_check(pt_text_area_insert_image(area, &item, NULL));
+    pt_text_area_set_selection(area, 2, 2);
+    pt_check(pt_text_area_insert_image(area, &item, NULL));
+    pt_text_area_set_selection(area, 5, 5);
+    pt_check(pt_text_area_insert_image(area, &item, NULL));
+    pt_text_area_set_selection(area, 8, 8);
+    pt_check(pt_text_area_insert_image(area, &item, NULL));
+    pt_text_area_set_selection(area, 14, 14);
+    pt_check(pt_text_area_insert_image(area, &item, NULL));
+
+    pt_check(strcmp(pt_widget_get_text(area),
+                    "ab" placeholder placeholder placeholder placeholder placeholder) == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 5);
+    pt_text_image got = {0};
+    uint32_t expected[5] = {2, 5, 8, 11, 14};
+    for (uint32_t i = 0; i < 5; ++i) {
+        pt_check(pt_widget_get_text_image(area, i, &got));
+        pt_check(got.start == expected[i]);
+        pt_check(got.image == icon);
+    }
+
+    /* Replacing a fully covered placeholder removes the old descriptor and
+     * assigns the inserted one. */
+    pt_widget_set_text(area, "ab" placeholder "cd");
+    pt_icon_image *old = make_icon();
+    pt_check(old != NULL);
+    pt_text_image old_entry = descriptor(2, old);
+    pt_check(pt_widget_set_text_images(area, &old_entry, 1));
+    pt_icon_image_destroy(old);
+
+    pt_icon_image *fresh = make_icon();
+    pt_check(fresh != NULL);
+    pt_text_image fresh_entry = descriptor(3, fresh);
+    uint32_t start = 99;
+    pt_text_area_set_selection(area, 0, 5);
+    pt_check(pt_text_area_insert_image(area, &fresh_entry, &start));
+    pt_check(start == 0);
+    pt_check(strcmp(pt_widget_get_text(area), placeholder "cd") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 0);
+    pt_check(got.image == fresh);
+
+    pt_icon_image_destroy(fresh);
+    pt_widget_destroy(area);
+    pt_icon_image_destroy(icon);
+}
+
+static void test_insert_rejections(pt_widget *root) {
+    pt_icon_image *icon = make_icon();
+    pt_check(icon != NULL);
+    if (!icon) {
+        return;
+    }
+    pt_text_image entry = descriptor(0, icon);
+    uint32_t start = 1;
+
+    pt_check(!pt_text_area_insert_image(NULL, &entry, &start));
+    pt_check(start == 1);
+
+    pt_widget *label = pt_label_create(root, "label");
+    pt_check(!pt_text_area_insert_image(label, &entry, &start));
+    pt_check(pt_widget_get_text_image_count(label) == 0);
+    pt_widget_destroy(label);
+
+    pt_widget *single = pt_entry_create(root, "");
+    pt_check(!pt_text_area_insert_image(single, &entry, &start));
+    pt_widget_destroy(single);
+
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_check(!pt_text_area_insert_image(area, NULL, &start));
+    entry.image = NULL;
+    pt_check(!pt_text_area_insert_image(area, &entry, &start));
+    entry.image = icon;
+    pt_check(strcmp(pt_widget_get_text(area), "") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+
+    /* An insertion point inside the placeholder bytes is not a UTF-8
+     * boundary; splitting the object is rejected before any mutation. */
+    pt_widget_set_text(area, "ab" placeholder "cd");
+    pt_check(pt_widget_set_text_images(area, &(pt_text_image){.start = 2, .image = icon}, 1));
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_text_area_set_selection(area, 3, 3);
+    pt_check(!pt_text_area_insert_image(area, &entry, &start));
+    pt_text_area_set_selection(area, 4, 4);
+    pt_check(!pt_text_area_insert_image(area, &entry, &start));
+    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder "cd") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+
+    /* A selection endpoint inside the placeholder is rejected too. */
+    pt_text_area_set_selection(area, 0, 3);
+    pt_check(!pt_text_area_insert_image(area, &entry, &start));
+    pt_text_area_set_selection(area, 0, 4);
+    pt_check(!pt_text_area_insert_image(area, &entry, &start));
+    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder "cd") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_text_area_set_selection(area, 5, 5);
+
+    /* An interior byte of any other multi-byte codepoint is rejected as well. */
+    pt_widget_set_text(area, "\xC3\xA9");
+    area->cursor = 1;
+    area->selection_anchor = 1;
+    pt_check(!pt_text_area_insert_image(area, &entry, &start));
+    pt_check(strcmp(pt_widget_get_text(area), "\xC3\xA9") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+
+    /* The text byte cap matches the normal insert path. */
+    pt_widget *bounded = pt_text_area_create(root, "");
+    char *huge = malloc(pt_entry_max_bytes + 1u);
+    pt_check(huge != NULL);
+    if (huge) {
+        memset(huge, 'a', pt_entry_max_bytes - 3u);
+        huge[pt_entry_max_bytes - 3u] = '\0';
+        pt_widget_set_text(bounded, huge);
+        pt_check(strlen(pt_widget_get_text(bounded)) == pt_entry_max_bytes - 3u);
+        pt_check(!pt_text_area_insert_image(bounded, &entry, &start));
+        huge[pt_entry_max_bytes - 4u] = '\0';
+        pt_widget_set_text(bounded, huge);
+        pt_check(pt_text_area_insert_image(bounded, &entry, &start));
+        pt_check(start == pt_entry_max_bytes - 4u);
+        free(huge);
+    }
+    pt_widget_destroy(bounded);
+    pt_widget_destroy(area);
+    pt_icon_image_destroy(icon);
+}
+
+static void test_insert_undo_text(pt_widget *root) {
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_icon_image *icon = make_icon();
+    pt_check(area != NULL && icon != NULL);
+    if (!area || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_widget_destroy(area);
+        return;
+    }
+    pt_widget_set_text(area, "ab");
+    pt_text_area_set_selection(area, 2, 2);
+    pt_text_image undo_entry = descriptor(0, icon);
+    pt_check(pt_text_area_insert_image(area, &undo_entry, NULL));
+    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder) == 0);
+
+    /* The insert goes through the normal text path, so undo restores the text.
+     * The image snapshot follows the same history in the editor wave. */
+    pt_check(pt_text_area_undo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "ab") == 0);
+
+    pt_icon_image_destroy(icon);
+    pt_widget_destroy(area);
+}
+
 static void test_zero_regression(pt_widget *root) {
     pt_widget *label = pt_label_create(root, "plain text");
     pt_check(pt_widget_get_text_image_count(label) == 0);
@@ -483,6 +730,8 @@ int main(void) {
     if (!app) {
         return pt_test_finish("text_image");
     }
+    memset(&insert_events, 0, sizeof(insert_events));
+    pt_app_set_a11y_callback(app, on_insert_a11y_event, &insert_events);
     pt_window *window = pt_window_create(app, "text image", 320, 200);
     pt_check(window != NULL);
     if (!window) {
@@ -497,6 +746,10 @@ int main(void) {
     test_null_discard_order(root);
     test_reference_counting(root);
     test_edit_hooks(root);
+    test_insert_roundtrip(root);
+    test_insert_shift(root);
+    test_insert_rejections(root);
+    test_insert_undo_text(root);
     test_zero_regression(root);
 
     pt_window_free(window);

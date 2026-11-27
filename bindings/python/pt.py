@@ -2017,6 +2017,13 @@ _pt_text_area_get_selection = _proto(
 )
 _pt_text_area_undo = _proto("pt_text_area_undo", _c_bool, _c_void_p)
 _pt_text_area_redo = _proto("pt_text_area_redo", _c_bool, _c_void_p)
+_pt_text_area_insert_image = _proto(
+    "pt_text_area_insert_image",
+    _c_bool,
+    _c_void_p,
+    _ctypes.POINTER(TextImage),
+    _ctypes.POINTER(_c_uint32),
+)
 _pt_wrap_create = _proto("pt_wrap_create", _c_void_p, _c_void_p)
 _pt_wrap_set_gap = _proto("pt_wrap_set_gap", None, _c_void_p, _c_float, _c_float)
 _pt_grid_create = _proto("pt_grid_create", _c_void_p, _c_void_p, _c_uint32)
@@ -3709,6 +3716,19 @@ class Widget:
         if self.kind == _widget_text_area:
             return bool(_pt_text_area_redo(self._ptr))
         return bool(_pt_entry_redo(self._ptr))
+
+    def insert_image(self, image: TextImage) -> Optional[int]:
+        """Insert one inline image at the caret; return its byte offset or None.
+
+        Only text areas accept an image. The widget takes its own reference to
+        ``image.image``; the caller may destroy its handle after a success.
+        """
+        start = _c_uint32(0)
+        if not _pt_text_area_insert_image(
+            self._ptr, _ctypes.byref(image), _ctypes.byref(start)
+        ):
+            return None
+        return int(start.value)
 
     def set_grow_to_content(self, enabled: bool = True) -> "Widget":
         self.grow_to_content = enabled
