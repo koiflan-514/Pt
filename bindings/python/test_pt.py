@@ -2873,6 +2873,17 @@ class M19BindingTests(unittest.TestCase):
 
 
 _FC_OPT_ALL = 0x1FF
+# 2.4 globals are deliberately outside FC_OPT_ALL; opt in explicitly.
+_FC_OPT_ACTIVATION = 1 << 11
+_FC_OPT_FOREIGN = 1 << 12
+# fc_kind values (tests/fake_compositor.h); activation and foreign follow the
+# tablet kinds added in 2.3.
+_FC_K_ACTIVATION = 44
+_FC_K_ACTIVATION_TOKEN = 45
+_FC_K_EXPORTER = 46
+_FC_K_EXPORTED = 47
+_FC_K_IMPORTER = 48
+_FC_K_IMPORTED = 49
 _WIRE_DRIVER: Any = None
 
 
@@ -2899,6 +2910,9 @@ def _load_wire_driver() -> Any:
         "wd_wait_configured": (ctypes.c_int,
                                [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]),
         "wd_toplevel_surface": (ctypes.c_uint32, []),
+        "wd_live_id": (ctypes.c_uint32, [ctypes.c_uint32]),
+        "wd_global_bound": (ctypes.c_int, [ctypes.c_uint32]),
+        "wd_request_count": (ctypes.c_int, [ctypes.c_uint32, ctypes.c_uint32]),
         "wd_request_overflowed": (ctypes.c_int, []),
         "wd_pending_fd_count": (ctypes.c_int, []),
         "wd_keyboard_enter": (None, [ctypes.c_uint32, ctypes.c_uint32]),
@@ -2960,7 +2974,10 @@ class WireDispatchTests(unittest.TestCase):
         self.window.show()
         self.assertEqual(
             self.driver.wd_wait_configured(self.app.raw, self.window.raw, 300), 1)
-        self.assertEqual(self.driver.wd_settle(self.app.raw), 0)
+        # Several roundtrips flush the registry so the 2.4 globals bind before
+        # the first assertion runs; wd_sync is what every wire test settles on.
+        for _ in range(4):
+            self.assertEqual(self.driver.wd_sync(self.app.raw), 0)
         self.surface = int(self.driver.wd_toplevel_surface())
         self.assertNotEqual(self.surface, 0)
 
@@ -3054,6 +3071,308 @@ class WireDispatchTests(unittest.TestCase):
         self.assertEqual(self.pointer_events[5].phase, pt.pointer_phase_leave)
         self.assertFalse(driver.wd_error())
         self.assertEqual(driver.wd_pending_fd_count(), 0)
+
+
+class ActivationForeignBindingTests(unittest.TestCase):
+    """2.4 wave: xdg-activation-v1 tokens and xdg-foreign-unstable-v2 handles.
+
+    The headless cases pin the documented fallback and argument rejection; the
+    wire cases drive a private fake compositor that advertises the globals so
+    the token/handle trampolines are exercised through real protocol traffic.
+    """
+
+    def setUp(self) -> None:
+        self.app = pt.App("pt.tests.python.24")
+        self.window = pt.Window(self.app, "python 2.4 tests", 400, 300)
+
+    def tearDown(self) -> None:
+        self.app.destroy()
+
+    # ------------------------------------------------------------------
+    # Signatures: callback shape and restype/argtypes pins
+    # ------------------------------------------------------------------
+
+    def test_24_binding_signatures(self) -> None:
+        v = ctypes.c_void_p
+        cp = ctypes.c_char_p
+        b = ctypes.c_bool
+        signatures: dict[str, tuple[Any, list[Any]]] = {
+            "pt_window_request_activation_token": (b, [v, cp, pt._ACTIVATION_TOKEN, v]),
+            "pt_window_activate": (b, [v, cp]),
+            "pt_window_export_foreign_handle": (b, [v, pt._FOREIGN_HANDLE, v]),
+            "pt_window_unexport_foreign_handle": (None, [v]),
+            "pt_window_set_foreign_parent": (b, [v, cp]),
+            "pt_window_clear_foreign_parent": (None, [v]),
+        }
+        for name, (restype, argtypes) in signatures.items():
+            function = getattr(pt, "_" + name)
+            self.assertEqual(function.restype, restype, name)
+            self.assertEqual(function.argtypes, argtypes, name)
+        # Both borrowed-string callbacks are (window, const char *, user_data).
+        # The CFUNCTYPE emits no return value.
+        for kind in (pt._ACTIVATION_TOKEN, pt._FOREIGN_HANDLE):
+            self.assertIs(kind._restype_, None)  # void return
+            self.assertEqual(len(kind._argtypes_), 3)
+            self.assertIs(kind._argtypes_[0], v)  # pt_window *
+            self.assertIs(kind._argtypes_[1], cp)  # borrowed const char *
+            self.assertIs(kind._argtypes_[2], v)  # user_data
+            # The public wrapper keeps a reference: a CFUNCTYPE is callable
+            # and has a stable size once instantiated.
+            self.assertGreaterEqual(ctypes.sizeof(kind), ctypes.sizeof(v))
+        self.assertTrue(callable(pt._ACTIVATION_TOKEN))
+        self.assertTrue(callable(pt._FOREIGN_HANDLE))
+
+    # ------------------------------------------------------------------
+    # Headless: absent globals, NULL and empty arguments
+    # ------------------------------------------------------------------
+
+    def test_24_headless_fallback(self) -> None:
+        calls: list[str] = []
+        self.assertFalse(self.window.request_activation_token(
+            None, lambda _w, token: calls.append(token)))
+        self.assertFalse(self.window.request_activation_token(
+            "pt.tests.target", lambda _w, token: calls.append(token)))
+        self.assertFalse(self.window.activate("opaque-token"))
+        self.assertFalse(self.window.export_foreign_handle(
+            lambda _w, handle: calls.append(handle)))
+        self.assertIsNone(self.window.unexport_foreign_handle())
+        self.assertFalse(self.window.set_foreign_parent("opaque-handle"))
+        self.assertIsNone(self.window.clear_foreign_parent())
+        # No fallback path delivers a token or handle.
+        self.assertEqual(calls, [])
+
+    def test_24_null_and_empty_rejected(self) -> None:
+        # A NULL callback is rejected before any native call is made.
+        self.assertFalse(self.window.request_activation_token(None, None))
+        self.assertFalse(self.window.export_foreign_handle(None))
+        # Empty app id is treated as absent (still false headless, not a raise).
+        self.assertFalse(self.window.request_activation_token(
+            "", lambda _w, _t: None))
+        # NULL or empty token/handle is rejected by the C contract.
+        self.assertFalse(self.window.activate(""))
+        self.assertFalse(self.window.set_foreign_parent(""))
+        # The no-op tear-downs never raise, even when nothing exists.
+        self.window.unexport_foreign_handle()
+        self.window.clear_foreign_parent()
+
+    def test_24_failed_request_does_not_root(self) -> None:
+        # A rejected request leaves no trampoline behind: Pt kept no reference,
+        # so rooting it would leak for the life of the process.
+        before = len(pt._callback_roots)
+        window_before = len(self.window._callbacks)
+        self.assertFalse(self.window.request_activation_token(
+            None, lambda _w, _t: None))
+        self.assertFalse(self.window.export_foreign_handle(lambda _w, _h: None))
+        self.assertEqual(len(pt._callback_roots), before)
+        self.assertEqual(len(self.window._callbacks), window_before)
+
+    def test_24_idempotent_teardown(self) -> None:
+        # unexport/clear are no-ops that may be called any number of times.
+        self.window.unexport_foreign_handle()
+        self.window.unexport_foreign_handle()
+        self.window.clear_foreign_parent()
+        self.window.clear_foreign_parent()
+        self.assertIsNone(self.window.unexport_foreign_handle())
+
+
+class ActivationForeignWireTests(unittest.TestCase):
+    """2.4 wave over a fake compositor that advertises activation and foreign.
+
+    The token/handle delivery test needs the wire driver to forward the two
+    compositor events. tests/wire_driver.c does not yet export those helpers,
+    so the class probes for them and skips the delivery cases with a clear
+    message while still exercising the request path and rejection rules.
+    """
+
+    # Optional driver helpers; absent until tests/wire_driver.c forwards them.
+    _TOKEN_DONE = "wd_activation_token_done"
+    _EXPORTED_HANDLE = "wd_exported_handle"
+
+    def setUp(self) -> None:
+        self._headless = os.environ.pop("PT_HEADLESS", None)
+        self.addCleanup(self._restore_headless)
+        self.driver = _load_wire_driver()
+        self.assertEqual(
+            self.driver.wd_start(_FC_OPT_ALL | _FC_OPT_ACTIVATION | _FC_OPT_FOREIGN), 0,
+            (self.driver.wd_error() or b"").decode("utf-8", "replace"))
+        self.addCleanup(self.driver.wd_stop)
+        self.app = pt.App("pt.tests.python.24.wire")
+        self.addCleanup(self.app.destroy)
+        self.window = pt.Window(self.app, "python 2.4 wire", 320, 240)
+        self.window.show()
+        self.assertEqual(
+            self.driver.wd_wait_configured(self.app.raw, self.window.raw, 300), 1)
+        # Several roundtrips flush the registry so the 2.4 globals bind before
+        # the first assertion runs; wd_sync is what every wire test settles on.
+        for _ in range(4):
+            self.assertEqual(self.driver.wd_sync(self.app.raw), 0)
+
+    def _restore_headless(self) -> None:
+        if self._headless is not None:
+            os.environ["PT_HEADLESS"] = self._headless
+
+    def _sync(self) -> None:
+        self.assertEqual(self.driver.wd_sync(self.app.raw), 0)
+
+    def _driver_helper(self, name: str, restype: Any, *argtypes: Any) -> Any:
+        """Binds an optional driver export or skips when it is absent."""
+        try:
+            function = getattr(self.driver, name)
+        except AttributeError:
+            self.skipTest(
+                f"wire driver does not export {name}; "
+                "tests/wire_driver.c must forward the 2.4 compositor events")
+        function.restype = restype
+        function.argtypes = list(argtypes)
+        return function
+
+    def test_24_globals_bound(self) -> None:
+        driver = self.driver
+        self.assertEqual(driver.wd_global_bound(_FC_K_ACTIVATION), 1)
+        self.assertEqual(driver.wd_global_bound(_FC_K_EXPORTER), 1)
+        self.assertEqual(driver.wd_global_bound(_FC_K_IMPORTER), 1)
+
+    def test_24_activation_token_dispatch(self) -> None:
+        driver = self.driver
+        token_done = self._driver_helper(
+            self._TOKEN_DONE, ctypes.c_int, ctypes.c_char_p)
+        tokens: list[str] = []
+        self.assertTrue(self.window.request_activation_token(
+            "pt.tests.outer", lambda _w, token: tokens.append(token)))
+        self._sync()
+        # The request created a token object and reached the compositor.
+        self.assertEqual(
+            driver.wd_request_count(_FC_K_ACTIVATION, 1), 1)  # get_activation_token
+        self.assertNotEqual(driver.wd_live_id(_FC_K_ACTIVATION_TOKEN), 0)
+        self.assertEqual(tokens, [])
+        self.assertEqual(token_done(b"outer-token"), 1)
+        self._sync()
+        # The borrowed bytes were copied into an owned Python string.
+        self.assertEqual(tokens, ["outer-token"])
+        self.assertFalse(driver.wd_error())
+
+    def test_24_activation_token_borrow_copied(self) -> None:
+        token_done = self._driver_helper(
+            self._TOKEN_DONE, ctypes.c_int, ctypes.c_char_p)
+        kept: list[str] = []
+        self.assertTrue(self.window.request_activation_token(
+            None, lambda _w, token: kept.append(token)))
+        self._sync()
+        self.assertEqual(token_done(b"borrow-token"), 1)
+        self._sync()
+        self.assertEqual(len(kept), 1)
+        gc.collect()
+        self.assertIsInstance(kept[0], str)
+        self.assertEqual(kept[0], "borrow-token")
+        # A second request replaces the pending token and drops the first
+        # callback; only the newest request sees the next done.
+        second: list[str] = []
+        self.assertTrue(self.window.request_activation_token(
+            None, lambda _w, token: second.append(token)))
+        self._sync()
+        self.assertEqual(token_done(b"second-token"), 1)
+        self._sync()
+        self.assertEqual(kept, ["borrow-token"])
+        self.assertEqual(second, ["second-token"])
+
+    def test_24_activation_invalid_token(self) -> None:
+        token_done = self._driver_helper(
+            self._TOKEN_DONE, ctypes.c_int, ctypes.c_char_p)
+        tokens: list[str] = []
+        self.assertTrue(self.window.request_activation_token(
+            None, lambda _w, token: tokens.append(token)))
+        self._sync()
+        # An empty token means the compositor returned no usable token; it is
+        # delivered as "" rather than None.
+        self.assertEqual(token_done(b""), 1)
+        self._sync()
+        self.assertEqual(tokens, [""])
+
+    def test_24_activate_sends_once(self) -> None:
+        driver = self.driver
+        self.assertTrue(self.window.activate("activate-me"))
+        self._sync()
+        self.assertEqual(driver.wd_request_count(_FC_K_ACTIVATION, 2), 1)
+        self.assertFalse(driver.wd_error())
+        # NULL/empty never reaches the compositor.
+        self.assertFalse(self.window.activate(""))
+        self._sync()
+        self.assertEqual(driver.wd_request_count(_FC_K_ACTIVATION, 2), 1)
+
+    def test_24_foreign_export_dispatch_and_release(self) -> None:
+        driver = self.driver
+        exported = self._driver_helper(
+            self._EXPORTED_HANDLE, ctypes.c_int, ctypes.c_char_p)
+        handles: list[str] = []
+        self.assertTrue(self.window.export_foreign_handle(
+            lambda _w, handle: handles.append(handle)))
+        self._sync()
+        self.assertEqual(driver.wd_request_count(_FC_K_EXPORTER, 1), 1)  # export_toplevel
+        self.assertNotEqual(driver.wd_live_id(_FC_K_EXPORTED), 0)
+        self.assertEqual(handles, [])
+        self.assertEqual(exported(b"exported-handle"), 1)
+        self._sync()
+        self.assertEqual(handles, ["exported-handle"])
+        # unexport destroys the object; a second unexport is a no-op.
+        self.window.unexport_foreign_handle()
+        self._sync()
+        self.assertEqual(driver.wd_live_id(_FC_K_EXPORTED), 0)
+        self.window.unexport_foreign_handle()
+        self._sync()
+        self.assertFalse(driver.wd_error())
+
+    def test_24_foreign_re_export_replaces(self) -> None:
+        driver = self.driver
+        exported = self._driver_helper(
+            self._EXPORTED_HANDLE, ctypes.c_int, ctypes.c_char_p)
+        first: list[str] = []
+        second: list[str] = []
+        self.assertTrue(self.window.export_foreign_handle(
+            lambda _w, handle: first.append(handle)))
+        self._sync()
+        first_id = driver.wd_live_id(_FC_K_EXPORTED)
+        self.assertTrue(self.window.export_foreign_handle(
+            lambda _w, handle: second.append(handle)))
+        self._sync()
+        # Re-exporting destroys the previous object first.
+        self.assertEqual(driver.wd_request_count(_FC_K_EXPORTER, 1), 2)
+        second_id = driver.wd_live_id(_FC_K_EXPORTED)
+        self.assertNotEqual(second_id, 0)
+        self.assertNotEqual(second_id, first_id)
+        # Only the current export's callback receives the handle.
+        self.assertEqual(exported(b"second-handle"), 1)
+        self._sync()
+        self.assertEqual(first, [])
+        self.assertEqual(second, ["second-handle"])
+        self.window.unexport_foreign_handle()
+        self._sync()
+        self.assertEqual(driver.wd_live_id(_FC_K_EXPORTED), 0)
+
+    def test_24_foreign_set_and_clear_parent(self) -> None:
+        driver = self.driver
+        self.assertTrue(self.window.set_foreign_parent("parent-handle"))
+        self._sync()
+        self.assertEqual(driver.wd_request_count(_FC_K_IMPORTER, 1), 1)  # import_toplevel
+        self.assertNotEqual(driver.wd_live_id(_FC_K_IMPORTED), 0)
+        # An empty handle is rejected before reaching the compositor.
+        self.assertFalse(self.window.set_foreign_parent(""))
+        self._sync()
+        self.assertEqual(driver.wd_request_count(_FC_K_IMPORTER, 1), 1)
+        # clear destroys the import; a second clear is a no-op.
+        self.window.clear_foreign_parent()
+        self._sync()
+        self.assertEqual(driver.wd_live_id(_FC_K_IMPORTED), 0)
+        self.window.clear_foreign_parent()
+        self._sync()
+        self.assertFalse(driver.wd_error())
+        # A later import still succeeds after the clear.
+        self.assertTrue(self.window.set_foreign_parent("second-parent"))
+        self._sync()
+        self.assertNotEqual(driver.wd_live_id(_FC_K_IMPORTED), 0)
+        self.window.clear_foreign_parent()
+        self._sync()
+        self.assertEqual(driver.wd_pending_fd_count(), 0)
+        self.assertFalse(driver.wd_error())
 
 
 if __name__ == "__main__":
