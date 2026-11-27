@@ -1,14 +1,15 @@
-# M26 design: 2.4.0 Wayland protocol extensions (proposed)
+# M26 design: 2.4.0 Wayland protocol extensions (delivered)
 
-Status: **proposal and research complete, no feature code** (2026-11-27). This
-document is the design and decision record for the next minor release. It was
-written on the 2.3.0 tree `7a5b1cc` (branch `m26/scaffold`) and does not change
-the library, headers, bindings, tests or build.
+Status: **delivered and closed** (2026-11-27), tag-ready on `m26/w8-gate`. This
+document is the design and decision record for the release. It was written on
+the 2.3.0 tree `7a5b1cc` (branch `m26/scaffold`); the implementation landed on
+that tree and the final validation record is in [release.md](release.md).
 
-Baseline at design time: `api/pt.api` reads **581 functions / 960 entries**,
-`ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.3.0. The proposed surface is
+Design-time baseline: `api/pt.api` read **581 functions / 960 entries**,
+`ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.3.0. The delivered surface is
 **587 functions / 968 entries** (6 functions and 2 callbacks, no enum, struct or
-define changes), with `ABI_MAJOR` and SONAME unchanged.
+define changes), with `ABI_MAJOR` and SONAME unchanged. The scope fallback was
+not used: every foreign live and fallback gate passed, so foreign v2 shipped.
 
 ## Decision summary
 
@@ -660,7 +661,7 @@ example target after W1 is merged, W8 owns `VERSION` after W7.
 | Wave | Scope | Files owned | Depends on | Runs in parallel with | Owner |
 | --- | --- | --- | --- | --- | --- |
 | W0 | Proposal, evidence, API, wave plan | `docs/ROADMAP.md`, `docs/m26-design.md` | - | - | scaffold |
-| W1 | Vendor XML, scanner rules, headers, core/platform stubs, baseline 587/968, test stubs | `protocols/xdg-activation-v1.xml` (new), `protocols/xdg-foreign-unstable-v2.xml` (new), `Makefile` (PROTO_NAMES + TEST_NAMES), `include/pt/window.h`, `src/internal.h`, `src/wayland/wayland_internal.h`, `src/activation.c` (new), `src/foreign.c` (new), `src/wayland/activation.c` (new), `src/wayland/foreign.c` (new), `tests/test_protocol_wire.c` (new), `tests/test_activation.c` (new), `tests/test_foreign.c` (new), `api/pt.api`, `docs/api-reference.md`, `THIRD_PARTY.md`, `NOTICE` | W0 | none | DuMate |
+| W1 | Vendor XML, scanner rules, headers, core/platform stubs, baseline 587/968, fallback stub test | `protocols/xdg-activation-v1.xml` (new), `protocols/xdg-foreign-unstable-v2.xml` (new), `Makefile` (PROTO_NAMES + TEST_NAMES), `include/pt/window.h`, `src/internal.h`, `src/wayland/wayland_internal.h`, `src/activation.c` (new), `src/foreign.c` (new), `src/wayland/activation.c` (new), `src/wayland/foreign.c` (new), `tests/test_protocol_stubs.c` (new), `api/pt.api`, `docs/api-reference.md`, `THIRD_PARTY.md`, `NOTICE` | W0 | none | DuMate |
 | W2 | Fake compositor protocol tables, globals, injection helpers, facility test | `tests/fake_compositor.h`, `tests/test_protocol_wire.c` | W1 | none (blocks W3/W4) | WB-CN (DuMate reviews) |
 | W3 | Activation public + Wayland core + fallback/wire tests | `src/activation.c`, `src/wayland/activation.c`, `tests/test_activation.c` | W2 | W4 | DuMate |
 | W4 | Foreign public + Wayland core + fallback/wire tests | `src/foreign.c`, `src/wayland/foreign.c`, `tests/test_foreign.c` | W2 | W3 | Loomy (single agent) |
@@ -765,6 +766,45 @@ W4 budget and part of W8, and the release lands at 583/963.
 6. **Is `platform.c` still a serial hotspot?**
    Yes, but only for registry bind, teardown and the startup hook. The protocol
    logic lives in the new files; W5's edits are small and reviewed as one wave.
+
+## Implementation review decisions
+
+These rulings were made while reviewing the delivered waves; the code and the
+wave tests follow them.
+
+1. **C++ `string_view` overloads accept NULL.** The public C functions document
+   NULL as an omission path (`app_id`, token, handle), so the C++ wrappers take
+   an optional `std::string_view` and map `nullptr`/empty to the documented NULL
+   call instead of constructing a dangling view.
+2. **Python wrappers do not keep the root on failure.** A failed
+   `request_activation_token` / `export_foreign_handle` / `set_foreign_parent`
+   returns `False` and drops the temporary callback/root pair with the call; the
+   borrowed string is never stored past the callback.
+3. **Java normalizes the empty string to NULL.** `Pt` maps `""` to the C NULL
+   omission path for tokens, handles and `app_id`, so the Java surface matches
+   the C contract rather than passing an empty non-NULL pointer.
+4. **The wire driver forwards both callback deliveries.** `tests/wire_driver.c`
+   forwards the token and handle callbacks through the same bounded path, so
+   the Python and Java delivery tests exercise one real wire round trip each.
+5. **Activation `done` clears the pending fields before the callback.** The
+   W3 path stores the token, clears the pending request fields, then calls the
+   public callback, so a callback that destroys the window or starts a new
+   request cannot observe or re-enter half-updated state.
+6. **The W4 callback is the last statement of its delivery path.** The foreign
+   `handle` callback runs after the export object state is consistent and the
+   function returns immediately afterwards, so a callback that unexports the
+   window cannot leave a use-after-free on the stack.
+7. **Teardown order is windows, double-destroy hooks, registry, disconnect.**
+   `platform` teardown first runs the per-window hooks, then the second destroy
+   hooks (activation and foreign), then destroys the registry and finally
+   disconnects, so protocol objects die while their connection is alive.
+8. **`test_protocol_wire` reuses the platform global.** The facility wires the
+   fake globals into the same platform registry the real client uses instead of
+   a parallel table, which is why the live and fake paths assert the same
+   opcode sequences.
+9. **The live suite closes the child window last.** The child-window fix in W5
+   stops touching a window after it is closed, so the live run no longer
+   dispatches to a freed child during teardown.
 
 ## Completion criteria for 2.4.0
 

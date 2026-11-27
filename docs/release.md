@@ -1158,6 +1158,152 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
+## 2.4.0 validation record (2026-11-27, final — tag-ready)
+
+Environment: the final gate tree on `m26/w8-gate` on the reference machine
+(CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1, Python 3.14.10,
+OpenJDK 25.0.2 and wayland-protocols 1.50. The wave branches land on the
+published 2.3.0 tree `7a5b1cc`: W0 design `d26c9c4`; W1 headers, vendored XML,
+fallback stubs, baseline and stub test `611cf7a` (with `1798711`, `756ac34`,
+`de6a38a`, `00c04fb`); W2 fake-compositor facility `6d2f447`; W3 activation
+`80e6ce1`; W4 foreign `4ecfe28`; W5 lifecycle, live coverage and matrix
+`76bd79f`; W6a C++ `45471fd`; W6b Python/Java `9e954fb`; W7 bilingual guide and
+examples `27741ec`; W8a binding wire coverage `00bc071`. Every wave was
+independently reviewed PASS.
+
+2.4.0 is the **protocol-extensions** release. It binds **xdg-activation-v1**
+(staging, interface v1) for startup notification and inter-client activation,
+and **xdg-foreign-unstable-v2** (unstable, v2 only; the deprecated v1 is not
+bound) for out-of-process dialog parenting. It is **purely additive**: it adds
+**6 public functions and 2 callback typedefs**, and the baseline becomes **587
+functions / 968 entries** (587 `func`, 305 `enum`, 45 `callback`, 12 `struct`,
+12 `opaque`, 6 `define`, 1 `type`), with 0 removed and 0 changed against 2.3.0.
+SONAME stays `libpt.so.1`; `ABI_MAJOR` stays `1`.
+
+### Scope
+
+- **Activation.** `pt_window_request_activation_token` asks the compositor for
+  a one-shot token and delivers it through `pt_activation_token_callback`;
+  `pt_window_activate` raises this toplevel with a token received out of band.
+  `XDG_ACTIVATION_TOKEN` is read and unset at startup only when the activation
+  global is bound, then consumed exactly once on the first mapped window.
+  Strings are borrowed for the call. The API is a request; the compositor may
+  decline and focus is never guaranteed.
+- **Foreign parenting.** `pt_window_export_foreign_handle` exposes this
+  toplevel as an opaque `xdg-foreign-unstable-v2` handle through
+  `pt_foreign_handle_callback`, `pt_window_unexport_foreign_handle` withdraws
+  it, and `pt_window_set_foreign_parent` / `pt_window_clear_foreign_parent`
+  import a caller's handle as this window's parent. Re-exporting invalidates the
+  old handle; a window carries at most one parent; the imported object's
+  asynchronous `destroyed` event withdraws the relationship; window destruction
+  runs both teardown hooks.
+- **Best-effort fallback.** A headless platform, an absent global, a NULL/empty
+  token or handle, or an invalid token returns `false` or no-ops. No object is
+  created and no request is sent when the global is absent; the environment is
+  untouched in that case.
+- Out of scope: xdg-foreign v1, color-management/HDR, a GPU renderer, theme
+  serialization/editing, X11, and any change to rendering, layout, input
+  serials, accessibility, LTR/RTL or the public enums/structs.
+
+### Behaviour changes
+
+These are the points an upgrading application must read:
+
+- **Everything is opt-in.** An application that never calls the new functions
+  creates no protocol objects and keeps the 2.3 path byte for byte; pixels,
+  layout, damage, input, accessibility and LTR/RTL are unchanged.
+- **Tokens and handles are opaque and borrowed.** Never parse, log or persist
+  them beyond the call. A token may be ineffective without a recent input
+  serial, which Pt attaches when it has one.
+- **Activation is a request, not a focus guarantee.** The callback and the
+  boolean mean "request sent". A compositor without the global simply declines
+  through the fallback.
+- **No existing declaration, enum value, struct layout or export moved.**
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass: `include/pt/base.h` (`pt_version_major/minor/patch` = 2/4/0 and `pt_version_string` `"2.4.0"`), `Makefile` `VERSION := 2.4.0`, the README status line and the generated reference say 2.4.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| API baseline | pass: `api/pt.api` reads 587 functions / 968 entries; `tools/gen-api-reference.py --check` is clean at 2.4.0 |
+| Binding parity | pass: 587/587 (C++, Python and Java), 0 missing, 0 allowlisted; the C++ suite is 1,073 checks, Python 88 tests (0 skipped) and Java 817 checks, 0 failures |
+| Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| LTR byte stability | pass: `tools/ltr-compat.sh 1.4.0 HEAD` and `tools/ltr-compat.sh 2.3.0 HEAD` each report 11/11 `SAME`, so 2.4 is byte-identical to 1.4.0 and 2.3.0 in LTR |
+| `make check` | pass: 47 C executables (588,122 checks in total, including the 454,380-check property sweep, the 350-check `test_text_image`, `test_activation` 258, `test_foreign` 222, `test_protocol_wire` 253 and `test_protocol_stubs` 34), 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
+| `make perf-check` | pass: every guard ceiling holds (`startup first frame 17.578 ms`, `idle 300 ms CPU 0.387 ms`, `dense layout 4.742 ms`, `dense full paint 9.038 ms`, `dense damage share 3.534%`, `4K full paint 13.354 ms` of 156.5 ms, `4K one-row damage 0.942 ms`, `100k table scroll 8.160 ms`) and the bidi profiles hold (`mixed paragraph wrap+paint 1.542 ms` vs 2.0 ms, `rtl table 100 rows paint 5.438 ms` vs 7.0 ms, `rtl entry 1000 caret moves 75.170 ms` vs 100 ms) |
+| Sanitizers, staged install, reproducible tarball | pass end to end: bare `tools/ci.sh` (default `-j2`, `UBSAN_OPTIONS=halt_on_error=1`) exits 0 (`CI verification passed for Pt 2.4.0`) after the clean `werror=1` build, `make check`, `make perf-check`, both 11/11 LTR gates, staged install (SONAME `libpt.so.1`, pkg-config 2.4.0, the baseline ABI, the C/C++/Python/Java consumers and a clean `uninstall`), the ASan+UBSan rebuild (47 C binaries plus `test_cpp` 1,073 checks, the Python suite 88 tests and the Java suite 817 checks, nothing reported) and the reproducible tarball; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.4.0` and `tests/libwire_driver.so` |
+| Live suites | pass under nested niri: `check-wayland` 65 checks with `protocol-live activation=ok token_len=32` and `protocol-live foreign=ok handle_len=32 import=ok set_parent_of=ok`; the standalone `make check-protocol-live` PASS; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `COMMIT=你好` (nihao + space); `check-rtl-live` RESULT PASS — the IME rectangle matches the visual caret map, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink; the nested example smoke exits **124** under its 3 s timeout as expected |
+| Bilingual documentation | pass: 11 public guides with byte-identical code blocks, including the delivered `protocol-extensions.md` pair |
+| ABI diff against 2.3.0 | pass at the symbol level: 581 → 587 exported `pt_*` symbols, 0 removed, 0 changed, 6 added (listed under "ABI statement"), no non-`pt_*` export, SONAME `libpt.so.1` on both |
+| `tools/release-check.sh` | pass: every automated gate is green (version agreement, header surface, 587/968 baseline, 587/587 parity in three languages, reference coverage, deprecation inventory, the examples and their `run-*` targets, 11 bilingual guides); the two open items are human: the freeze commit/tag and the live-compositor sign-off, which is recorded above |
+| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduce `build/dist/pt-2.4.0.tar.gz` byte-identically (sidecar matches); the extracted tree rebuilds with `werror=1` and passes `make check`; the digests are recorded under "Release digests" below |
+
+### ABI statement
+
+2.4.0 adds six functions and two callback typedefs and changes no existing
+signature. The release minor is not an ABI change: `ABI_MAJOR := 1` keeps
+SONAME `libpt.so.1`, no enum value or struct layout moves, and the public
+headers carry no draft marker. The final gate compared a fresh `make lib` build
+of `7a5b1cc` (2.3.0) against the gate build of the 2.4.0 tree with
+`nm -D --defined-only`: both libraries define only `pt_*` dynamic symbols (581
+and 587 total), the counts are **581 → 587**, and the sorted diff is **0
+removed, 0 changed, 6 added**:
+
+```
+pt_window_activate                 pt_window_set_foreign_parent
+pt_window_clear_foreign_parent     pt_window_unexport_foreign_handle
+pt_window_export_foreign_handle    pt_window_request_activation_token
+```
+
+The added callback typedefs are `pt_activation_token_callback` and
+`pt_foreign_handle_callback`. A sorted diff of `api/pt.api` against 2.3.0 shows
+exactly the six function lines and the two callback lines, with **no old line
+removed or changed**. `readelf -d` reports `libpt.so.1` on both, and `Makefile`
+reads `ABI_MAJOR := 1` with `VERSION := 2.4.0`. `abidiff` (libabigail) is still
+unavailable on the reference machine, so the release-time run is symbol-level;
+a type-level run is recommended where libabigail exists.
+
+### Release digests
+
+Because this record ships inside the release archive, editing it changes the
+archive digest. Three values are recorded, in the 2.0/2.1/2.2/2.3 style:
+
+- **Gate-time.** `tools/ci.sh` reproduced
+  `0bbbe037c3692a77f284506c013d479b56440a34e489982a619c8a1b994f213b` on the
+  pre-record gate tree (`6193a85`), twice, at `SOURCE_DATE_EPOCH=1767225600`,
+  with the sidecar matching both runs.
+- **Committed-tree.** The frozen tree that carries this record reproduces the
+  digest recorded in the tag-time sidecar. Writing this paragraph changes the
+  archive, so `make dist` on the final commit is the value to quote; the gate
+  measured the committed-tree digest on the tag-ready commit and it is recorded
+  with the release report.
+- **Tag-time sidecar.** `pt-2.4.0.tar.gz.sha256` is the authoritative value.
+
+### Known issues
+
+- **xdg-foreign is unstable and experimental.** v2 only; v1 is deprecated and
+  gets the no-op fallback. The handle is opaque and valid only while the export
+  lives; never parse, log or persist it.
+- **Activation is a request, not a focus guarantee.** A compositor may refuse
+  or ignore a token, and a token without a recent serial may be ineffective.
+- **An absent global is a silent fallback.** `false` or no-op, never an error;
+  an application cannot distinguish "declined" from "absent" beyond the return
+  value.
+- **Weston is missing from the M26 matrix rows.** Only niri 26.04 is graded B
+  for both protocols (live); the other compositor rows are grade C from
+  wayland.app.
+- **A U+FFFC without a descriptor is still shaped, not drawn** (the inherited
+  2.3 limitation): a caller that forgets the side table sees the font's
+  placeholder glyph, tofu on fonts that do not cover U+FFFC.
+- **`pt_text_span` stays frozen** and paragraph direction still comes from the
+  widget or Unicode isolate controls.
+- **Sanitization is opt-in**; the locale table is small and CLDR-derived on
+  purpose. The release-time ABI check is symbol-level (no libabigail).
+- **Deferred past 2.4**: color-management-v1 (staging v3, no HDR buffer path,
+  no niri global), Vulkan/EGL (no repeatable budget miss; 4K full 13.354 ms and
+  damage 0.942 ms are inside the guards), the standalone theme editor (a tools
+  track) and xdg-foreign v1 (deprecated). See [ROADMAP.md](ROADMAP.md).
+
 ## 2.3.0 validation record (2026-11-27, final — tag-ready)
 
 Environment: the final gate tree on `m25/w6-gate` on the reference machine

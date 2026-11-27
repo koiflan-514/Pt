@@ -2503,20 +2503,20 @@ W5 ~70, W6 ~70. DuMate carries W1 + W3 (~50%); Loomy runs W2 as a single agent
 takes docs/examples and integration/release (~17%). No wave may lower the 2.0
 LTR gate, the 2.2 RTL gate or binding parity to land images.
 
-## M26 - 2.4.0: Wayland protocol extensions (proposed; research complete 2026-11-27)
+## M26 - 2.4.0: Wayland protocol extensions (delivered; closed 2026-11-27)
 
-**Status: proposed, no feature code.** Research and scaffolding were done on the
-published 2.3.0 tree `7a5b1cc` (branch `m26/scaffold`). The design record,
-protocol-version evidence, niri live probe, API semantics, wave ownership and
-risk register are in [m26-design.md](m26-design.md). Baseline is **581 functions
-/ 960 entries**; the proposed surface is **587 / 968** (6 functions and 2
-callbacks, no new enum or struct), `ABI_MAJOR = 1`, SONAME `libpt.so.1`.
+**Status: delivered and closed, tag-ready (2026-11-27).** The implementation
+landed on the published 2.3.0 tree `7a5b1cc` and the final gate tree is
+`m26/w8-gate`. `api/pt.api` reads **587 functions / 968 entries**, `ABI_MAJOR =
+1`, SONAME `libpt.so.1`, version 2.4.0. The full design record and the
+implementation rulings are in [m26-design.md](m26-design.md); the validation
+record is in [release.md](release.md).
 
 M26 takes the post-2.0 "additional protocols" item only where there is a real
 need and where the existing best-effort platform pattern can carry a fallback:
 **xdg-activation-v1** for startup notification and inter-client activation,
 and **xdg-foreign-unstable-v2** for out-of-process dialog parenting. The other
-three candidates in the post-2.0 horizon are deferred with evidence below:
+three candidates in the post-2.0 horizon remain deferred with evidence below:
 color-management, Vulkan/EGL and the standalone theme editor.
 
 ### Scope
@@ -2659,6 +2659,33 @@ from W5. Every wave is independently reviewed PASS before its dependants merge.
 W4 is the scope gate for foreign: a failed live/fallback path drops it and
 records the 583/963 activation-only release.
 
+### Delivered evidence
+
+Every wave was independently reviewed PASS before the gate:
+
+| Wave | Commit | Evidence |
+| --- | --- | --- |
+| W0 | `d26c9c4` | design proposal in this file and `m26-design.md` |
+| W1 | `611cf7a` (+`1798711`, `756ac34`, `de6a38a`, `00c04fb`) | vendored XML, frozen headers, safe fallback stubs, baseline 587/968, `test_protocol_stubs` 34 checks |
+| W2 | `6d2f447` | fake-compositor globals/tables/helpers, `test_protocol_wire` 253 checks |
+| W3 | `80e6ce1` | activation token lifecycle, startup adoption, fallback, `test_activation` 258 checks |
+| W4 | `4ecfe28` | foreign v2 export/import/parent lifecycle, `test_foreign` 222 checks (scope gate passed) |
+| W5 | `76bd79f` (+`605b0bf`, `e123457`, `fccd5af`) | registry bind/teardown, env adoption, first-map hook, live niri coverage, matrix rows |
+| W6a | `45471fd` | C++ wrappers and 1,073 checks |
+| W6b | `9e954fb` | Python and Java wrappers, Java 817 checks, Python 88 tests |
+| W7 | `27741ec` | bilingual `protocol-extensions.md` pair, four-language examples, run targets |
+| W8a | `00bc071` | wire-driver coverage for Python/Java token and handle delivery |
+| W8 | `fd7a6fa`, `c878315`, `6193a85` + closure | bilingual 11 pairs, version 2.4.0, README, release/ROADMAP/design closure |
+
+Final gate: `tools/ci.sh` exits 0 with `-j2`; the sanitizer links `libasan.so.8`
+and `libubsan.so.1`; staged install reports SONAME `libpt.so.1` and pkg-config
+2.4.0; `ltr-compat.sh 1.4.0 HEAD` and `2.3.0 HEAD` each report 11/11 `SAME`;
+the ABI diff is 581 → 587 with 0 removed and 0 changed; the tarball reproduces
+at `SOURCE_DATE_EPOCH=1767225600`; live niri reports
+`activation=ok token_len=32` and `foreign=ok handle_len=32 import=ok
+set_parent_of=ok`. The gate-time digest and the tag-ready commit are quoted in
+[release.md](release.md).
+
 ### Completion criteria
 
 - `api/pt.api` reads 587 / 968 (583 / 963 if foreign is dropped); binding parity
@@ -2680,14 +2707,23 @@ records the 583/963 activation-only release.
 - The deferred register below is recorded in ROADMAP and no partial protocol
   code ships.
 
+**Status: all criteria met on the 2.4.0 final gate.** `api/pt.api` reads 587 /
+968 with 0 removed and 0 changed against 2.3.0; binding parity is 587/587 in
+C++, Python and Java; activation and foreign supported/unsupported paths pass in
+the fake compositor and in nested niri; the startup token is consumed exactly
+once; both LTR gates are 11/11 `SAME` with existing snapshots unchanged;
+`make -j2 check`, `check-bindings`, the reference checks, the serial sanitizer,
+the staged install, the reproducible tarball and a clean `git status` are green.
+The per-item measurements are in the Results table of [release.md](release.md).
+
 ### Deferred past 2.4
 
 | Item | Evidence | Re-open trigger |
 | --- | --- | --- |
 | color-management-v1 | staging manager v3, 1,756-line XML; ARGB8888 sRGB canvas; no HDR format/output path; niri 26.04 has no global; no measured need | stable/frozen subset + 10/12-bit or float canvas + matrix compositor live test |
-| Vulkan/EGL | archived 4K full 37.657-47.808 ms, 4K damage 3.291-4.070 ms, 100k seek 11.531-14.921 of 20 ms; fresh 2026-11-27: dense 9.142 ms, 4K full 13.367 ms, 4K damage 0.933 ms, 100k scroll 8.112 of 20 ms; all ceilings hold; damage is the documented target | concrete continuous 4K full-window animation requirement + a repeatable budget miss + parity/fallback plan |
+| Vulkan/EGL | archived 4K full 37.657-47.808 ms, 4K damage 3.291-4.070 ms, 100k seek 11.531-14.921 of 20 ms; fresh 2026-11-27 design probe: dense 9.142 ms, 4K full 13.367 ms, 4K damage 0.933 ms, 100k scroll 8.112 of 20 ms; 2.4.0 final gate: dense full 9.038 ms, 4K full 13.354 ms of 156.5 ms, 4K one-row damage 0.942 ms of 12 ms, 100k scroll 8.160 ms of 20 ms; all ceilings hold; damage is the documented target | concrete continuous 4K full-window animation requirement + a repeatable budget miss + parity/fallback plan |
 | Theme editor | 38 tokens/10 metrics; no theme file format; outside core ABI | separate tools proposal with a versioned C/JSON format, WCAG checks and preview |
-| xdg-foreign v1 | deprecated; niri only v2; a second lifecycle for no user gain | a real v1-only target that cannot use v2 |
+| xdg-foreign v1 | deprecated; niri only v2; a second lifecycle for no user gain; 2.4.0 binds v2 only and the scope fallback stayed unused | a real v1-only target that cannot use v2 |
 
 ### Budget
 
