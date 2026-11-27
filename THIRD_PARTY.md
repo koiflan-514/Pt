@@ -14,11 +14,32 @@ them.
 | `protocols/xdg-decoration-unstable-v1.xml` | wayland-protocols (unstable) | MIT |
 | `protocols/viewporter.xml` | wayland-protocols (stable) | MIT |
 | `protocols/fractional-scale-v1.xml` | wayland-protocols (staging) | MIT |
+| `protocols/xdg-activation-v1.xml` | wayland-protocols (staging) | MIT |
+| `protocols/xdg-foreign-unstable-v2.xml` | wayland-protocols (unstable) | MIT |
 | `protocols/text-input-unstable-v3.xml` | wayland-protocols (unstable) | MIT |
 | `protocols/pointer-gestures-unstable-v1.xml` | wayland-protocols (unstable) | MIT |
 | `src/nanosvg.h`, `src/nanosvgrast.h` | nanosvg (master) | zlib |
 | `third_party/sheenbidi/` | SheenBidi v3.0.0 | Apache-2.0 |
 | `tests/data/bidi/` | Unicode BidiTest / BidiCharacterTest 18.0.0 | Unicode License v3 |
+
+## Wayland protocol XML
+
+The protocol XML files under `protocols/` are unmodified copies of the
+corresponding wayland-protocols files. The copyright and MIT permission notice
+is inside each XML `<copyright>` block and is preserved verbatim.
+
+- Source package: wayland-protocols **1.50**
+  (`pkg-config --variable=pkgdatadir wayland-protocols`)
+- Fetched: 2026-11-27
+- `protocols/xdg-activation-v1.xml` from
+  `staging/xdg-activation/xdg-activation-v1.xml`, SHA-256
+  `d8418be2d5738d50aff788bef1c7574f33f26659aa045447ff2ef9b78c58fe01`
+- `protocols/xdg-foreign-unstable-v2.xml` from
+  `unstable/xdg-foreign/xdg-foreign-unstable-v2.xml`, SHA-256
+  `625d83fbb068f48e69e739eafde507f10cdfe7480146f3ac10af9a2ddf551c80`
+- Modifications: none. Pt binds xdg-activation interface v1 and
+  xdg-foreign-unstable-v2 interface v1 only; the deprecated
+  `xdg-foreign-unstable-v1.xml` is not vendored.
 
 ## nanosvg
 

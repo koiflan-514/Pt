@@ -3,7 +3,8 @@ Copyright 2026 The Pt Authors
 
 This product includes protocol definition files from wayland-protocols,
 distributed under the MIT license. The original copyright and license
-notices are preserved in each XML file under protocols/.
+notices are preserved in each XML file under protocols/. This includes
+xdg-activation-v1 (staging) and xdg-foreign-unstable-v2 (unstable).
 
 Pt links against system Wayland, FreeType, HarfBuzz, Fontconfig, xkbcommon,
 wayland-cursor and zlib libraries at runtime. Those projects retain their
