@@ -24,9 +24,9 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-/* Rows shown by the sample table. Enough to fill the viewport without making
- * the preview scroll; the values are cosmetic and only exercise the table
- * palette (header, row, cell, selection). */
+/* Data rows shown by the sample table. Enough to fill the viewport without
+ * making the preview scroll; the values are cosmetic and only exercise the
+ * table palette (header, row, cell, selection). */
 #define TE_PREVIEW_TABLE_ROWS 3u
 #define TE_PREVIEW_TABLE_COLUMNS 2u
 
@@ -34,7 +34,9 @@ struct te_preview {
     pt_window *window;
 };
 
-/* Fills one table cell from the static sample rows. The table paints its own
+/* Fills one data cell from the static sample rows. The bind callback receives
+ * the zero-based data row: the header is a separate widget driven by
+ * pt_table_set_column_title, never a bound row. The table paints its own
  * header, row stripes and selection from the window palette; the cells only
  * own their text, which keeps the preview free of widget-level explicit colours
  * that would defeat a theme override. */
@@ -42,7 +44,6 @@ static void te_preview_bind_cell(pt_widget *table, pt_widget *cell, uint32_t row
                                  uint32_t column, void *data) {
     (void)table;
     (void)data;
-    static const char *const labels[TE_PREVIEW_TABLE_COLUMNS] = {"Role", "Value"};
     static const char *const names[TE_PREVIEW_TABLE_ROWS] = {
         "background",
         "text_muted",
@@ -53,20 +54,11 @@ static void te_preview_bind_cell(pt_widget *table, pt_widget *cell, uint32_t row
         "#8B98AAFF",
         "#4C8DFFFF",
     };
-    if (column >= TE_PREVIEW_TABLE_COLUMNS) {
+    if (column >= TE_PREVIEW_TABLE_COLUMNS || row >= TE_PREVIEW_TABLE_ROWS) {
         pt_widget_set_text(cell, "");
         return;
     }
-    if (row == 0) {
-        pt_widget_set_text(cell, labels[column]);
-        return;
-    }
-    uint32_t index = row - 1u;
-    if (index >= TE_PREVIEW_TABLE_ROWS) {
-        pt_widget_set_text(cell, "");
-        return;
-    }
-    pt_widget_set_text(cell, column == 0 ? names[index] : values[index]);
+    pt_widget_set_text(cell, column == 0 ? names[row] : values[row]);
 }
 
 /* Builds the sample controls under root. Order follows the design list so the
@@ -140,8 +132,10 @@ static void te_preview_build(pt_widget *root) {
     pt_tabs_add_page(tabs, "Metrics");
     pt_tabs_set_active(tabs, 0);
 
-    /* A small table: header cells, a selected row and body cells all paint
-     * from the surface, border, text and selection roles. */
+    /* A small table: the column titles drive the real header and the bind
+     * callback fills only the three data rows. Header cells, body cells, the
+     * selected row and the selection all paint from the surface, border, text
+     * and selection roles. */
     pt_widget *table = pt_table_create(root);
     pt_widget_set_a11y_name(table, "Preview table");
     pt_widget_set_min_height(table, 132.0f);
@@ -153,8 +147,10 @@ static void te_preview_build(pt_widget *root) {
     pt_table_set_row_height(table, 30.0f);
     pt_table_set_header_height(table, 32.0f);
     pt_table_set_on_bind_cell(table, te_preview_bind_cell, NULL);
-    pt_table_set_row_count(table, TE_PREVIEW_TABLE_ROWS + 1u);
-    pt_table_set_selected(table, 1);
+    pt_table_set_row_count(table, TE_PREVIEW_TABLE_ROWS);
+    /* The first data row (background) is selected, matching the old three-row
+     * intent where header-plus-data indexing selected that same row. */
+    pt_table_set_selected(table, 0);
 
     /* One focused control so the focus ring and focus token are visible without
      * the user having to tab. pt_widget_focus returns false when the window is
