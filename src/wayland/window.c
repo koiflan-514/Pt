@@ -571,6 +571,9 @@ bool pt_wl_window_draw(pt_window *window) {
     wl->needs_redraw = wl->redraw_pending;
     wl->redraw_pending = false;
     wl->mapped = true;
+    /* First mapped commit is the safe point for a startup activation token.
+     * The hook consumes the token at most once and no-ops without a global. */
+    pt_activation_window_mapped(window);
     return true;
 }
 
@@ -857,6 +860,10 @@ void pt_platform_window_destroy(pt_window *window) {
     pt_platform_window_forget_focus(window);
     pt_platform_popup_destroy_all(window);
     destroy_toplevel_icon(wl);
+    /* Destroy protocol objects that still refer to this surface before the
+     * surface itself, and before free(wl). Both hooks are NULL-safe. */
+    pt_activation_window_destroy(window);
+    pt_foreign_window_destroy(window);
     if (wl->frame_callback) {
         wl_callback_destroy(wl->frame_callback);
         wl->frame_callback = NULL;
