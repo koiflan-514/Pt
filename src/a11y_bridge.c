@@ -3821,21 +3821,12 @@ static DBusHandlerResult a11y_editable_text(DBusConnection *connection,
                 pt_platform_clipboard_set(obj->window, selected);
                 free(selected);
             }
-            if (remove) {
-                char *before = NULL;
-                char *after = NULL;
-                a11y_substring(text, 0, (size_t)start, &before);
-                a11y_substring(text, (size_t)end, view.chars, &after);
-                size_t length = strlen(before) + strlen(after) + 1;
-                char *next = pt_alloc(length);
-                snprintf(next, length, "%s%s", before, after);
-                free(before);
-                free(after);
-                pt_widget_set_text(entry, next);
-                free(next);
-                size_t byte = a11y_utf8_byte_offset(pt_widget_get_text(entry),
-                                                    (size_t)start);
-                pt_widget_text_selection_set(entry, (uint32_t)byte, (uint32_t)byte);
+            if (remove && end > start) {
+                /* The regular editing delete path shifts spans, drops only the
+                 * overlapped image descriptors and records one undo step. */
+                size_t byte_start = a11y_utf8_byte_offset(text, (size_t)start);
+                size_t byte_end = a11y_utf8_byte_offset(text, (size_t)end);
+                pt_widget_text_delete_range(entry, byte_start, byte_end);
             }
             done = true;
         }

@@ -2948,6 +2948,67 @@ static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
     pt_widget_set_text(multi_label, "plain");
     pt_check(a11y_child_count_of(app, client, multi_ref.bus, multi_ref.path) == 0);
 
+    /* ---- CutText/DeleteText use the regular editing delete path ---- */
+    pt_widget_set_text(image_area, "A" image_placeholder "B" image_placeholder "C");
+    pt_text_image del_first = {0};
+    del_first.start = 1;
+    del_first.image = icon;
+    snprintf(del_first.alt, sizeof(del_first.alt), "%s", "first");
+    pt_text_image del_second = {0};
+    del_second.start = 5;
+    del_second.image = icon;
+    snprintf(del_second.alt, sizeof(del_second.alt), "%s", "second");
+    pt_text_image del_pair[2] = {del_first, del_second};
+    pt_check(pt_widget_set_text_images(image_area, del_pair, 2));
+    pt_check(pt_widget_get_text_image_count(image_area) == 2);
+
+    DBusMessage *cut_reply = a11y_method_int2(
+        app, client, area_ref.bus, area_ref.path, "org.a11y.atspi.EditableText",
+        "CutText", 1, 2);
+    bool cut = false;
+    pt_check(reply_bool(cut_reply, &cut) && cut);
+    if (cut_reply) {
+        dbus_message_unref(cut_reply);
+    }
+    pt_check(strcmp(pt_widget_get_text(image_area), "AB" image_placeholder "C") == 0);
+    pt_check(pt_widget_get_text_image_count(image_area) == 1);
+    pt_text_image kept = {0};
+    pt_check(pt_widget_get_text_image(image_area, 0, &kept));
+    pt_check(kept.start == 2);
+    pt_check(strcmp(kept.alt, "second") == 0);
+    clipboard = pt_platform_clipboard_get(pt_widget_window(image_area));
+    pt_check(clipboard != NULL && strcmp(clipboard, "first") == 0);
+    free(clipboard);
+
+    /* Undo restores the text and both descriptors at their old offsets. */
+    pt_check(pt_widget_text_undo(image_area));
+    pt_check(strcmp(pt_widget_get_text(image_area),
+                    "A" image_placeholder "B" image_placeholder "C") == 0);
+    pt_check(pt_widget_get_text_image_count(image_area) == 2);
+    pt_text_image undone = {0};
+    pt_check(pt_widget_get_text_image(image_area, 0, &undone));
+    pt_check(undone.start == 1 && strcmp(undone.alt, "first") == 0);
+    pt_check(pt_widget_get_text_image(image_area, 1, &undone));
+    pt_check(undone.start == 5 && strcmp(undone.alt, "second") == 0);
+
+    /* DeleteText removes the leading text plus the first object only. */
+    DBusMessage *delete_reply = a11y_method_int2(
+        app, client, area_ref.bus, area_ref.path, "org.a11y.atspi.EditableText",
+        "DeleteText", 0, 2);
+    bool deleted = false;
+    pt_check(reply_bool(delete_reply, &deleted) && deleted);
+    if (delete_reply) {
+        dbus_message_unref(delete_reply);
+    }
+    pt_check(strcmp(pt_widget_get_text(image_area), "B" image_placeholder "C") == 0);
+    pt_check(pt_widget_get_text_image_count(image_area) == 1);
+    pt_check(pt_widget_get_text_image(image_area, 0, &kept));
+    pt_check(kept.start == 1 && strcmp(kept.alt, "second") == 0);
+    pt_check(pt_widget_text_undo(image_area));
+    pt_check(strcmp(pt_widget_get_text(image_area),
+                    "A" image_placeholder "B" image_placeholder "C") == 0);
+    pt_check(pt_widget_get_text_image_count(image_area) == 2);
+
     pt_icon_image_destroy(icon);
     dbus_connection_close(client);
     dbus_connection_unref(client);

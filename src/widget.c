@@ -844,6 +844,15 @@ static void entry_delete_range(pt_widget *entry, size_t start, size_t end) {
     entry_after_edit(entry);
 }
 
+/* Minimal internal wrapper so the AT-SPI text methods share the editing delete
+ * path (history, span shifting, image descriptor cleanup, notifications). */
+void pt_widget_text_delete_range(pt_widget *widget, size_t start, size_t end) {
+    if (!widget) {
+        return;
+    }
+    entry_delete_range(widget, start, end);
+}
+
 static char *entry_sanitize_insert(const pt_widget *entry, const char *text, size_t *out_len) {
     bool multiline = entry->kind == pt_widget_text_area;
     size_t capacity = strlen(text) * 4 + 1;

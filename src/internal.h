@@ -448,6 +448,11 @@ void pt_widget_images_snap_range(const pt_widget *widget, size_t *start, size_t 
  * string, or NULL for an empty range. */
 char *pt_widget_images_copy_text(const pt_widget *widget, size_t start, size_t end,
                                  size_t *out_length);
+/* Deletes a byte range through the normal editing path: snaps U+FFFC atomic
+ * ranges, shifts spans and image descriptors, records one undo step and emits
+ * the usual change/selection notifications. Used by the AT-SPI text methods so
+ * they behave exactly like a keyboard deletion. */
+void pt_widget_text_delete_range(pt_widget *widget, size_t start, size_t end);
 bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_text_runs *out);
 /* Resolved paragraph base for single-line text without running the full UBA:
  * explicit/auto widget text direction, then P2 first strong, then the resolved
