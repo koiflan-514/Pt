@@ -141,6 +141,11 @@ te_format_error te_load_json_file(te_theme_doc *doc, const char *path,
  * returns the required capacity in bytes including the terminating NUL; it is
  * 0 for a NULL document.
  *
+ * The reader accepts a metric only when its canonical "%.9g" form is
+ * fixed-point: a value whose form would use an exponent (roughly below 0.0001
+ * or at least 1e9) is rejected with TE_ERR_RANGE, so every document that parses
+ * round-trips through this writer unchanged.
+ *
  * te_serialize_json() writes at most capacity bytes and NUL-terminates. It
  * returns TE_ERR_ARGUMENT for a NULL doc/buffer or a too-small capacity and
  * leaves the buffer untouched on error. On success *written (when non-NULL) is

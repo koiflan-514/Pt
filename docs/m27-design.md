@@ -1,12 +1,13 @@
-# M27 design: 2.5.0 standalone theme editor (proposed)
+# M27 design: 2.5.0 standalone theme editor (delivered)
 
-Status: **proposed, not started** (2026-11-27). This document is the scope,
-feasibility and wave-allocation record for a possible 2.5.0 release. It was
-written on the 2.4.0 tree `82a5b79` (branch `m27/scaffold`). No implementation,
-header, binding, tool source or build file is changed by this proposal.
+Status: **delivered in 2.5.0** (final gate 2026-11-27). This document started as
+the scope, feasibility and wave-allocation record for the release; the
+delivered tree keeps the proposed surface and adds only the tool, its tests and
+documentation. It was written on the 2.4.0 tree `82a5b79` (branch
+`m27/scaffold`); no core header, source, binding or API file changed.
 
 Design-time baseline: `api/pt.api` reads **587 functions / 968 entries**,
-`ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.4.0. The proposed release keeps
+`ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.4.0. The delivered release keeps
 that surface and only adds a standalone tool, its tests and documentation.
 
 ## Decision summary
@@ -286,6 +287,26 @@ Rules:
   decimal separator cannot change the file.
 - UTF-8 strings support the standard JSON escapes and `\uXXXX` surrogate pairs;
   unpaired surrogates and malformed UTF-8 are rejected.
+
+### Documented metric fixed-point limit
+
+Metrics are logical pixels, printed with `%.9g`. The reader accepts a metric
+only when that canonical `%.9g` form is fixed-point; a form that would use an
+exponent is rejected with `TE_ERR_RANGE` and the message "metric has no
+canonical fixed-point representation". In practice that rejects values below
+about `0.0001` (the float nearest `0.0001` is `9.99999975e-05`, so even the
+literal `0.0001` prints with an exponent) and values at or above `1e9`
+(`1000000000` prints as `1e+09`). Negative and non-finite metrics are rejected
+by the same code.
+
+This is a deliberate, documented format limitation, not a UI recommendation:
+the parser is the only entry point, and it rejects the values that the writer
+could not reproduce, so every document that parses round-trips safely through
+export and re-import. Sub-`0.001`-pixel metrics have no meaning in the UI
+anyway. Writer-side validation was considered and explicitly not added: the
+writer already emits exactly the canonical form the reader enforces, and a
+second check would only duplicate the parser without widening the accepted
+range. The tool README and the `theme_format.h` contract state the same rule.
 
 ### C export
 
