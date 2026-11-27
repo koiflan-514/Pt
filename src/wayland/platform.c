@@ -3050,6 +3050,17 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
         platform->tablet_manager =
             wl_registry_bind(registry, name, &zwp_tablet_manager_v2_interface, 1);
         ensure_tablet_devices(platform);
+    } else if (strcmp(interface, xdg_activation_v1_interface.name) == 0) {
+        /* xdg-activation-v1 (staging) and the xdg-foreign-unstable-v2 pair are
+         * three independent optional globals: bind each one on its own, keep
+         * NULL when absent, and let every consumer check the pointer. */
+        platform->activation = wl_registry_bind(registry, name, &xdg_activation_v1_interface, 1);
+    } else if (strcmp(interface, zxdg_exporter_v2_interface.name) == 0) {
+        platform->foreign_exporter =
+            wl_registry_bind(registry, name, &zxdg_exporter_v2_interface, 1);
+    } else if (strcmp(interface, zxdg_importer_v2_interface.name) == 0) {
+        platform->foreign_importer =
+            wl_registry_bind(registry, name, &zxdg_importer_v2_interface, 1);
     }
 }
 
@@ -3111,6 +3122,10 @@ bool pt_platform_start(pt_app *app) {
             return false;
         }
         ensure_seat_devices(platform);
+        /* The startup token is available only after the registry roundtrip has
+         * bound xdg_activation_v1. Adopt it before any window exists, so the
+         * first mapped frame can consume it. */
+        pt_activation_adopt_environment(platform);
     }
     app->platform = platform;
     return true;
@@ -3227,6 +3242,11 @@ void pt_platform_stop(pt_app *app) {
     if (platform->compositor) {
         wl_compositor_destroy(platform->compositor);
     }
+    /* Protocol extensions: windows are already freed by pt_app_destroy, so this
+     * only tears down the pending startup token and the three globals. It must
+     * run before the registry and display are disconnected. */
+    pt_activation_platform_destroy(platform);
+    pt_foreign_platform_destroy(platform);
     if (platform->registry) {
         wl_registry_destroy(platform->registry);
     }

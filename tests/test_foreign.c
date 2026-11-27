@@ -92,6 +92,11 @@ static bool bind_foreign(pt_platform *platform) {
     if (!platform || !platform->display) {
         return false;
     }
+    /* W5 wires both globals into registry_global. Return early when pt_app_create
+     * already bound them, so the fixture does not create duplicate proxies. */
+    if (platform->foreign_exporter && platform->foreign_importer) {
+        return true;
+    }
     foreign_globals globals = {0};
     struct wl_registry *registry = wl_display_get_registry(platform->display);
     if (!registry) {

@@ -107,6 +107,12 @@ static bool bind_activation(pt_platform *platform) {
     if (!platform || !platform->display) {
         return false;
     }
+    /* W5 wires the global into registry_global, so pt_app_create has already
+     * bound it on a compositor that advertises it. The manual bind remains for
+     * the fallback fixtures and must not create a second proxy. */
+    if (platform->activation) {
+        return true;
+    }
     activation_globals globals = {0};
     struct wl_registry *registry = wl_display_get_registry(platform->display);
     if (!registry) {
@@ -522,6 +528,12 @@ static void test_environment_adoption(void) {
         return;
     }
     uint32_t first_surface = proxy_id(pt_wl_window_for(first)->surface);
+
+    /* Flush the configure-driven frame for the two fresh windows before a token
+     * exists. With W5 live wiring the real first mapped commit consumes the
+     * token; the manual hook below must therefore be the first one to see it. */
+    (void)fake_compositor_sync(&fc, app);
+    (void)fake_compositor_sync(&fc, app);
 
     setenv("XDG_ACTIVATION_TOKEN", "startup-token-42", 1);
     fake_compositor_clear(&fc);
