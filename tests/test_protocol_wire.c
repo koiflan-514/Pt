@@ -385,6 +385,16 @@ static struct xdg_activation_v1 *wire_bind_activation(fake_compositor *fc, pt_ap
     if (!globals.activation_name) {
         return NULL;
     }
+    if (out_name) {
+        *out_name = globals.activation_name;
+    }
+    /* W5 binds the global from registry_global. Use that object so this wire
+     * test exercises the platform path instead of creating a duplicate proxy. */
+    if (app->platform->activation) {
+        pt_check(app->platform->activation != NULL);
+        pt_check(fake_compositor_sync(fc, app));
+        return app->platform->activation;
+    }
     struct wl_registry *registry = wl_display_get_registry(app->platform->display);
     if (!registry) {
         return NULL;
@@ -394,9 +404,6 @@ static struct xdg_activation_v1 *wire_bind_activation(fake_compositor *fc, pt_ap
     pt_check(activation != NULL);
     wl_registry_destroy(registry);
     pt_check(fake_compositor_sync(fc, app));
-    if (out_name) {
-        *out_name = globals.activation_name;
-    }
     return activation;
 }
 
@@ -542,6 +549,9 @@ static void test_activation_wire(void) {
     pt_check(fake_compositor_error(&fc) == NULL);
 
     xdg_activation_v1_destroy(activation);
+    if (app->platform->activation == activation) {
+        app->platform->activation = NULL;
+    }
     pt_check(fake_compositor_sync(&fc, app));
     pt_check(fake_compositor_count_requests(&fc, FC_K_ACTIVATION,
                                             activation_destroy) >= 1);
