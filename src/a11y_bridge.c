@@ -1457,6 +1457,85 @@ static void a11y_state_words(const pt_a11y_obj *obj, uint32_t words[2]) {
 #undef a11y_set_state
 }
 
+static void a11y_obj_rect(const pt_a11y_obj *obj, int *x, int *y, int *width, int *height);
+
+/* Screen rectangle of one virtual inline-image child. Text inputs place their
+ * lines from the content top; labels center a single line and apply their text
+ * alignment. Layout coordinates are logical pixels, matching the caret and
+ * paint paths. */
+static bool a11y_image_rect(const pt_a11y_obj *obj, int *x, int *y, int *width,
+                            int *height) {
+    if (!obj || obj->type != pt_a11y_obj_image || !obj->widget) {
+        return false;
+    }
+    pt_widget *widget = obj->widget;
+    if (obj->image_index >= widget->image_count) {
+        return false;
+    }
+    const pt_text_image *image = &widget->images[obj->image_index];
+    pt_layout_ctx ctx = pt_layout_context_for(widget);
+    pt_text_layout layout = {0};
+    if (!pt_text_layout_build(widget, &ctx, pt_text_area_content_width(widget), &layout)) {
+        return false;
+    }
+    bool ok = false;
+    int line = pt_text_layout_line_for_position(&layout, image->start);
+    float x0 = pt_text_layout_x_for_position(&layout, line, image->start);
+    float x1 = pt_text_layout_x_for_position(&layout, line, image->start + 3u);
+    if (x1 < x0) {
+        float swap = x0;
+        x0 = x1;
+        x1 = swap;
+    }
+    float content_width = pt_max_float(0.0f, widget->width - widget->padding_left -
+                                                 widget->padding_right);
+    float content_height = pt_max_float(0.0f, widget->height - widget->padding_top -
+                                                  widget->padding_bottom);
+    float origin_x = widget->x + widget->padding_left;
+    float origin_y = widget->y + widget->padding_top;
+    if (widget->kind == pt_widget_label) {
+        float line_width = layout.maps && layout.maps[line]
+                               ? pt_text_visual_map_width(layout.maps[line])
+                               : 0.0f;
+        if (widget->text_align == pt_text_align_center) {
+            origin_x += (content_width - line_width) * 0.5f;
+        } else if (widget->text_align == pt_text_align_end) {
+            origin_x += content_width - line_width;
+        }
+        if (widget->wrap) {
+            origin_y += (float)line * layout.line_height;
+        } else {
+            origin_y += (content_height - layout.line_height) * 0.5f;
+        }
+    } else {
+        origin_x -= widget->scroll_x;
+        origin_y += (float)line * layout.line_height - widget->scroll_y;
+    }
+    if (x1 > x0) {
+        int rect_x = (int)lroundf(origin_x + x0);
+        int rect_y = (int)lroundf(origin_y);
+        int rect_w = (int)lroundf(x1 - x0);
+        int rect_h = (int)lroundf(layout.line_height);
+        if (rect_w > 0 && rect_h > 0) {
+            if (x) {
+                *x = rect_x;
+            }
+            if (y) {
+                *y = rect_y;
+            }
+            if (width) {
+                *width = rect_w;
+            }
+            if (height) {
+                *height = rect_h;
+            }
+            ok = true;
+        }
+    }
+    pt_text_layout_free(&layout);
+    return ok;
+}
+
 static void a11y_obj_rect(const pt_a11y_obj *obj, int *x, int *y, int *width, int *height) {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -1466,6 +1545,22 @@ static void a11y_obj_rect(const pt_a11y_obj *obj, int *x, int *y, int *width, in
         if (obj->type == pt_a11y_obj_window) {
             fw = (float)obj->window->width;
             fh = (float)obj->window->height;
+        } else if (obj->type == pt_a11y_obj_image) {
+            int ix = 0;
+            int iy = 0;
+            int iw = 0;
+            int ih = 0;
+            if (a11y_image_rect(obj, &ix, &iy, &iw, &ih)) {
+                fx = (float)ix;
+                fy = (float)iy;
+                fw = (float)iw;
+                fh = (float)ih;
+            } else {
+                fx = obj->widget ? obj->widget->x : 0.0f;
+                fy = obj->widget ? obj->widget->y : 0.0f;
+                fw = obj->widget ? obj->widget->width : 0.0f;
+                fh = obj->widget ? obj->widget->height : 0.0f;
+            }
         } else if (obj->type == pt_a11y_obj_widget) {
             pt_widget *widget = obj->widget;
             fx = widget->x;
@@ -1502,7 +1597,8 @@ static void a11y_obj_rect(const pt_a11y_obj *obj, int *x, int *y, int *width, in
 static void a11y_parent_origin(const pt_a11y_obj *obj, float *x, float *y) {
     *x = 0.0f;
     *y = 0.0f;
-    if (!obj || obj->type != pt_a11y_obj_widget) {
+    if (!obj || (obj->type != pt_a11y_obj_widget && obj->type != pt_a11y_obj_image) ||
+        !obj->widget) {
         return;
     }
     pt_widget *widget = obj->widget;
@@ -2985,6 +3081,34 @@ static pt_widget *a11y_hit_widget_tree(pt_widget *widget, const pt_window *windo
     return NULL;
 }
 
+/* Returns the inline-image child of `owner` whose rectangle contains a window
+ * point. The caller has already resolved the owning widget. */
+static bool a11y_image_at_point(const pt_a11y_obj *obj, pt_widget *owner, float wx, float wy,
+                                pt_a11y_obj *out) {
+    if (!obj || !owner) {
+        return false;
+    }
+    for (uint32_t i = 0; i < owner->image_count; ++i) {
+        pt_a11y_obj image = {.type = pt_a11y_obj_image,
+                             .window = obj->window,
+                             .widget = owner,
+                             .image_index = i};
+        int ix = 0;
+        int iy = 0;
+        int iw = 0;
+        int ih = 0;
+        if (!a11y_image_rect(&image, &ix, &iy, &iw, &ih)) {
+            continue;
+        }
+        if (wx >= (float)ix && wy >= (float)iy && wx < (float)(ix + iw) &&
+            wy < (float)(iy + ih)) {
+            *out = image;
+            return true;
+        }
+    }
+    return false;
+}
+
 static DBusHandlerResult a11y_component(DBusConnection *connection, DBusMessage *message,
                                         const pt_a11y_bridge *bridge,
                                         const pt_a11y_obj *obj) {
@@ -3042,6 +3166,10 @@ static DBusHandlerResult a11y_component(DBusConnection *connection, DBusMessage 
                 hit.type = pt_a11y_obj_widget;
                 hit.window = obj->window;
                 hit.widget = widget;
+                pt_a11y_obj image_hit = {0};
+                if (a11y_image_at_point(obj, widget, wx, wy, &image_hit)) {
+                    hit = image_hit;
+                }
             }
         } else if (obj->type == pt_a11y_obj_widget) {
             pt_widget *widget = a11y_hit_widget_tree(obj->widget, obj->window, wx, wy);
@@ -3049,6 +3177,10 @@ static DBusHandlerResult a11y_component(DBusConnection *connection, DBusMessage 
                 hit.type = pt_a11y_obj_widget;
                 hit.window = obj->window;
                 hit.widget = widget;
+                pt_a11y_obj image_hit = {0};
+                if (a11y_image_at_point(obj, widget, wx, wy, &image_hit)) {
+                    hit = image_hit;
+                }
             }
         }
         DBusMessage *reply = a11y_reply(message);

@@ -1035,6 +1035,26 @@ static bool a11y_extents(pt_app *app, DBusConnection *client, const char *bus,
     return ok;
 }
 
+static bool a11y_component_at_point(pt_app *app, DBusConnection *client, const char *bus,
+                                    const char *path, int px, int py, a11y_ref *out) {
+    DBusMessage *message = dbus_message_new_method_call(
+        bus, path, "org.a11y.atspi.Component", "GetAccessibleAtPoint");
+    if (!message) {
+        return false;
+    }
+    dbus_int32_t x = (dbus_int32_t)px;
+    dbus_int32_t y = (dbus_int32_t)py;
+    dbus_uint32_t coord_type = 0;
+    dbus_message_append_args(message, DBUS_TYPE_INT32, &x, DBUS_TYPE_INT32, &y,
+                             DBUS_TYPE_UINT32, &coord_type, DBUS_TYPE_INVALID);
+    DBusMessage *reply = a11y_call(app, client, message);
+    bool ok = reply_ref(reply, out);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    return ok;
+}
+
 static void test_bridge_live(pt_app *app, pt_widget *search, pt_widget *password,
                              pt_widget *volume, pt_widget *save, pt_widget *table,
                              pt_widget *tree, pt_tree_node *tree_root_node,
@@ -2788,6 +2808,17 @@ static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
     }
     pt_check(strcmp(parent.path, image_ref.path) == 0);
 
+    int lx = 0;
+    int ly = 0;
+    int lw = 0;
+    int lh = 0;
+    pt_check(a11y_extents(app, client, child.bus, child.path, &lx, &ly, &lw, &lh));
+    pt_check(lw > 0 && lh > 0);
+    a11y_ref label_hit = {0};
+    pt_check(a11y_component_at_point(app, client, image_ref.bus, image_ref.path,
+                                     lx + lw / 2, ly + lh / 2, &label_hit));
+    pt_check(path_ends_with(label_hit.path, "/i0"));
+
     DBusMessage *index_reply = a11y_method(app, client, child.bus, child.path,
                                            "org.a11y.atspi.Accessible", "GetIndexInParent");
     int32_t index = -1;
@@ -2961,6 +2992,41 @@ static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
     pt_text_image del_pair[2] = {del_first, del_second};
     pt_check(pt_widget_set_text_images(image_area, del_pair, 2));
     pt_check(pt_widget_get_text_image_count(image_area) == 2);
+
+    /* ---- virtual image Component geometry and hit testing ---- */
+    a11y_ref geo0 = {0};
+    a11y_ref geo1 = {0};
+    pt_check(a11y_child_ref(app, client, area_ref.bus, area_ref.path, 0, &geo0));
+    pt_check(a11y_child_ref(app, client, area_ref.bus, area_ref.path, 1, &geo1));
+    pt_check(path_ends_with(geo0.path, "/i0"));
+    pt_check(path_ends_with(geo1.path, "/i1"));
+    int ax = 0;
+    int ay = 0;
+    int aw = 0;
+    int ah = 0;
+    pt_check(a11y_extents(app, client, area_ref.bus, area_ref.path, &ax, &ay, &aw, &ah));
+    int x0 = 0;
+    int y0 = 0;
+    int w0 = 0;
+    int h0 = 0;
+    int x1 = 0;
+    int y1 = 0;
+    int w1 = 0;
+    int h1 = 0;
+    pt_check(a11y_extents(app, client, geo0.bus, geo0.path, &x0, &y0, &w0, &h0));
+    pt_check(a11y_extents(app, client, geo1.bus, geo1.path, &x1, &y1, &w1, &h1));
+    pt_check(aw > 0 && ah > 0);
+    pt_check(w0 > 0 && h0 > 0 && w1 > 0 && h1 > 0);
+    pt_check(x0 >= ax && y0 >= ay && x0 + w0 <= ax + aw && y0 + h0 <= ay + ah);
+    pt_check(x1 >= ax && y1 >= ay && x1 + w1 <= ax + aw && y1 + h1 <= ay + ah);
+    pt_check(x1 > x0 && y1 == y0);
+    a11y_ref point_hit = {0};
+    pt_check(a11y_component_at_point(app, client, area_ref.bus, area_ref.path,
+                                     x1 + w1 / 2, y1 + h1 / 2, &point_hit));
+    pt_check(path_ends_with(point_hit.path, "/i1"));
+    pt_check(a11y_component_at_point(app, client, area_ref.bus, area_ref.path,
+                                     x0 + w0 / 2, y0 + h0 / 2, &point_hit));
+    pt_check(path_ends_with(point_hit.path, "/i0"));
 
     DBusMessage *cut_reply = a11y_method_int2(
         app, client, area_ref.bus, area_ref.path, "org.a11y.atspi.EditableText",
