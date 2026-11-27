@@ -103,6 +103,9 @@ bool pt_widget_set_text_images(pt_widget *widget, const pt_text_image *images,
     }
     uint32_t kept = 0;
     for (uint32_t i = 0; i < count; ++i) {
+        /* A NULL image means "drop this entry", so it is discarded before the
+         * duplicate resolution below and never clears a valid descriptor for
+         * the same placeholder. */
         if (!images[i].image) {
             continue;
         }

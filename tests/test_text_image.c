@@ -234,6 +234,56 @@ static void test_validation(pt_widget *root) {
     pt_widget_destroy(label);
 }
 
+static void test_null_discard_order(pt_widget *root) {
+    pt_widget *label = pt_label_create(root, "x" placeholder "y");
+    pt_icon_image *a = make_icon();
+    pt_icon_image *b = make_icon();
+    pt_check(a != NULL && b != NULL);
+    if (!a || !b) {
+        pt_icon_image_destroy(a);
+        pt_icon_image_destroy(b);
+        pt_widget_destroy(label);
+        return;
+    }
+
+    /* NULL entries are discarded first, so they never overwrite a valid
+     * descriptor for the same placeholder. */
+    pt_text_image pair[2];
+    pair[0] = descriptor(1, a);
+    pair[1] = descriptor(1, NULL);
+    pt_check(pt_widget_set_text_images(label, pair, 2));
+    pt_check(pt_widget_get_text_image_count(label) == 1);
+    pt_text_image got = {0};
+    pt_check(pt_widget_get_text_image(label, 0, &got) && got.image == a);
+
+    pair[0] = descriptor(1, NULL);
+    pair[1] = descriptor(1, b);
+    pt_check(pt_widget_set_text_images(label, pair, 2));
+    pt_check(pt_widget_get_text_image_count(label) == 1);
+    pt_check(pt_widget_get_text_image(label, 0, &got) && got.image == b);
+
+    /* Among valid entries the last one still wins. */
+    pt_text_image triple[3];
+    triple[0] = descriptor(1, a);
+    triple[1] = descriptor(1, NULL);
+    triple[2] = descriptor(1, b);
+    pt_check(pt_widget_set_text_images(label, triple, 3));
+    pt_check(pt_widget_get_text_image_count(label) == 1);
+    pt_check(pt_widget_get_text_image(label, 0, &got) && got.image == b);
+
+    /* An all-NULL table leaves the side table empty. */
+    pt_text_image nulls[2];
+    nulls[0] = descriptor(1, NULL);
+    nulls[1] = descriptor(1, NULL);
+    pt_check(pt_widget_set_text_images(label, nulls, 2));
+    pt_check(pt_widget_get_text_image_count(label) == 0);
+
+    pt_widget_clear_text_images(label);
+    pt_icon_image_destroy(a);
+    pt_icon_image_destroy(b);
+    pt_widget_destroy(label);
+}
+
 static void test_reference_counting(pt_widget *root) {
     size_t baseline = pt_icon_cache_entry_count();
 
@@ -444,6 +494,7 @@ int main(void) {
     test_set_get_roundtrip(root);
     test_alt_truncation(root);
     test_validation(root);
+    test_null_discard_order(root);
     test_reference_counting(root);
     test_edit_hooks(root);
     test_zero_regression(root);
