@@ -321,9 +321,17 @@ public final class Pt {
     /** One inline image run over a U+FFFC placeholder.
      *
      * <p>{@code start} is the UTF-8 byte offset of the three-byte placeholder;
-     * {@code image} is the native icon pointer (the setter takes its own
-     * reference). A zero or non-finite width or height means the intrinsic icon
-     * size. {@code alt} is copied and truncated to 127 bytes.
+     * {@code image} is the native icon pointer ({@code MemorySegment.address()}).
+     * The setter and {@link #text_area_insert_image} take their own reference,
+     * so the caller may release its handle after a successful call. A zero or
+     * non-finite width or height means the intrinsic icon size. {@code alt} is
+     * copied and truncated on a UTF-8 boundary to at most 127 bytes.
+     *
+     * <p>A descriptor returned by {@link #widget_get_text_image} carries a
+     * <em>borrowed</em> {@code image} pointer owned by the widget; it is only
+     * valid while that side-table entry is alive. Do not pass a borrowed
+     * pointer to a constructor that takes ownership, and do not retain it
+     * across edits or a later table replacement.
      */
     public record TextImage(int start, long image, float width, float height, int align,
             String alt) {
@@ -4043,6 +4051,19 @@ public final class Pt {
         }
     }
 
+    /**
+     * Replaces the inline image table; returns false when the widget rejects
+     * it. The C setter copies the array, keeps the last entry for a duplicate
+     * placeholder, drops entries whose {@code image} is NULL or whose
+     * {@code start} is not a U+FFFC byte offset in the current text, sorts by
+     * {@code start} and takes its own reference to every kept image. A null or
+     * empty array is equivalent to {@link #widget_clear_text_images} and still
+     * returns true. Only labels and text areas accept images; other kinds
+     * return false without touching the table. The previous table's image
+     * references may have been released, so do not reuse the old
+     * {@code TextImage[]} to restore them; re-read with
+     * {@link #widget_get_text_image} or keep your own icon handles.
+     */
     public static boolean widget_set_text_images(MemorySegment widget, TextImage[] images) {
         if (images == null || images.length == 0) {
             return (boolean) invoke(widget_set_text_images, widget, MemorySegment.NULL, 0);
@@ -4069,9 +4090,37 @@ public final class Pt {
         String text = image.alt();
         if (text != null && !text.isEmpty()) {
             byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
-            MemorySegment source = MemorySegment.ofArray(encoded);
-            MemorySegment.copy(source, 0, alt, 0, Math.min(encoded.length, 127));
+            int length = utf8_truncated_length(encoded, 127);
+            MemorySegment.copy(MemorySegment.ofArray(encoded), 0, alt, 0, length);
         }
+    }
+
+    /**
+     * Returns the largest UTF-8 boundary at or below {@code limit} so a
+     * truncated alt never ends mid-sequence. The C setter re-truncates the same
+     * way; doing it here keeps the descriptor valid before the call.
+     */
+    private static int utf8_truncated_length(byte[] encoded, int limit) {
+        int length = Math.min(encoded.length, limit);
+        int cut = length;
+        while (cut > 0 && (encoded[cut - 1] & 0xC0) == 0x80) {
+            --cut;
+        }
+        if (cut > 0) {
+            int lead = encoded[cut - 1] & 0xFF;
+            int sequence = 1;
+            if ((lead & 0xE0) == 0xC0) {
+                sequence = 2;
+            } else if ((lead & 0xF0) == 0xE0) {
+                sequence = 3;
+            } else if ((lead & 0xF8) == 0xF0) {
+                sequence = 4;
+            }
+            if (cut - 1 + sequence > length) {
+                length = cut - 1;
+            }
+        }
+        return length;
     }
 
     public static void widget_clear_text_images(MemorySegment widget) {
@@ -4082,6 +4131,16 @@ public final class Pt {
         return (int) invoke(widget_get_text_image_count, widget);
     }
 
+    /**
+     * Copies one descriptor, or returns null for an out-of-range index.
+     *
+     * <p>The copied {@code image} pointer is borrowed from the widget: it is
+     * valid only while the side table is alive and the entry has not been
+     * replaced or cleared. Do not hold it across edits or a later
+     * {@link #widget_set_text_images}; take an owned reference with
+     * {@link #icon_image_ref} (or keep your original icon handle) to outlive
+     * the table entry.
+     */
     public static TextImage widget_get_text_image(MemorySegment widget, int index) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment out = arena.allocate(text_image_layout);

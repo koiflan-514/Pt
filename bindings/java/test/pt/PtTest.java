@@ -1903,6 +1903,159 @@ public final class PtTest {
             Pt.window_set_icon(window, MemorySegment.NULL);
             check(Pt.window_get_icon(window).address() == 0, "window icon cleared");
 
+            /* ---------- 2.3 inline image runs ---------- */
+            check(Pt.text_image_align_baseline == 0, "image align baseline enum");
+            check(Pt.text_image_align_middle == 1, "image align middle enum");
+            Pt.TextImage defaults = new Pt.TextImage(0, 0, 0.0f, 0.0f,
+                    Pt.text_image_align_baseline);
+            check(defaults.alt().isEmpty(), "image defaults alt empty");
+            MemorySegment runIcon = Pt.icon_image_load_memory(iconBytes);
+            check(runIcon.address() != 0, "image run icon");
+
+            MemorySegment imageLabel = Pt.label(column, "ab\uFFFCcd");
+            Pt.TextImage run = new Pt.TextImage(2, runIcon.address(), 20.0f, 12.0f,
+                    Pt.text_image_align_middle, "first");
+            check(Pt.widget_set_text_images(imageLabel, new Pt.TextImage[] {run}),
+                    "image set accepted");
+            check(Pt.widget_get_text_image_count(imageLabel) == 1, "image set count");
+            Pt.TextImage storedRun = Pt.widget_get_text_image(imageLabel, 0);
+            check(storedRun != null, "image get stored");
+            if (storedRun != null) {
+                check(storedRun.start() == 2, "image get start");
+                check(storedRun.align() == Pt.text_image_align_middle, "image get align");
+                check(Math.abs(storedRun.width() - 20.0f) < 0.001f, "image get width");
+                check(Math.abs(storedRun.height() - 12.0f) < 0.001f, "image get height");
+                check(storedRun.alt().equals("first"), "image get alt");
+                check(storedRun.image() == runIcon.address(), "image get borrowed ptr");
+            }
+            check(Pt.widget_get_text_image(imageLabel, 1) == null, "image get out of range");
+            check(Pt.widget_get_text_image(imageLabel, -1) == null, "image get negative");
+            check(Pt.widget_set_text_images(imageLabel, new Pt.TextImage[0]),
+                    "image set empty accepted");
+            check(Pt.widget_get_text_image_count(imageLabel) == 0, "image set empty clears");
+            check(Pt.widget_set_text_images(imageLabel, null), "image set null accepted");
+            check(Pt.widget_get_text_image_count(imageLabel) == 0, "image set null clears");
+            check(Pt.widget_set_text_images(imageLabel, new Pt.TextImage[] {run}),
+                    "image re-set");
+            Pt.widget_clear_text_images(imageLabel);
+            check(Pt.widget_get_text_image_count(imageLabel) == 0, "image clear count");
+
+            /* Unsupported kinds report the touch outcome instead of swallowing. */
+            MemorySegment imageButton = Pt.button(column, "Img");
+            check(!Pt.widget_set_text_images(imageButton, new Pt.TextImage[] {run}),
+                    "image set on button rejected");
+            check(Pt.widget_get_text_image_count(imageButton) == 0, "image button stays empty");
+
+            /* NULL image and non-placeholder starts are dropped; duplicates
+             * keep the last entry. */
+            MemorySegment placeholders = Pt.label(column, "\uFFFC\uFFFC");
+            Pt.TextImage good_a = new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "a");
+            Pt.TextImage good_b = new Pt.TextImage(3, runIcon.address(), 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "b");
+            Pt.TextImage nullImage = new Pt.TextImage(0, 0L, 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "n");
+            Pt.TextImage interior = new Pt.TextImage(1, runIcon.address(), 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "c");
+            Pt.TextImage offEnd = new Pt.TextImage(6, runIcon.address(), 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "d");
+            check(Pt.widget_set_text_images(placeholders,
+                    new Pt.TextImage[] {good_b, nullImage, interior, good_a, offEnd}),
+                    "image drop set accepted");
+            check(Pt.widget_get_text_image_count(placeholders) == 2, "image drop count");
+            Pt.TextImage dropped0 = Pt.widget_get_text_image(placeholders, 0);
+            Pt.TextImage dropped1 = Pt.widget_get_text_image(placeholders, 1);
+            check(dropped0 != null && dropped0.start() == 0 && dropped0.alt().equals("a"),
+                    "image drop first");
+            check(dropped1 != null && dropped1.start() == 3 && dropped1.alt().equals("b"),
+                    "image drop second");
+            Pt.TextImage firstWins = new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "first");
+            Pt.TextImage lastWins = new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                    Pt.text_image_align_baseline, "last");
+            check(Pt.widget_set_text_images(placeholders,
+                    new Pt.TextImage[] {firstWins, lastWins}), "image duplicate set");
+            check(Pt.widget_get_text_image_count(placeholders) == 1, "image duplicate count");
+            check("last".equals(Pt.widget_get_text_image(placeholders, 0).alt()),
+                    "image duplicate keeps last");
+            check(Pt.widget_set_text_images(placeholders, new Pt.TextImage[] {nullImage}),
+                    "image only-null accepted");
+            check(Pt.widget_get_text_image_count(placeholders) == 0, "image only-null empty");
+
+            /* Alt truncation walks UTF-8 boundaries (C re-truncates too). */
+            MemorySegment altArea = Pt.text_area(column, "\uFFFC");
+            Pt.widget_set_text(altArea, "\uFFFC");
+            String ascii127 = "a".repeat(127);
+            check(Pt.widget_set_text_images(altArea,
+                    new Pt.TextImage[] {new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, ascii127)}), "image alt ascii set");
+            check(Pt.widget_get_text_image(altArea, 0).alt().length() == 127, "image alt 127");
+            check(Pt.widget_set_text_images(altArea,
+                    new Pt.TextImage[] {new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, "日本")}), "image alt utf8 set");
+            check("日本".equals(Pt.widget_get_text_image(altArea, 0).alt()),
+                    "image alt utf8 round trip");
+            /* 128 ASCII bytes truncate to the 127-byte capacity. */
+            check(Pt.widget_set_text_images(altArea,
+                    new Pt.TextImage[] {new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, "a".repeat(128))}), "image alt 128 set");
+            check(Pt.widget_get_text_image(altArea, 0).alt().length() == 127,
+                    "image alt 128 truncates");
+            /* A multi-byte run straddling the 127-byte limit ends on a
+             * character boundary (42 * 3 = 126 bytes, not 127). */
+            String wideAlt = "日".repeat(43);
+            check(Pt.widget_set_text_images(altArea,
+                    new Pt.TextImage[] {new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, wideAlt)}), "image alt wide set");
+            String wideStored = Pt.widget_get_text_image(altArea, 0).alt();
+            check(wideStored.equals("日".repeat(42)), "image alt wide boundary");
+
+            /* insert_image: offsets, shifting and caller can release its handle. */
+            MemorySegment insertArea = Pt.text_area(column, "");
+            Pt.widget_set_text(insertArea, "hello");
+            Pt.text_area_set_selection(insertArea, 5, 5);
+            int firstOffset = Pt.text_area_insert_image(insertArea,
+                    new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, "icon"));
+            check(firstOffset == 5, "image insert offset");
+            check(Pt.widget_get_text(insertArea).equals("hello\uFFFC"), "image insert text");
+            check(Pt.widget_get_text_image_count(insertArea) == 1, "image insert count");
+            check(Pt.widget_get_text_image(insertArea, 0).start() == 5, "image insert start");
+            Pt.text_area_set_selection(insertArea, 0, 0);
+            int headOffset = Pt.text_area_insert_image(insertArea,
+                    new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, "head"));
+            check(headOffset == 0, "image insert head offset");
+            check(Pt.widget_get_text(insertArea).equals("\uFFFChello\uFFFC"),
+                    "image insert head text");
+            check(Pt.widget_get_text_image_count(insertArea) == 2, "image insert shift count");
+            check(Pt.widget_get_text_image(insertArea, 0).start() == 0, "image insert shift 0");
+            check(Pt.widget_get_text_image(insertArea, 1).start() == 8, "image insert shift 1");
+
+            /* Rejections: null descriptor, NULL image, wrong kind, caret inside
+             * an existing placeholder. */
+            check(Pt.text_area_insert_image(insertArea, null) == -1, "image insert null arg");
+            check(Pt.text_area_insert_image(insertArea,
+                    new Pt.TextImage(0, 0L, 0.0f, 0.0f, Pt.text_image_align_baseline, "x"))
+                    == -1, "image insert null image");
+            check(Pt.text_area_insert_image(imageLabel,
+                    new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, "x")) == -1, "image insert wrong kind");
+            Pt.text_area_set_selection(insertArea, 1, 1);  /* interior of placeholder */
+            String beforeInterior = Pt.widget_get_text(insertArea);
+            check(Pt.text_area_insert_image(insertArea,
+                    new Pt.TextImage(0, runIcon.address(), 0.0f, 0.0f,
+                            Pt.text_image_align_baseline, "x")) == -1, "image insert interior");
+            check(Pt.widget_get_text(insertArea).equals(beforeInterior),
+                    "image insert interior unchanged");
+            /* The widget takes its own reference: releasing the handle keeps
+             * the table entry alive. */
+            Pt.icon_image_destroy(runIcon);
+            check(Pt.widget_get_text_image_count(insertArea) == 2,
+                    "image insert survives caller release");
+            check(Pt.widget_get_text_image(insertArea, 0).image() != 0,
+                    "image insert borrowed still non-null");
+
             /* Searchable select. */
             MemorySegment select = Pt.select_create(column);
             check(select.address() != 0, "select create");
