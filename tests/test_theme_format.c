@@ -193,7 +193,7 @@ static void test_stub_error_paths(void) {
     pt_check(te_export_c(NULL, buffer, sizeof buffer, NULL) == TE_ERR_ARGUMENT);
     pt_check(te_export_c(&doc, NULL, sizeof buffer, &written) == TE_ERR_ARGUMENT);
     pt_check(written == 0);
-    pt_check(te_export_c(&doc, buffer, sizeof buffer, &written) == TE_ERR_NOT_IMPLEMENTED);
+    pt_check(te_export_c(&doc, buffer, sizeof buffer, &written) == TE_ERR_ARGUMENT);
     pt_check(te_export_c_file(NULL, "x.c") == TE_ERR_ARGUMENT);
     pt_check(te_export_c_file(&doc, NULL) == TE_ERR_ARGUMENT);
 }
