@@ -2336,6 +2336,52 @@ public final class PtTest {
             Pt.widget_destroy(lifetimeNumber);
             Pt.widget_destroy(colorPicker);
 
+            /* ---- 2.4 activation tokens and foreign handles (headless) ---- */
+            /* The absent-global/headless fallback is documented: every request
+             * reports false and never delivers, and the tear-downs are no-ops
+             * that may be called any number of times. */
+            final int[] tokenCalls = {0};
+            Pt.ActivationTokenHandler tokenHandler =
+                    (target, token, data) -> tokenCalls[0] += 1;
+            check(!Pt.window_request_activation_token(window, null, tokenHandler, arena),
+                    "2.4 activation token headless false");
+            check(!Pt.window_request_activation_token(window, "pt.tests.target",
+                    tokenHandler, arena), "2.4 activation token app id headless false");
+            check(!Pt.window_request_activation_token(window, "", tokenHandler, arena),
+                    "2.4 activation token empty app id headless false");
+            check(!Pt.window_activate(window, "opaque-token"),
+                    "2.4 activate headless false");
+            check(!Pt.window_activate(window, ""), "2.4 activate empty token rejected");
+            check(!Pt.window_activate(window, null), "2.4 activate null token rejected");
+            final int[] handleCalls = {0};
+            Pt.ForeignHandleHandler handleHandler =
+                    (target, handle, data) -> handleCalls[0] += 1;
+            check(!Pt.window_export_foreign_handle(window, handleHandler, arena),
+                    "2.4 export foreign handle headless false");
+            Pt.window_unexport_foreign_handle(window);
+            Pt.window_unexport_foreign_handle(window); /* idempotent no-op */
+            check(!Pt.window_set_foreign_parent(window, "opaque-handle"),
+                    "2.4 set foreign parent headless false");
+            check(!Pt.window_set_foreign_parent(window, ""),
+                    "2.4 set foreign parent empty rejected");
+            check(!Pt.window_set_foreign_parent(window, null),
+                    "2.4 set foreign parent null rejected");
+            Pt.window_clear_foreign_parent(window);
+            Pt.window_clear_foreign_parent(window); /* idempotent no-op */
+            check(tokenCalls[0] == 0, "2.4 activation never delivers headless");
+            check(handleCalls[0] == 0, "2.4 foreign handle never delivers headless");
+            /* A NULL callback is rejected by the native layer without creating
+             * an object; the wrappers pass it through as MemorySegment.NULL. */
+            check(!Pt.window_request_activation_token(window, "pt.tests", null, arena),
+                    "2.4 activation NULL callback rejected");
+            check(!Pt.window_export_foreign_handle(window, null, arena),
+                    "2.4 export NULL callback rejected");
+            /* NULL window short-circuits in every entry point. */
+            check(!Pt.window_activate(MemorySegment.NULL, "opaque-token"),
+                    "2.4 activate null window false");
+            check(!Pt.window_set_foreign_parent(MemorySegment.NULL, "opaque-handle"),
+                    "2.4 set parent null window false");
+
             final boolean[] allowed = {false};
             Pt.window_set_close_handler(window, (target, data) -> allowed[0], arena);
             Pt.window_close(window);

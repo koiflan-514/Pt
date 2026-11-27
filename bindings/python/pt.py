@@ -5992,53 +5992,114 @@ class Window:
     ) -> bool:
         """Requests an xdg-activation-v1 token for another client.
 
-        ``app_id`` may be None. The callback receives the token as a Python
-        string valid only during the call; copy it if it must be kept. Returns
-        False when the protocol global is absent or the platform is headless.
+        ``app_id`` may be None (or empty, which the C layer treats as absent);
+        a non-empty value names the client that will be activated. The request
+        carries the most recent pointer-button or key-press serial when one
+        exists, so a compositor that demands a fresh serial may still decline.
+
+        The token string handed to ``callback`` is **borrowed**: it is only
+        valid while the callback runs. ``str()`` already copies the bytes, so
+        the Python value stays alive after the call, but never treat the C
+        buffer itself as persistent. An empty token means the compositor
+        returned an invalid token. Only one request can be in flight per
+        window; a new call drops the previous pending callback.
+
+        Returns False without creating anything when ``callback`` is None, the
+        activation global is absent or the platform is headless.
         """
+        if callback is None:
+            return False
 
         def dispatch(_window: int, token: Optional[bytes], _data: int) -> None:
             callback(self, _text_out(token))
 
         trampoline = _ACTIVATION_TOKEN(dispatch)
-        self._callbacks.append(trampoline)
-        _callback_roots.append(trampoline)
-        return bool(
+        accepted = bool(
             _pt_window_request_activation_token(
-                self._ptr, _string(app_id) if app_id is not None else None,
+                self._ptr, _string(app_id) if app_id else None,
                 trampoline, None
             )
         )
+        if accepted:
+            # Pt owns the pending callback until it fires or a later request
+            # replaces it; root it so the trampoline outlives this frame.
+            self._callbacks.append(trampoline)
+            _callback_roots.append(trampoline)
+        return accepted
 
     def activate(self, token: str) -> bool:
-        """Requests activation; true means sent, not that focus moved."""
+        """Requests activation of this window with a token received out of band.
+
+        The token is sent once and not retained, so the caller may free it
+        after the call. A True return means the request was sent, **not** that
+        the compositor honoured it; use :meth:`on_focus` for observed focus.
+        Returns False for a null or empty token, an absent activation global or
+        a headless platform.
+        """
+        if not token:
+            return False
         return bool(_pt_window_activate(self._ptr, _string(token)))
 
     def export_foreign_handle(
         self, callback: Callable[["Window", str], Any]
     ) -> bool:
-        """Exports this toplevel and delivers an opaque borrowed handle once."""
+        """Exports this toplevel and delivers its opaque handle once.
+
+        The handle passed to ``callback`` is **borrowed** and only valid during
+        the call; it is compositor-defined, so never parse, log or persist it
+        beyond the exported object's lifetime. The export object stays alive
+        until :meth:`unexport_foreign_handle` or window destruction;
+        destroying it invalidates every import built from its handle.
+        Exporting again replaces the previous export (and invalidates its
+        handle) through a fresh call to this method.
+
+        Returns False without creating anything when ``callback`` is None, the
+        exporter global is absent or the platform is headless.
+        """
+        if callback is None:
+            return False
 
         def dispatch(_window: int, handle: Optional[bytes], _data: int) -> None:
             callback(self, _text_out(handle))
 
         trampoline = _FOREIGN_HANDLE(dispatch)
-        self._callbacks.append(trampoline)
-        _callback_roots.append(trampoline)
-        return bool(
+        accepted = bool(
             _pt_window_export_foreign_handle(self._ptr, trampoline, None)
         )
+        if accepted:
+            # Rooted only on success: on failure Pt kept no reference.
+            self._callbacks.append(trampoline)
+            _callback_roots.append(trampoline)
+        return accepted
 
     def unexport_foreign_handle(self) -> None:
-        """Revokes the export and drops any pending handle callback."""
+        """Revokes the export and drops any pending handle callback.
+
+        The compositor invalidates relationships built from its handle. A
+        no-op when nothing is exported or the window is closed.
+        """
         _pt_window_unexport_foreign_handle(self._ptr)
 
     def set_foreign_parent(self, handle: str) -> bool:
-        """Imports an opaque handle as this window's parent (best-effort)."""
+        """Imports an opaque handle and makes this window its child.
+
+        Same stacking/positioning semantics as ``xdg_toplevel.set_parent``.
+        The handle is passed through unchanged and is not retained or logged.
+        Replaces a previous imported parent; an invalid handle clears the
+        import silently when the compositor sends ``destroyed``.
+
+        Returns False for a null or empty handle, an absent importer global or
+        a headless platform.
+        """
+        if not handle:
+            return False
         return bool(_pt_window_set_foreign_parent(self._ptr, _string(handle)))
 
     def clear_foreign_parent(self) -> None:
-        """Destroys the imported parent and invalidates the relationship."""
+        """Destroys the imported parent and invalidates the relationship.
+
+        A no-op when no parent is imported or the window is closed.
+        """
         _pt_window_clear_foreign_parent(self._ptr)
 
     def paint_pixels_ex(self, width: int, height: int,
