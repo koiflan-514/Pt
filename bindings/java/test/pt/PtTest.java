@@ -403,6 +403,152 @@ public final class PtTest {
     }
 
     /**
+     * 2.4 wave: activation-token and foreign-handle delivery over the same fake
+     * compositor. The driver forwards xdg_activation_token_v1.done and
+     * zxdg_exported_v2.handle, so the Java upcalls observe a real wire event
+     * rather than a synthetic C call.
+     */
+    private static void activationForeignWireTest(Arena arena) throws Throwable {
+        final String previousHeadless = System.getenv("PT_HEADLESS");
+        nativeUnsetenv("PT_HEADLESS");
+        boolean started = false;
+        MemorySegment wireApp = MemorySegment.NULL;
+        MemorySegment wireWindow = MemorySegment.NULL;
+        MethodHandle wdStop = null;
+        Arena driverArena = Arena.ofConfined();
+        try {
+            SymbolLookup lookup = SymbolLookup.libraryLookup(wireDriverPath(), driverArena);
+            MethodHandle wdStart = bindSymbol(lookup, "wd_start",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            wdStop = bindSymbol(lookup, "wd_stop", FunctionDescriptor.ofVoid());
+            MethodHandle wdError = bindSymbol(lookup, "wd_error",
+                    FunctionDescriptor.of(ValueLayout.ADDRESS));
+            MethodHandle wdSync = bindSymbol(lookup, "wd_sync",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            MethodHandle wdSettle = bindSymbol(lookup, "wd_settle",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            MethodHandle wdWaitConfigured = bindSymbol(lookup, "wd_wait_configured",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MethodHandle wdLiveId = bindSymbol(lookup, "wd_live_id",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdGlobalBound = bindSymbol(lookup, "wd_global_bound",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdRequestCount = bindSymbol(lookup, "wd_request_count",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT));
+            MethodHandle wdTokenDone = bindSymbol(lookup, "wd_activation_token_done",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            MethodHandle wdExportedHandle = bindSymbol(lookup, "wd_exported_handle",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+
+            /* FC_OPT_ALL | FC_OPT_ACTIVATION | FC_OPT_FOREIGN. */
+            started = (int) wdStart.invokeExact(0x1FF | (1 << 11) | (1 << 12)) == 0;
+            check(started, "2.4 wire driver start: " + wireError(wdError));
+            if (!started) {
+                return;
+            }
+            wireApp = Pt.app_create("pt.tests.java.m26.wire");
+            check(wireApp.address() != 0, "2.4 wire app_create");
+            if (wireApp.address() == 0) {
+                return;
+            }
+            check((int) wdSettle.invokeExact(wireApp) == 0, "2.4 wire settle");
+            wireWindow = Pt.window_create(wireApp, "java 2.4 wire", 320, 240);
+            check(wireWindow.address() != 0, "2.4 wire window_create");
+            if (wireWindow.address() == 0) {
+                return;
+            }
+            Pt.window_show(wireWindow);
+            check((int) wdWaitConfigured.invokeExact(wireApp, wireWindow, 300) == 1,
+                    "2.4 wire window configured");
+            check((int) wdSettle.invokeExact(wireApp) == 0, "2.4 wire settle after show");
+            check((int) wdGlobalBound.invokeExact(44) == 1, "2.4 activation global bound");
+            check((int) wdGlobalBound.invokeExact(46) == 1, "2.4 exporter global bound");
+            check((int) wdGlobalBound.invokeExact(48) == 1, "2.4 importer global bound");
+
+            final int[] tokenCalls = {0};
+            final String[] tokenSeen = {""};
+            Pt.ActivationTokenHandler tokenHandler = (target, token, data) -> {
+                tokenCalls[0] += 1;
+                tokenSeen[0] = token;
+            };
+            check(Pt.window_request_activation_token(wireWindow, "pt.tests.java.m26",
+                    tokenHandler, arena), "2.4 wire token request");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire token request sync");
+            check((int) wdRequestCount.invokeExact(44, 1) == 1,
+                    "2.4 get_activation_token sent");
+            check((int) wdLiveId.invokeExact(45) != 0, "2.4 token object live");
+            check(tokenCalls[0] == 0, "2.4 token not delivered before done");
+            check((int) wdTokenDone.invokeExact(arena.allocateFrom("java-token")) == 1,
+                    "2.4 token done injected");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire token done sync");
+            check(tokenCalls[0] == 1, "2.4 token delivered once");
+            check("java-token".equals(tokenSeen[0]), "2.4 token string delivered");
+            check((int) wdTokenDone.invokeExact(arena.allocateFrom("late-token")) == 0,
+                    "2.4 late token done is a no-op");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire late token sync");
+            check(tokenCalls[0] == 1, "2.4 late token not delivered");
+
+            check(Pt.window_activate(wireWindow, "opaque-token"),
+                    "2.4 wire activate sends token");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire activate sync");
+            check((int) wdRequestCount.invokeExact(44, 2) == 1,
+                    "2.4 activate request sent once");
+
+            final int[] handleCalls = {0};
+            final String[] handleSeen = {""};
+            Pt.ForeignHandleHandler handleHandler = (target, handle, data) -> {
+                handleCalls[0] += 1;
+                handleSeen[0] = handle;
+            };
+            check(Pt.window_export_foreign_handle(wireWindow, handleHandler, arena),
+                    "2.4 wire export");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire export sync");
+            check((int) wdRequestCount.invokeExact(46, 1) == 1, "2.4 export_toplevel sent");
+            check((int) wdLiveId.invokeExact(47) != 0, "2.4 exported object live");
+            check(handleCalls[0] == 0, "2.4 handle not delivered before event");
+            check((int) wdExportedHandle.invokeExact(arena.allocateFrom("java-handle")) == 1,
+                    "2.4 exported handle injected");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire handle sync");
+            check(handleCalls[0] == 1, "2.4 handle delivered once");
+            check("java-handle".equals(handleSeen[0]), "2.4 handle string delivered");
+            Pt.window_unexport_foreign_handle(wireWindow);
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire unexport sync");
+            check((int) wdLiveId.invokeExact(47) == 0, "2.4 exported object destroyed");
+            check((int) wdExportedHandle.invokeExact(arena.allocateFrom("late-handle")) == 0,
+                    "2.4 late handle is a no-op");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire late handle sync");
+            check(handleCalls[0] == 1, "2.4 late handle not delivered");
+
+            check(Pt.window_set_foreign_parent(wireWindow, "opaque-parent"),
+                    "2.4 wire import parent");
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire import sync");
+            check((int) wdLiveId.invokeExact(49) != 0, "2.4 imported object live");
+            Pt.window_clear_foreign_parent(wireWindow);
+            check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire clear parent sync");
+            check((int) wdLiveId.invokeExact(49) == 0, "2.4 imported object destroyed");
+            check(wireError(wdError).isEmpty(), "2.4 wire protocol clean");
+        } finally {
+            try {
+                if (wireApp.address() != 0) {
+                    Pt.app_destroy(wireApp);
+                }
+                if (started && wdStop != null) {
+                    wdStop.invokeExact();
+                }
+            } finally {
+                driverArena.close();
+                if (previousHeadless != null) {
+                    nativeSetenv("PT_HEADLESS", previousHeadless);
+                } else {
+                    nativeUnsetenv("PT_HEADLESS");
+                }
+            }
+        }
+    }
+
+    /**
      * Pins a private Pt MethodHandle's FFM signature: boolean result and one
      * MemorySegment (pointer) argument.
      */
@@ -422,6 +568,7 @@ public final class PtTest {
     public static void main(String[] args) throws Throwable {
         try (Arena arena = Arena.ofConfined()) {
             wireDispatchTest(arena);
+            activationForeignWireTest(arena);
             MemorySegment app = Pt.app_create("pt.tests.java");
             check(app.address() != 0, "app_create");
             if (app.address() == 0) {
