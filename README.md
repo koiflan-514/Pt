@@ -6,22 +6,17 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **2.4.0**. The protocol-extensions release: a window can request an
-xdg-activation token, activate with a token received out of band, and adopt an
-inherited `XDG_ACTIVATION_TOKEN`; a toplevel can also export and import an
-opaque `xdg-foreign-unstable-v2` handle to parent an out-of-process dialog. It
-adds **6 public functions and 2 callbacks**, so the surface becomes **587
-functions and 968 baseline entries**, 0 removed and 0 changed against 2.3.0.
-The surface is a 587-function C ABI wrapped in C++/Python/Java with
-binding parity enforced;
-SONAME stays `libpt.so.1` because 2.4 is additive and every application that
-does not opt in keeps the 2.3 path byte for byte (`ABI_MAJOR` is tracked
-separately from `VERSION`). Both protocols are best-effort: a compositor
-without the global returns `false` or a silent no-op, never a crash. The
-release record is tag-ready with the gate run markers filled in; see
-[docs/release.md](docs/release.md). The API
-is tracked by a reviewed baseline, a generated function reference and a
-compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
+Status: **2.5.0**. The standalone-theme-editor release: a new tool under
+`tools/theme-editor/` edits all **38 colour roles and 10 metrics**, stores them
+as bounded `pt-theme/1` JSON and exports a compilable C theme function, with a
+real WCAG 2.x contrast report. The **core ABI is unchanged**: still **587
+functions and 968 baseline entries**, 0 added, 0 removed and 0 changed against
+2.4.0; `ABI_MAJOR` stays 1, the SONAME stays `libpt.so.1`, and `libpt.so`
+exports no `te_*` symbol because the tool links the static library through
+public headers only. The release record is tag-ready with the gate run markers
+filled in; see [docs/release.md](docs/release.md). The API is tracked by a
+reviewed baseline, a generated function reference and a compatibility policy;
+see [docs/api-reference.md](docs/api-reference.md),
 [docs/api-policy.md](docs/api-policy.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why Pt
@@ -71,6 +66,49 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 2.5.0
+
+2.5.0 is the standalone-theme-editor release. The tool lives entirely outside
+the library: it links `libpt.a` through public headers, and neither a public
+header, a source file, a binding nor `api/pt.api` changes. The core surface
+stays **587 functions and 968 baseline entries**, 0 added, 0 removed and 0
+changed against 2.4.0; `ABI_MAJOR` stays 1, the SONAME stays `libpt.so.1` and
+the library exports no `te_*` symbol.
+
+- **A real editor for the token table.** `tools/theme-editor` is a Pt
+  application itself: it edits all 38 colour roles and all 10 metrics with the
+  public colour picker and number fields, previews them in a separate Pt window
+  through the public per-window overrides, and can seed a document from either
+  built-in palette. It is not part of `make all`; `make theme-editor` builds it
+  and `make run-theme-editor` opens it.
+- **`pt-theme/1` documents.** Theme files are one bounded JSON object with the
+  schema tag, the source scheme, every colour as `RRGGBBAA` and every metric in
+  logical pixels. Import accepts the picker's spellings (`#RRGGBB`,
+  `0xRRGGBBAA`, lowercase), unknown keys are warnings and `--strict` makes
+  them errors. The reader enforces 1 MiB, depth 8, a 95-byte name and
+  duplicate-free keys, and uses no locale-dependent `strtod`.
+- **Real WCAG 2.x contrast.** `--check` prints the pair table against the
+  documented floors and needs no display; `--strict` also fails on a missed
+  floor. The tool reports the actual WCAG ratio instead of the core's
+  approximate `pt_theme_contrast_text`, which stays unchanged, and an explicit
+  `accent_text` remains the way to satisfy a pair.
+- **Canonical JSON and C export.** Export is deterministic: enum order,
+  two-space indent, uppercase 8-digit colours and `%.9g` metrics, byte-identical
+  on repetition and re-readable. `--export-c` writes one complete C23
+  translation unit with a `theme_apply_<slug>` function that applies every
+  colour and metric through public setters.
+- **Zero core ABI, gated.** `make check-theme-editor` runs the headless check on
+  both golden fixtures, two pure-module test binaries join `make check`
+  (`test_theme_format`, `test_theme_wcag`), and the release gate keeps
+  `api/pt.api` at 587 / 968 with binding parity 587/587.
+
+Known limits: a metric must have a fixed-point `%.9g` form, so the reader
+rejects values below roughly `0.0001` and at or above `1e9` with
+`TE_ERR_RANGE`; the parser is the only entry point, so every parsed document
+round-trips. v1 carries one scheme per file. See
+[docs/theming.md](docs/theming.md#theme-editor-250) and
+[docs/m27-design.md](docs/m27-design.md).
 
 ## What is new in 2.4.0
 
