@@ -6,13 +6,15 @@
 应用可以使用 C、C++、Python 或 Java 编写，面向同一套扁平 C ABI。
 这个名字是铂的化学符号：小而致密、不易反应。
 
-状态：**2.3.0**。内联图片文本段版本：标签或文本区域可以通过 U+FFFC 对象替换
-符把带引用计数的位图放进 UTF-8 文本，并由冻结的侧表承载。本版新增 **5 个公共
-函数、2 个枚举值和 1 个结构体**，表面变为 **581 个函数和 960 条基线条目**，相对
-2.2.0 移除 0 个、变更 0 个。
-表面为包含 581 个函数的 C ABI，由 C++/Python/Java 封装，并强制要求绑定功能对等；
-SONAME 保持 `libpt.so.1`，因为 2.3 是追加式的，且从不设置图片的控件逐字节保持
-2.2 的文本路径（`ABI_MAJOR` 与 `VERSION` 分开跟踪）。
+状态：**2.4.0**。协议扩展版本：窗口可以请求 xdg-activation 令牌、用带外收到的
+令牌激活，并采纳继承来的 `XDG_ACTIVATION_TOKEN`；顶层窗口还可以导出和导入不透明
+的 `xdg-foreign-unstable-v2` 句柄，作为进程外对话框的父窗口。本版新增 **6 个公共
+函数和 2 个回调**，表面变为 **587 个函数和 968 条基线条目**，相对 2.3.0 移除 0
+个、变更 0 个。
+表面为包含 587 个函数的 C ABI，由 C++/Python/Java 封装，并强制要求绑定功能对等；
+SONAME 保持 `libpt.so.1`，因为 2.4 是追加式的，且从不启用新功能的程序逐字节保持
+2.3 的路径（`ABI_MAJOR` 与 `VERSION` 分开跟踪）。两个协议都是尽力而为：缺少对应
+global 的合成器返回 `false` 或静默空操作，绝不崩溃。
 发布记录已可打 tag，门禁运行标记已回填；参见
 [docs/release.md](docs/release.md)。API 由经审阅的基线、生成的函数参考和
 兼容性策略共同跟踪；参见 [docs/api-reference.md](docs/api-reference.md)、
@@ -55,6 +57,37 @@ SONAME 保持 `libpt.so.1`，因为 2.3 是追加式的，且从不设置图片�
 - 基于 `wl_shm` 的软件渲染：冷启动快，窗口未获焦时空闲占用不到单核的 0.3%，
   不依赖 GPU 驱动。
 - Apache-2.0，全程使用 snake_case 标识符，没有隐藏的全局状态。
+
+## 2.4.0 的新特性
+
+2.4.0 是协议扩展版本。它绑定 **xdg-activation-v1**（staging）和
+**xdg-foreign-unstable-v2**（已废弃的 v1 不绑定），新增 **6 个公共函数和 2 个
+回调**，表面变为 **587 个函数和 968 条基线条目**，相对 2.3.0 移除 0 个、变更 0
+个。所有新增都是尽力而为、按需启用的：没有宣传对应 global 的合成器会得到文档化
+的 `false` 返回或静默空操作，因此从不调用新函数的程序逐字节保持 2.3 的路径，
+`ABI_MAJOR` 保持 1，SONAME 保持 `libpt.so.1`。
+
+- **激活令牌。** `pt_window_request_activation_token` 向合成器请求一次性令牌，
+  并通过 `pt_activation_token_callback` 交付；`pt_window_activate` 用带外收到的
+  令牌提升本顶层窗口。以环境变量 `XDG_ACTIVATION_TOKEN` 启动的进程会采纳该令牌，
+  并在首个映射窗口上消费一次。令牌在调用期间借用；上一次请求遗留的令牌会在存储
+  新令牌前失效。
+- **外部父子关系。** `pt_window_export_foreign_handle` 通过
+  `pt_foreign_handle_callback` 把本顶层窗口暴露为不透明的
+  `xdg-foreign-unstable-v2` 句柄，`pt_window_unexport_foreign_handle` 撤销它，
+  `pt_window_set_foreign_parent` / `pt_window_clear_foreign_parent` 把调用者的
+  句柄导入为本窗口的父窗口。句柄不透明且借用：绝不解析、记录或持久化。重新导出
+  会使旧句柄失效，一个窗口最多有一个父窗口；导入的对象被销毁时会异步撤销该关系，
+  窗口销毁时两个拆卸钩子都会运行。
+- **降级、矩阵与绑定。** 无头平台或缺少 global 的合成器会静默降级而不是失败。
+  合成器矩阵记录了 niri 的现场运行（令牌和句柄长度均为 32 字节，导入和设置父
+  窗口均被接受）；Weston 尚缺该行。C++、Python 和 Java 以每种语言一致的所有权
+  规则封装全部六个函数和两个回调（绑定功能对等为 587/587），双语协议扩展指南
+  记录已交付契约。
+
+已知限制：外部协议仍不稳定，激活是合成器可以拒绝的请求，缺少 global 的合成器只会
+得到空操作降级。颜色管理、Vulkan/EGL 和主题编辑器仍然延期；参见
+[docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 2.3.0 的新特性
 

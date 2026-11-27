@@ -6,16 +6,18 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **2.3.0**. The inline image runs release: a label or text area can place
-a reference-counted raster image inside its UTF-8 text through a U+FFFC object
-replacement character, backed by a frozen side table. It adds **5 public
-functions, 2 enum values and 1 struct**, so the surface becomes **581 functions
-and 960 baseline entries**, 0 removed and 0 changed against 2.2.0.
-The surface is a 581-function C ABI wrapped in C++/Python/Java with
+Status: **2.4.0**. The protocol-extensions release: a window can request an
+xdg-activation token, activate with a token received out of band, and adopt an
+inherited `XDG_ACTIVATION_TOKEN`; a toplevel can also export and import an
+opaque `xdg-foreign-unstable-v2` handle to parent an out-of-process dialog. It
+adds **6 public functions and 2 callbacks**, so the surface becomes **587
+functions and 968 baseline entries**, 0 removed and 0 changed against 2.3.0.
+The surface is a 587-function C ABI wrapped in C++/Python/Java with
 binding parity enforced;
-SONAME stays `libpt.so.1` because 2.3 is additive and every widget without an
-image keeps the 2.2 text path byte for byte (`ABI_MAJOR` is tracked
-separately from `VERSION`). The
+SONAME stays `libpt.so.1` because 2.4 is additive and every application that
+does not opt in keeps the 2.3 path byte for byte (`ABI_MAJOR` is tracked
+separately from `VERSION`). Both protocols are best-effort: a compositor
+without the global returns `false` or a silent no-op, never a crash. The
 release record is tag-ready with the gate run markers filled in; see
 [docs/release.md](docs/release.md). The API
 is tracked by a reviewed baseline, a generated function reference and a
@@ -69,6 +71,47 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 2.4.0
+
+2.4.0 is the protocol-extensions release. It binds **xdg-activation-v1**
+(staging) and **xdg-foreign-unstable-v2** (the deprecated v1 is not bound) and
+adds **6 public functions and 2 callbacks**, so the surface becomes **587
+functions and 968 baseline entries**, 0 removed and 0 changed against 2.3.0.
+Every addition is best-effort and opt-in: a compositor that does not advertise
+the global gets a documented `false` return or a silent no-op, so an
+application that never calls the new functions keeps the 2.3 path byte for
+byte, `ABI_MAJOR` stays 1 and the SONAME stays `libpt.so.1`.
+
+- **Activation tokens.** `pt_window_request_activation_token` asks the
+  compositor for a one-shot token and delivers it through
+  `pt_activation_token_callback`; `pt_window_activate` raises this toplevel
+  with a token received out of band. A process launched with
+  `XDG_ACTIVATION_TOKEN` in its environment adopts that token and consumes it
+  once, on the first mapped window. Tokens are borrowed for the duration of the
+  call, and a token left over from a previous request is invalidated before a
+  new one is stored.
+- **Foreign parenting.** `pt_window_export_foreign_handle` exposes this
+  toplevel as an opaque `xdg-foreign-unstable-v2` handle through
+  `pt_foreign_handle_callback`, `pt_window_unexport_foreign_handle` withdraws
+  it, and `pt_window_set_foreign_parent` / `pt_window_clear_foreign_parent`
+  import a caller's handle as this window's parent. Handles are opaque and
+  borrowed: never parse, log or persist them. Re-exporting invalidates the old
+  handle, and a window carries at most one parent; destroying the imported
+  object asynchronously withdraws the relationship, and window destruction
+  runs both teardown hooks.
+- **Fallbacks, matrix and bindings.** A headless platform or a compositor
+  without the global degrades silently instead of failing. The compositor
+  matrix records a live niri run (token and handle lengths of 32 bytes, import
+  and set-parent accepted); Weston is still missing that row. C++, Python and
+  Java wrap all six functions and both callbacks with one ownership rule per
+  language (binding parity is 587/587), and the bilingual protocol-extensions
+  guide records the delivered contract.
+
+Known limits: the foreign protocol is unstable, activation is a request the
+compositor may refuse, and a compositor without the global simply gets the
+no-op fallback. Color management, Vulkan/EGL and the theme editor remain
+deferred; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What is new in 2.3.0
 
