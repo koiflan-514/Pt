@@ -18,6 +18,11 @@ typedef struct pt_edit_state {
     size_t anchor;
     pt_text_span *spans;
     uint32_t span_count;
+    /* Inline image table snapshot (2.3). The image side table travels with the
+     * text so undo/redo restore a placeholder and its descriptor together; the
+     * snapshot owns one reference per handle. */
+    pt_text_image *images;
+    uint32_t image_count;
 } pt_edit_state;
 
 typedef struct pt_edit_history {
@@ -38,17 +43,44 @@ static bool kind_is_checked_control(pt_widget_kind kind);
 static void checked_control_set(pt_widget *widget, bool checked, bool notify);
 static void segmented_select(pt_widget *segmented, uint32_t index, bool notify);
 
+static void edit_state_free(pt_edit_state *state) {
+    if (!state) {
+        return;
+    }
+    free(state->text);
+    free(state->spans);
+    for (uint32_t i = 0; i < state->image_count; ++i) {
+        pt_icon_image_destroy(state->images[i].image);
+    }
+    free(state->images);
+    state->text = NULL;
+    state->spans = NULL;
+    state->images = NULL;
+    state->image_count = 0;
+}
+
+static void edit_state_capture_images(pt_edit_state *state, const pt_widget *entry) {
+    state->images = NULL;
+    state->image_count = entry->image_count;
+    if (entry->image_count == 0) {
+        return;
+    }
+    state->images = pt_alloc(entry->image_count * sizeof(*state->images));
+    memcpy(state->images, entry->images, entry->image_count * sizeof(*state->images));
+    for (uint32_t i = 0; i < state->image_count; ++i) {
+        pt_icon_image_ref(state->images[i].image);
+    }
+}
+
 static void edit_history_free(pt_edit_history *history) {
     if (!history) {
         return;
     }
     for (size_t i = 0; i < history->undo_count; ++i) {
-        free(history->undo[i].text);
-        free(history->undo[i].spans);
+        edit_state_free(&history->undo[i]);
     }
     for (size_t i = 0; i < history->redo_count; ++i) {
-        free(history->redo[i].text);
-        free(history->redo[i].spans);
+        edit_state_free(&history->redo[i]);
     }
     free(history);
 }
@@ -264,8 +296,7 @@ static void entry_set_cursor(pt_widget *entry, size_t cursor, bool extend) {
 
 static void edit_state_push(pt_edit_state *stack, size_t *count, const pt_widget *entry) {
     if (*count == pt_edit_history_cap) {
-        free(stack[0].text);
-        free(stack[0].spans);
+        edit_state_free(&stack[0]);
         memmove(&stack[0], &stack[1], (*count - 1) * sizeof(*stack));
         --*count;
     }
@@ -279,13 +310,13 @@ static void edit_state_push(pt_edit_state *stack, size_t *count, const pt_widget
         memcpy(stack[*count].spans, entry->spans,
                entry->span_count * sizeof(*entry->spans));
     }
+    edit_state_capture_images(&stack[*count], entry);
     ++*count;
 }
 
 static void edit_state_clear(pt_edit_state *stack, size_t *count) {
     for (size_t i = 0; i < *count; ++i) {
-        free(stack[i].text);
-        free(stack[i].spans);
+        edit_state_free(&stack[i]);
     }
     *count = 0;
 }
@@ -335,14 +366,31 @@ static bool entry_history_step(pt_widget *entry, bool redo) {
     if (*from_count == 0) {
         return false;
     }
+    uint32_t images_before = entry->image_count;
     edit_state_push(to, to_count, entry);
     --*from_count;
     pt_edit_state state = from[*from_count];
     free(entry->text);
     entry->text = state.text;
+    state.text = NULL;
     free(entry->spans);
     entry->spans = state.spans;
+    state.spans = NULL;
     entry->span_count = state.span_count;
+    /* The widget owns the restored handles now; the snapshot transfers its
+     * references instead of taking new ones. */
+    pt_widget_images_clear(entry);
+    entry->images = state.images;
+    entry->image_count = state.image_count;
+    entry->image_capacity = state.image_count;
+    state.images = NULL;
+    state.image_count = 0;
+    /* Defensive: a stale snapshot can never leave a descriptor without its
+     * placeholder. */
+    pt_widget_images_clamp(entry);
+    if (images_before != entry->image_count) {
+        pt_widget_a11y_emit(entry, pt_a11y_event_structure_changed);
+    }
     entry->cursor = entry_cursor_clamped(entry, state.cursor);
     entry->selection_anchor = entry_cursor_clamped(entry, state.anchor);
     free(entry->preedit);

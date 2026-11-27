@@ -1279,6 +1279,112 @@ static void test_shift_cross_wrap(pt_app *app) {
 }
 
 
+#define INLINE_PLACEHOLDER "\xEF\xBF\xBC"
+
+static pt_icon_image *make_inline_icon(void) {
+    uint32_t pixels[16];
+    for (int i = 0; i < 16; ++i) {
+        pixels[i] = 0x80FF0000u | (uint32_t)i;
+    }
+    size_t size = 0;
+    uint8_t *png = pt_png_encode_argb_premultiplied(pixels, 4, 4, &size);
+    pt_check(png != NULL && size > 0);
+    pt_icon_image *image = png ? pt_icon_image_load_memory(png, size) : NULL;
+    free(png);
+    return image;
+}
+
+/* W3c inline images in the text area: selection endpoints snap to the object
+ * edges (one atomic rectangle), the caret box follows the raised line height,
+ * typing shifts the descriptor, IME deletion never splits U+FFFC and undo/redo
+ * restore text and image together. */
+static void test_inline_image_editing(pt_app *app) {
+    pt_window *window = pt_window_create(app, "inline-image-area", 420, 240);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *area = pt_text_area_create(pt_window_root(window), "");
+    pt_widget_set_size(area, 360.0f, 180.0f);
+    pt_check(area != NULL);
+    pt_icon_image *icon = make_inline_icon();
+    pt_check(icon != NULL);
+    if (!area || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_window_free(window);
+        return;
+    }
+    pt_widget_set_text(area, "ab" INLINE_PLACEHOLDER "cd");
+    pt_text_image entry = {0};
+    entry.start = 2;
+    entry.image = icon;
+    entry.width = 16.0f;
+    entry.height = 24.0f;
+    entry.align = pt_text_image_align_middle;
+    memcpy(entry.alt, "chart", 6);
+    pt_check(pt_widget_set_text_images(area, &entry, 1));
+    pt_window_show(window);
+    pt_check(pt_widget_focus(area));
+
+    /* Both endpoints inside the placeholder snap outward to the whole object. */
+    pt_text_area_set_selection(area, 3, 4);
+    uint32_t start = 0;
+    uint32_t end = 0;
+    pt_check(pt_text_area_get_selection(area, &start, &end));
+    pt_check(start == 2 && end == 5);
+    pt_text_area_set_selection(area, 4, 4);
+    pt_text_area_set_selection(area, 4, 2);
+    pt_check(pt_text_area_get_selection(area, &start, &end));
+    pt_check(start == 2 && end == 5);
+
+    /* The caret is as tall as the composed line, which the 24px image raises. */
+    pt_layout_ctx ctx = pt_layout_context_for(area);
+    pt_text_layout layout = {0};
+    pt_check(pt_text_layout_build(area, &ctx, pt_text_area_content_width(area), &layout));
+    pt_check(layout.has_runs);
+    pt_check(layout.line_height >= 24.0f);
+    int caret_x = 0;
+    int caret_y = 0;
+    int caret_w = 0;
+    int caret_h = 0;
+    pt_text_area_caret_box(area, &ctx, &caret_x, &caret_y, &caret_w, &caret_h);
+    pt_check(caret_w > 0);
+    pt_check(caret_h >= 24);
+    pt_check_near(caret_h, layout.line_height, 1.0);
+    pt_text_layout_free(&layout);
+
+    /* Editing before the image shifts the descriptor; undo restores it. */
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(window, XKB_KEY_z, 0, "z", true);
+    pt_text_image got = {0};
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 3);
+    pt_check(pt_text_area_undo(area));
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 2);
+    pt_check(strcmp(pt_widget_get_text(area), "ab" INLINE_PLACEHOLDER "cd") == 0);
+
+    /* Backspace just after the image deletes the whole object atomically. */
+    pt_text_area_set_selection(area, 5, 5);
+    pt_check(pt_widget_ime_apply(area, "Q", 1, 0, true));
+    pt_check(strcmp(pt_widget_get_text(area), "abQcd") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+    pt_check(pt_text_area_undo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "ab" INLINE_PLACEHOLDER "cd") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 2 && got.image == icon);
+    pt_check(strcmp(got.alt, "chart") == 0);
+    pt_check(pt_text_area_redo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "abQcd") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+    pt_check(pt_text_area_undo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "ab" INLINE_PLACEHOLDER "cd") == 0);
+
+    pt_icon_image_destroy(icon);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.textarea");
@@ -1307,6 +1413,7 @@ int main(void) {
     test_soft_wrap_affinity(app);
     test_visual_collapse(app);
     test_shift_cross_wrap(app);
+    test_inline_image_editing(app);
 
     pt_canvas_destroy(canvas);
     pt_window_free(window);

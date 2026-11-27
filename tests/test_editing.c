@@ -1085,6 +1085,13 @@ static void test_copy_cut_inline_image(pt_app *app) {
     free(clipboard);
     pt_check(strcmp(pt_widget_get_text(area), "") == 0);
     pt_check(pt_widget_get_text_image_count(area) == 0);
+    /* The cut is one history step that restores the placeholder and image. */
+    pt_check(pt_text_area_undo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "x" IMAGE_PLACEHOLDER "y") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_check(pt_text_area_redo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
 
     /* Plain paste of U+FFFC is text only; it must not invent a descriptor. */
     pt_check(pt_window_clipboard_set(window, "a" IMAGE_PLACEHOLDER "b"));

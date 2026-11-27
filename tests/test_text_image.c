@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <xkbcommon/xkbcommon-keysyms.h>
+
 #define placeholder "\xEF\xBF\xBC"
 
 typedef struct insert_event_log {
@@ -786,6 +788,77 @@ static void test_pipeline_runs(pt_widget *root) {
     pt_icon_image_destroy(icon);
 }
 
+/* W3c history: text and the image side table are one undo unit. Restoring the
+ * text without the descriptor (or the reverse) would leave a dangling
+ * placeholder, so both directions are asserted. */
+static void test_undo_images(pt_widget *root) {
+    pt_widget *area = pt_text_area_create(root, "");
+    pt_icon_image *icon = make_icon();
+    pt_check(area != NULL && icon != NULL);
+    if (!area || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_widget_destroy(area);
+        return;
+    }
+    pt_widget_set_text(area, "ab");
+    pt_check(pt_widget_focus(area));
+    pt_text_image entry = descriptor(0, icon);
+    entry.width = 9.0f;
+    entry.height = 6.0f;
+    memcpy(entry.alt, "undo.png", 9);
+    pt_text_area_set_selection(area, 2, 2);
+    pt_check(pt_text_area_insert_image(area, &entry, NULL));
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+
+    /* Undo removes the placeholder and the descriptor together. */
+    pt_check(pt_text_area_undo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "ab") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+
+    /* Redo restores both, with the descriptor fields intact. */
+    pt_check(pt_text_area_redo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder) == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_text_image got = {0};
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 2);
+    pt_check(got.image == icon);
+    pt_check_near(got.width, 9.0f, 0.0001f);
+    pt_check_near(got.height, 6.0f, 0.0001f);
+    pt_check(strcmp(got.alt, "undo.png") == 0);
+
+    /* Deleting the object records a step; undo brings it back and redo drops it
+     * again. The handle stays valid because the history owns a reference. */
+    pt_text_area_set_selection(area, 2, 5);
+    pt_window_input_key(pt_widget_window(area), XKB_KEY_BackSpace, 0, NULL, true);
+    pt_check(strcmp(pt_widget_get_text(area), "ab") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+    pt_check(pt_text_area_undo(area));
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 2 && got.image == icon);
+    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder) == 0);
+    pt_check(pt_text_area_redo(area));
+    pt_check(strcmp(pt_widget_get_text(area), "ab") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+
+    /* Typing before an image shifts it; undo shifts it back and keeps the
+     * descriptor attached to its placeholder. */
+    pt_check(pt_text_area_undo(area));
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_text_area_set_selection(area, 0, 0);
+    pt_window_input_key(pt_widget_window(area), XKB_KEY_x, 0, "x", true);
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 3);
+    pt_check(pt_text_area_undo(area));
+    pt_check(pt_widget_get_text_image(area, 0, &got));
+    pt_check(got.start == 2);
+    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder) == 0);
+
+    pt_icon_image_destroy(icon);
+    pt_widget_destroy(area);
+}
+
 /* W3c clipboard text: a contained descriptor becomes its alt text, an empty
  * alt keeps U+FFFC, a raw placeholder without a descriptor is untouched and a
  * defensive partial range still emits one whole U+FFFC. */
@@ -897,6 +970,7 @@ int main(void) {
     test_insert_shift(root);
     test_insert_rejections(root);
     test_insert_undo_text(root);
+    test_undo_images(root);
     test_pipeline_runs(root);
     test_copy_text(root);
     test_zero_regression(root);
