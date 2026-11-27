@@ -741,14 +741,24 @@ class widget {
         }
         return span;
     }
-    widget &set_text_images(const std::vector<pt_text_image> &images) {
-        pt_widget_set_text_images(handle_, images.data(), (uint32_t)images.size());
-        return *this;
+    /* Installs inline image runs over the current U+FFFC placeholders. The
+     * widget takes its own reference to each descriptor's image, so the caller
+     * keeps ownership of its icon_image handles and may drop them right away.
+     * Entries with a NULL image or a start that is not a placeholder are
+     * dropped by the C layer. Returns false only when the widget cannot hold
+     * runs (anything but a label or text area) or the table allocation fails;
+     * with false the previous table is left untouched. On success the images
+     * of the replaced table may already have been released unless the new
+     * table still refers to them, so the old descriptors cannot be replayed to
+     * restore the previous images. */
+    bool set_text_images(const std::vector<pt_text_image> &images) {
+        return pt_widget_set_text_images(handle_, images.data(), (uint32_t)images.size());
     }
-    widget &set_text_images(std::initializer_list<pt_text_image> images) {
+    bool set_text_images(std::initializer_list<pt_text_image> images) {
         std::vector<pt_text_image> values(images);
         return set_text_images(values);
     }
+    /* Drops every run and releases its image references. */
     widget &clear_text_images() {
         pt_widget_clear_text_images(handle_);
         return *this;
@@ -756,6 +766,12 @@ class widget {
     [[nodiscard]] uint32_t text_image_count() const {
         return pt_widget_get_text_image_count(handle_);
     }
+    /* Copies one descriptor out of the side table. The copied image pointer
+     * stays borrowed from the widget: it is valid only while the entry has not
+     * been replaced or cleared and the widget is alive. To keep the reference
+     * longer, share it with pt::icon_image(pt_icon_image_ref(...)); never build
+     * a pt::icon_image straight from it, since that would own a borrowed
+     * handle. Returns nullopt for any index at or past text_image_count(). */
     [[nodiscard]] std::optional<pt_text_image> text_image(uint32_t index) const {
         pt_text_image image{};
         if (!pt_widget_get_text_image(handle_, index, &image)) {
@@ -849,7 +865,18 @@ class widget {
     bool redo() const {
         return is_text_area() ? pt_text_area_redo(handle_) : pt_entry_redo(handle_);
     }
+    /* Inserts a U+FFFC placeholder at the caret (replacing the selection) and
+     * attaches image to it. image.start is ignored. The text area takes its own
+     * reference to image.image, so the caller may drop its icon_image right
+     * after a successful call. Returns the byte offset of the new placeholder,
+     * or nullopt without touching the text or the table when the widget is not
+     * a text area, the image handle is NULL or invalid, an endpoint falls
+     * inside an existing placeholder's UTF-8 sequence, or the text limit would
+     * be reached. */
     [[nodiscard]] std::optional<uint32_t> insert_image(const pt_text_image &image) {
+        if (!image.image) {
+            return std::nullopt;
+        }
         uint32_t start = 0;
         if (!pt_text_area_insert_image(handle_, &image, &start)) {
             return std::nullopt;
