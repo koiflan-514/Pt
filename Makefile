@@ -8,7 +8,7 @@ PYTHON ?= python3
 JAVA ?= java
 JAVAC ?= javac
 
-VERSION := 2.2.0
+VERSION := 2.3.0
 ABI_MAJOR := 1
 SONAME := libpt.so.$(ABI_MAJOR)
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 1767225600)
