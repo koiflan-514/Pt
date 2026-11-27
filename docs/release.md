@@ -1158,6 +1158,130 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
+## 2.5.0 validation record (2026-11-27, final — tag-ready)
+
+Environment: the final gate tree on `m27/integration` on the reference machine
+(CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1, Python 3.14.10,
+OpenJDK 25.0.2 and wayland-protocols 1.50. The release is built on the
+published 2.4.0 tree `82a5b79`: W0 interfaces and build wiring `01adeee` (with
+`223128f`, `a1f943a`); W1 reader, writer, C export and tests `e2749da`…`3fcd7ba`;
+W2 WCAG module `0e7b1ec`; W3a editor shell and CLI `573f9a3` (with `902cdb5`);
+W3b preview, polish and tool README `0cc095e` (with `02e6be1`, `d9f8356`,
+`e7e6830`, `5f6be5f`); W4 theming-guide pair `0fa6722` (with `807a378`,
+`d68b5ee`). W5 adds the gate commits starting at `45e6515`. Every wave was
+independently reviewed PASS.
+
+2.5.0 is the **standalone-theme-editor** release. It ships
+`tools/theme-editor`: a Pt application that edits the existing 38 colour roles
+and 10 metrics, previews them through the public per-window override API,
+stores documents as versioned `pt-theme/1` JSON with a bounded hand-written
+reader, exports compilable C, and reports real WCAG 2.x contrast. It is a
+tools-track release: **no public header, source, binding or `api/pt.api` entry
+changes**, and `libpt.so` defines no `te_*` symbol. The baseline stays **587
+functions / 968 entries** (587 `func`, 305 `enum`, 45 `callback`, 12 `struct`,
+12 `opaque`, 6 `define`, 1 `type`), with 0 added, 0 removed and 0 changed
+against 2.4.0. SONAME stays `libpt.so.1`; `ABI_MAJOR` stays `1`; `VERSION` and
+`pt_version_*` become 2.5.0.
+
+### Scope
+
+- **Token editing.** One colour picker per role and number fields for the 10
+  metrics, seeded from either built-in palette through the public getters. The
+  preview is a second toplevel styled only with `pt_window_set_theme_color`
+  and `pt_window_set_theme_metric`; the editor window keeps the neutral
+  palette. The tool uses only public headers and is not part of `make all`.
+- **`pt-theme/1` format.** One bounded JSON object: `schema`, `scheme`, all 38
+  colours as `RRGGBBAA` and all 10 metrics in logical pixels. Canonical output
+  is enum order, two-space indent, uppercase 8-digit colours, `%.9g` metrics
+  and one trailing newline. Import accepts the colour picker's spellings;
+  unknown keys are warnings and `--strict` makes them errors. The reader caps
+  the file at 1 MiB, depth at 8, the name at 95 UTF-8 bytes, rejects duplicate
+  keys and trailing garbage, and uses no locale-dependent `strtod`.
+- **C export.** `--export-c` writes one complete C23 translation unit with a
+  `theme_apply_<slug>(pt_app *)` function that applies the scheme, every
+  colour and every metric through the public setters in enum order.
+- **WCAG checks.** A pure tool-local module implements sRGB linearisation,
+  relative luminance, contrast ratio and straight-alpha compositing for the
+  documented pair floors; `--check` and `--strict` are headless. The core's
+  approximate `pt_theme_contrast_text` is deliberately unchanged.
+- Out of scope: any core API/ABI change, theme bundles carrying two schemes,
+  portal/GSettings theme import, a core contrast correction, and any change to
+  rendering, layout, input or accessibility.
+
+### Behaviour changes
+
+- **No application-visible change.** Pixels, layout, damage, input,
+  accessibility and LTR/RTL are byte-identical to 2.4.0; only a new optional
+  tool, two test binaries, docs and the version string are new.
+- **A metric is limited to its canonical fixed-point form.** The reader rejects
+  exponent-form `%.9g` values (below roughly 0.0001 or at least 1e9) with
+  `TE_ERR_RANGE`, so a parsed document always round-trips through the writer.
+- **The tool is explicit.** It is not in `make all`; `make theme-editor` builds
+  it, and `make check-theme-editor` runs the headless golden check.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass: `include/pt/base.h` (`pt_version_major/minor/patch` = 2/5/0 and `pt_version_string` `"2.5.0"`), `Makefile` `VERSION := 2.5.0`, `theme-editor --version` prints `theme-editor 2.5.0 (pt-theme/1)`, the README status line, the generated reference and the staged pkg-config say 2.5.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| Core API baseline | pass: `api/pt.api` reads 587 functions / 968 entries, 0 added, 0 removed and 0 changed against `82a5b79`; `exports: 587 pt_* symbols; 0 missing, 0 unexpected`; `tools/gen-api-reference.py --check` is clean at 2.5.0 |
+| Core ABI | pass: a clean rebuild produces `libpt.so.2.5.0` with SONAME `libpt.so.1`; `nm -D --defined-only` lists 587 `T pt_*` symbols and 0 `te_*` symbols, so the tool never enters the library |
+| Binding parity | pass: 587/587 in C++, Python and Java, 0 missing, 0 allowlisted; the C++ suite runs 1,074 checks, the Python suite 88 tests (0 skipped) and the Java suite 818 checks, 0 failures |
+| `make check` | pass: 48 C/theme executables, 590,849 checks in total, 0 failures, including the 454,380-check property sweep, `test_theme_format` 2,078 and `test_theme_wcag` 1,202; `api-check` and the generated reference are clean |
+| Theme editor gate | pass: `make check-theme-editor` validates both golden files, prints `15 pairs checked, 1 informational, 0 failed` and `Result: PASS`; the tool also builds with `werror=1` and reports no warning |
+| Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| LTR byte stability | pass: `tools/ltr-compat.sh 82a5b79 HEAD` reports 11/11 `SAME` (0 different), and all 50 `test_visuals` PNG snapshots (403 checks) are sha256-identical between `82a5b79` and HEAD |
+| `make perf-check` | pass: every guard ceiling holds (`startup first frame 16.461 ms`, `idle 300 ms CPU 0.308 ms`, `dense layout 4.868 ms`, `dense full paint 9.169 ms`, `dense damage share 3.491%`, `4K full paint 13.589 ms` of 158.4 ms, `4K one-row damage 0.941 ms`, `100k table scroll 8.165 ms`) and the bidi profiles hold (`mixed paragraph wrap+paint 1.541 ms` vs 2.0 ms, `rtl table 100 rows paint 5.436 ms` vs 7.0 ms, `rtl entry 1000 caret moves 75.599 ms` vs 100 ms) |
+| Sanitizers and staged install | pass end to end: bare `tools/ci.sh` (default `-j2`, `UBSAN_OPTIONS=halt_on_error=1`) exits 0 (`CI verification passed for Pt 2.5.0`); the ASan+UBSan pass covers the C suites, both theme suites (`test_theme_format` 2,078, `test_theme_wcag` 1,202), `test_cpp` 1,074, the Python suite 88 tests and the Java suite 818 checks with nothing reported; staged install reports SONAME `libpt.so.1`, pkg-config 2.5.0, the checked-in ABI, the C/C++/Python/Java consumers and a clean `uninstall` |
+| Live suites | pass under nested niri: `check-wayland` 65 checks with `protocol-live activation=ok token_len=32` and `protocol-live foreign=ok handle_len=32 import=ok set_parent_of=ok`; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `COMMIT=你好` (nihao + space); `check-rtl-live` RESULT PASS — the IME rectangle matches the visual caret map, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink; the theme editor survives a nested niri smoke and is stopped by its 3 s timeout with exit **124** as expected |
+| Bilingual documentation | pass: 11 public guides with identical code blocks, headings and table rows, including the README pair that now carries the 2.5.0 section |
+| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduce `build/ci/normal/dist/pt-2.5.0.tar.gz` byte-identically (sidecar matches); the extracted tree builds with `werror=1` and passes `make check`; the digests are recorded under "Release digests" below |
+
+### ABI statement
+
+2.5.0 changes **no** declaration, enum value, struct layout or export. The
+release is version-only on the library side: `ABI_MAJOR := 1`, SONAME
+`libpt.so.1`, 587 exported `pt_*` symbols before and after, and 0 `te_*`
+exports because tool objects are not in `LIB_SOURCES`. A sorted diff of
+`api/pt.api` against `82a5b79` is empty, and the binding parity report stays
+587/587 in all three languages. `abidiff` (libabigail) is still unavailable on
+the reference machine, so the release-time run is symbol-level; the API
+baseline diff is the type-level evidence.
+
+### Release digests
+
+Because this record ships inside the release archive, editing it changes the
+archive digest. Three values are recorded, in the 2.0–2.4 style:
+
+- **Gate-time.** `tools/ci.sh` reproduced
+  `288bf03d40749c0af2e75e639750bf5cba397758b95341b8539f5bfb4703a2db` on the
+  pre-record gate tree (`d3122fd`), twice, at `SOURCE_DATE_EPOCH=1767225600`,
+  with the sidecar matching both runs.
+- **Committed-tree.** The frozen tree that carries this record reproduces the
+  digest recorded in the tag-time sidecar. Writing this paragraph changes the
+  archive, so `make dist` on the final commit is the value to quote; the gate
+  measured the committed-tree digest on the tag-ready commit and it is recorded
+  with the release report.
+- **Tag-time sidecar.** `pt-2.5.0.tar.gz.sha256` is the authoritative value.
+
+### Known issues
+
+- **A metric must have a fixed-point `%.9g` form.** Values below roughly
+  `0.0001` and at or above `1e9` are rejected with `TE_ERR_RANGE`; the parser
+  is the only entry point, so every parsed document round-trips. This is a
+  documented format limit, not a UI limitation.
+- **v1 carries one scheme per file.** A dual-scheme bundle, portal theme import
+  and a live system-theme reader are v2 candidates.
+- **The editor's contrast is the real WCAG value.** The core's approximate
+  `pt_theme_contrast_text` is unchanged; a core correction would be a separate
+  visual-review change.
+- **The GUI is exercised by a nested smoke, not a screenshot suite.** The
+  headless `--check` path covers the parser, exporter and WCAG logic.
+- **The tool is not installed by `make install`.** It builds from the tree and
+  links the static library; packaging is left to the distributor.
+- **No core limit changes.** xdg-foreign v1, color-management, Vulkan/EGL and
+  X11 keep their 2.4.0 deferrals, and the 2.4.0 known issues remain valid.
+
 ## 2.4.0 validation record (2026-11-27, final — tag-ready)
 
 Environment: the final gate tree on `m26/w8-gate` on the reference machine

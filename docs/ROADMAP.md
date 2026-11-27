@@ -462,9 +462,10 @@ core ABI beyond what the bindings can audit.
   tree at 93 materialized widgets, 0.005-0.006 ms/frame layout, 10.2-11.7
   ms/frame full paint and 0.150-0.180 ms/frame one-cell damage paint (1.5%).
 
-Deferred beyond 0.6: multi-column sorting, keyed row updates, variable row
-heights, styled text, a complete function-by-function API reference and
-closing the older binding gaps.
+Deferred beyond 0.6: multi-column sorting and keyed row updates shipped in 0.7.0
+(M13, "Data-view and input depth"); variable row heights and styled text stay
+deferred, while the function-by-function reference and the older binding gaps
+closed during the 0.7-1.0 stabilization.
 
 ## M13 - Binding parity, API documentation and 1.0 stabilization (done, 0.7.0)
 
@@ -2734,14 +2735,16 @@ single agent (~15%, no child agents); Q-CN carries W6a (~8%, with DuMate as
 backup); Lobster carries W7 + W8 (~17%). Dropping foreign at the W5 gate saves
 the W4 budget and part of W8.
 
-## M27 - 2.5.0: standalone theme editor (proposed; not started)
+## M27 - 2.5.0: standalone theme editor (delivered 2.5.0; closed 2026-11-27)
 
-**Status: proposed (2026-11-27), design only.** No implementation or build file
-is changed. The design-time baseline is the 2.4.0 tree `82a5b79`: `api/pt.api`
-**587 functions / 968 entries**, `ABI_MAJOR = 1`, SONAME `libpt.so.1`, version
-2.4.0. The full feasibility evidence, schema, test plan and file ownership are
-in [m27-design.md](m27-design.md). This proposal supersedes the M26 "theme
-editor" deferral row; the 2.4.0 record stays historical.
+**Status: delivered and closed, tag-ready (2026-11-27).** The implementation
+landed on the published 2.4.0 tree `82a5b79` (W0-W4 merged at `0fa6722`; W5 adds
+the gate commits). The design-time baseline and the delivered release both read
+`api/pt.api` **587 functions / 968 entries**, `ABI_MAJOR = 1`, SONAME
+`libpt.so.1`; the version is 2.5.0. The full feasibility evidence, schema, test
+plan and file ownership are in [m27-design.md](m27-design.md); the validation
+record is in [release.md](release.md). The delivered release supersedes the M26
+"theme editor" deferral row; the 2.4.0 record stays historical.
 
 Goal: ship the post-1.0 **standalone visual theme editor** as a Pt application
 under `tools/theme-editor`, editing the existing token table, previewing through
@@ -2824,7 +2827,7 @@ wave.
 ### Completion criteria
 
 - `make -j2 theme-editor` and `make -j2 check` are green with `werror=1`; the two
-  new suites join the existing 47 C executables without changing any old test.
+  new suites join the existing C suites without changing any old test.
 - JSON round-trips the dark/light goldens deterministically; malformed cases and
   `--strict` exit codes are covered; the C export compiles as C23.
 - WCAG matches the documented floors within 0.01 and runs without a display.
@@ -2834,6 +2837,18 @@ wave.
   SONAME stays `libpt.so.1`, binding parity stays 587/587,
   `gen-api-reference.py --check` is clean, the bilingual check reports 11 pairs,
   the serial sanitizer pass is green and `git status` is clean.
+
+**Status: all criteria met on the 2.5.0 final gate.** The tool builds with
+`werror=1`; `make check` runs 48 C/theme executables with 590,849 checks
+(including `test_theme_format` 2,078 and `test_theme_wcag` 1,202) and 0
+failures; `check-theme-editor` reports `15 pairs checked, 1 informational, 0
+failed`; `tools/ci.sh -j2` exits 0 including the sanitizer pass, the staged
+install and the reproducible tarball; `api/pt.api` stays 587 / 968 with 0
+added/removed/changed and binding parity stays 587/587; `nm -D` shows 587
+`pt_*` and no `te_*`; `ltr-compat.sh 82a5b79 HEAD` is 11/11 `SAME` and all 50
+`test_visuals` snapshots are sha256-identical; the nested niri smoke survives to
+its 124 timeout; the bilingual check stays at 11 pairs. The per-item
+measurements are in the Results table of [release.md](release.md).
 
 ### Budget
 
@@ -2853,7 +2868,7 @@ sanitizer runs are serial.
 | Multi-scheme theme bundle / live desktop theme import | v1 is one scheme per file; no portal dependency in a token editor | a v2 schema agreement, or a stable cross-desktop preference API |
 
 color-management-v1, Vulkan/EGL, X11 and xdg-foreign v1 keep their 2.4.0
-deferrals and re-open triggers; nothing in this proposal changes them.
+deferrals and re-open triggers; nothing in this release changes them.
 
 ## Post-1.0 horizons
 
@@ -2899,7 +2914,8 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
   measurements justify it. The CPU `pt_paint_*` API and the GPU backend share
   geometry/colour/text so applications do not rewrite to switch.
 - A standalone visual theme editor on the token table, exporting C/JSON with
-  built-in WCAG contrast checks; it stays out of the core ABI.
+  built-in WCAG contrast checks; it stays out of the core ABI. Delivered in
+  M27 as 2.5.0.
 - Additional protocols (`xdg-activation`, `color-management` for HDR,
   `xdg-foreign`) only with a real need and matrix rows plus fallback tests.
 - X11 or other platform backends only if maintainable without compromising the

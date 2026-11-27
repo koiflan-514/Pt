@@ -434,12 +434,9 @@ tests and the CLI cannot diverge.
   587 `pt_*` symbols and no `te_*` symbol.
 - `tools/gen-api-reference.py --check`, `make api-check`, the binding parity
   check and the exported-symbol audit are unchanged.
-- The release version may become 2.5.0 (`include/pt/base.h` macros and the
-  Makefile `VERSION` only) because the tool ships in the project release. That
-  changes the library filename `libpt.so.2.5.0`, not the SONAME or any ABI
-  value. If the release owner prefers a tools-only tag without a library
-  version bump, the same gate passes with 2.4.0; the design does not depend on
-  the version string.
+- The delivered release is 2.5.0 (`include/pt/base.h` macros and the Makefile
+  `VERSION` only) because the tool ships in the project release. That changes
+  the library filename `libpt.so.2.5.0`, not the SONAME or any ABI value.
 
 The core's approximate `pt_theme_contrast_text` is **not** changed. The editor
 reports the real WCAG result and lets the user set `accent_text` explicitly.
