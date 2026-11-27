@@ -94,6 +94,7 @@ static void test_set_get_roundtrip(pt_widget *root) {
     pt_check(got.width == 0.0f && got.height == 0.0f);
     pt_check(got.alt[0] == '\0');
     pt_widget_clear_text_images(label);
+    pt_icon_image_destroy(second);
 
     pt_check(!pt_widget_set_text_images(NULL, &zero, 1));
     pt_check(pt_widget_set_text_images(label, NULL, 0));
