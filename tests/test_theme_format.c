@@ -162,8 +162,8 @@ static void test_stub_error_paths(void) {
      * the report must describe the failure without crashing. */
     memset(&report, 0, sizeof report);
     pt_check(te_parse_json(&doc, "{\"schema\":\"pt-theme/1\"}", 22, NULL, &report) ==
-             TE_ERR_NOT_IMPLEMENTED);
-    pt_check(report.error == TE_ERR_NOT_IMPLEMENTED);
+             TE_ERR_SYNTAX);
+    pt_check(report.error == TE_ERR_SYNTAX);
     pt_check(report.message[0] != 0);
     pt_check(report.warning_count == 0);
     pt_check(doc.name[0] == 'X');
@@ -171,7 +171,7 @@ static void test_stub_error_paths(void) {
     pt_check(doc.colors[pt_theme_background] == 0x112233FFu);
 
     te_parse_options strict = {.strict = true};
-    pt_check(te_parse_json(&doc, "{}", 2, &strict, NULL) == TE_ERR_NOT_IMPLEMENTED);
+    pt_check(te_parse_json(&doc, "{}", 2, &strict, NULL) == TE_ERR_SCHEMA);
 
     pt_check(te_load_json_file(NULL, "x.json", NULL, &report) == TE_ERR_ARGUMENT);
     pt_check(te_load_json_file(&doc, NULL, NULL, &report) == TE_ERR_ARGUMENT);
