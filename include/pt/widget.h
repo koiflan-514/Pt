@@ -328,6 +328,23 @@ pt_api uint32_t pt_widget_get_text_span_count(const pt_widget *widget);
 pt_api bool pt_widget_get_text_span(const pt_widget *widget, uint32_t index,
                                     pt_text_span *span);
 
+/* Inline image runs on labels and text areas. The setter copies the array,
+ * validates each start against the current text (a non-U+FFFC entry is
+ * dropped), sorts by start, keeps the last entry for a duplicate placeholder,
+ * takes references to non-NULL images and drops NULL entries. NULL or count 0
+ * is equivalent to pt_widget_clear_text_images. A text set or a text edit that
+ * removes a placeholder releases its image. The setter marks layout dirty and
+ * emits a structure-changed accessibility event. Since 2.3. */
+pt_api bool pt_widget_set_text_images(pt_widget *widget, const pt_text_image *images,
+                                      uint32_t count);
+/* Since 2.3. */
+pt_api void pt_widget_clear_text_images(pt_widget *widget);
+/* Since 2.3. */
+pt_api uint32_t pt_widget_get_text_image_count(const pt_widget *widget);
+/* Copies one descriptor; the returned image handle is borrowed. Since 2.3. */
+pt_api bool pt_widget_get_text_image(const pt_widget *widget, uint32_t index,
+                                     pt_text_image *image);
+
 /* Tooltips appear after the delay while the pointer rests over the widget.
  * The default delay is 600 ms. Passing NULL or an empty string removes it.
  * Since 1.0. */

@@ -255,6 +255,8 @@ enum pt_text_align_start = 0
 enum pt_text_direction_auto = 0
 enum pt_text_direction_ltr = 1
 enum pt_text_direction_rtl = 2
+enum pt_text_image_align_baseline = 0
+enum pt_text_image_align_middle = 1
 enum pt_text_span_has_color = 8
 enum pt_text_span_has_family = 16
 enum pt_text_span_has_size = 32
@@ -786,6 +788,7 @@ func pt_uri_list_count uint32_tpt_uri_list_count(constchar*text)
 func pt_uri_list_get char*pt_uri_list_get(constchar*text,uint32_tindex)
 func pt_widget_clear_children voidpt_widget_clear_children(pt_widget*widget)
 func pt_widget_clear_paint_callback voidpt_widget_clear_paint_callback(pt_widget*widget)
+func pt_widget_clear_text_images voidpt_widget_clear_text_images(pt_widget*widget)
 func pt_widget_clear_text_spans voidpt_widget_clear_text_spans(pt_widget*widget)
 func pt_widget_destroy voidpt_widget_destroy(pt_widget*widget)
 func pt_widget_focus boolpt_widget_focus(pt_widget*widget)
@@ -807,6 +810,8 @@ func pt_widget_get_invalid boolpt_widget_get_invalid(constpt_widget*widget)
 func pt_widget_get_kind pt_widget_kindpt_widget_get_kind(constpt_widget*widget)
 func pt_widget_get_text constchar*pt_widget_get_text(constpt_widget*widget)
 func pt_widget_get_text_direction pt_text_directionpt_widget_get_text_direction(constpt_widget*widget)
+func pt_widget_get_text_image boolpt_widget_get_text_image(constpt_widget*widget,uint32_tindex,pt_text_image*image)
+func pt_widget_get_text_image_count uint32_tpt_widget_get_text_image_count(constpt_widget*widget)
 func pt_widget_get_text_span boolpt_widget_get_text_span(constpt_widget*widget,uint32_tindex,pt_text_span*span)
 func pt_widget_get_text_span_count uint32_tpt_widget_get_text_span_count(constpt_widget*widget)
 func pt_widget_get_ui_direction pt_ui_directionpt_widget_get_ui_direction(constpt_widget*widget)
@@ -851,6 +856,7 @@ func pt_widget_set_size voidpt_widget_set_size(pt_widget*widget,floatwidth,float
 func pt_widget_set_text voidpt_widget_set_text(pt_widget*widget,constchar*text)
 func pt_widget_set_text_align voidpt_widget_set_text_align(pt_widget*widget,pt_text_alignalign)
 func pt_widget_set_text_direction voidpt_widget_set_text_direction(pt_widget*widget,pt_text_directiondirection)
+func pt_widget_set_text_images boolpt_widget_set_text_images(pt_widget*widget,constpt_text_image*images,uint32_tcount)
 func pt_widget_set_text_spans boolpt_widget_set_text_spans(pt_widget*widget,constpt_text_span*spans,uint32_tcount)
 func pt_widget_set_tooltip voidpt_widget_set_tooltip(pt_widget*widget,constchar*text)
 func pt_widget_set_tooltip_delay voidpt_widget_set_tooltip_delay(pt_widget*widget,uint32_tmilliseconds)
@@ -950,6 +956,7 @@ struct pt_paint_pixels_desc intstride|floatscale|pt_pixel_formatformat|uint32_tr
 struct pt_pointer_event pt_pointer_phasephase|floatx|floaty|floatdelta_x|floatdelta_y|uint32_tbutton|uint32_tmodifiers|uint32_tclick_count|boolpressed
 struct pt_popup_anchor floatx|floaty|floatwidth|floatheight
 struct pt_stylus_event pt_stylus_phasephase|pt_stylus_tooltool|floatx|floaty|floatpressure|floatdistance|floattilt_x|floattilt_y|floatrotation|uint32_tbuttons
+struct pt_text_image uint32_tstart|structpt_icon_image*image|floatwidth|floatheight|pt_text_image_alignalign|charalt[128]
 struct pt_text_span uint32_tstart|uint32_tlength|pt_font_weightweight|pt_font_slantslant|pt_colorcolor|uint32_tflags|charfamily[64]|floatsize
 struct pt_transition floatvalue|floatstart|floattarget|floatelapsed|floatduration|pt_easingeasing|boolactive
 type pt_color uint32_t

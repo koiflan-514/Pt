@@ -414,6 +414,15 @@ bool pt_widget_supports_spans(const pt_widget *widget);
 void pt_widget_spans_on_insert(pt_widget *widget, size_t position, size_t length);
 void pt_widget_spans_on_delete(pt_widget *widget, size_t start, size_t end);
 void pt_widget_spans_clamp(pt_widget *widget);
+
+/* Inline image side table. The text stays the single source of truth: an entry
+ * is valid only while widget->text has the three-byte U+FFFC sequence at its
+ * start. The public setters live in image_run.c; W3 calls the edit hooks from
+ * the same places that shift spans. */
+void pt_widget_images_clear(pt_widget *widget);
+void pt_widget_images_on_insert(pt_widget *widget, size_t position, size_t length);
+void pt_widget_images_on_delete(pt_widget *widget, size_t start, size_t end);
+void pt_widget_images_clamp(pt_widget *widget);
 bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_text_runs *out);
 /* Resolved paragraph base for single-line text without running the full UBA:
  * explicit/auto widget text direction, then P2 first strong, then the resolved
@@ -989,6 +998,9 @@ typedef struct pt_widget {
     char *preedit;
     pt_text_span *spans;
     uint32_t span_count;
+    pt_text_image *images;
+    uint32_t image_count;
+    uint32_t image_capacity;
     int32_t preedit_cursor_begin;
     int32_t preedit_cursor_end;
     pt_ime_hint *preedit_hints;

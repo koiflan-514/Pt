@@ -741,6 +741,28 @@ class widget {
         }
         return span;
     }
+    widget &set_text_images(const std::vector<pt_text_image> &images) {
+        pt_widget_set_text_images(handle_, images.data(), (uint32_t)images.size());
+        return *this;
+    }
+    widget &set_text_images(std::initializer_list<pt_text_image> images) {
+        std::vector<pt_text_image> values(images);
+        return set_text_images(values);
+    }
+    widget &clear_text_images() {
+        pt_widget_clear_text_images(handle_);
+        return *this;
+    }
+    [[nodiscard]] uint32_t text_image_count() const {
+        return pt_widget_get_text_image_count(handle_);
+    }
+    [[nodiscard]] std::optional<pt_text_image> text_image(uint32_t index) const {
+        pt_text_image image{};
+        if (!pt_widget_get_text_image(handle_, index, &image)) {
+            return std::nullopt;
+        }
+        return image;
+    }
     widget &set_input_purpose(pt_input_purpose purpose) {
         pt_widget_set_input_purpose(handle_, purpose);
         return *this;

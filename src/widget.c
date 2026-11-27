@@ -1619,6 +1619,7 @@ void pt_widget_free_tree(pt_widget *widget) {
     pt_widget_extra_free(widget);
     free(widget->text);
     free(widget->spans);
+    pt_widget_images_clear(widget);
     free(widget->placeholder);
     free(widget->preedit);
     free(widget->preedit_hints);
@@ -2333,6 +2334,7 @@ void pt_widget_set_text(pt_widget *widget, const char *text) {
     free(widget->spans);
     widget->spans = NULL;
     widget->span_count = 0;
+    pt_widget_images_clear(widget);
     bool editable = widget_is_text_input(widget);
     if (!editable) {
         pt_widget_a11y_emit(widget, pt_a11y_event_name_changed);

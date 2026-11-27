@@ -28,6 +28,7 @@ __all__ = [
     "GestureEvent",
     "StylusEvent",
     "TextSpan",
+    "TextImage",
     "DragData",
     "TreeNode",
     "Transition",
@@ -169,6 +170,8 @@ __all__ = [
     "text_span_has_color",
     "text_span_has_family",
     "text_span_has_size",
+    "text_image_align_baseline",
+    "text_image_align_middle",
     "input_purpose_normal",
     "input_purpose_email",
     "input_purpose_url",
@@ -515,6 +518,9 @@ text_span_has_slant = 1 << 2
 text_span_has_color = 1 << 3
 text_span_has_family = 1 << 4
 text_span_has_size = 1 << 5
+
+text_image_align_baseline = 0
+text_image_align_middle = 1
 
 input_purpose_normal = 0
 input_purpose_email = 1
@@ -1037,6 +1043,27 @@ class TextSpan(_ctypes.Structure):
         ("flags", _ctypes.c_uint32),
         ("family", _ctypes.c_char * 64),
         ("size", _ctypes.c_float),
+    ]
+
+
+class TextImage(_ctypes.Structure):
+    """One inline image run over a U+FFFC placeholder.
+
+    ``start`` is the UTF-8 byte offset of the three-byte placeholder and
+    ``image`` is the raw pointer of an :class:`IconImage` (setter takes its own
+    reference, so the caller may destroy its handle after the call). A zero or
+    non-finite width or height means the intrinsic icon size. ``alt`` is copied
+    and truncated to 127 bytes. Getter results carry a borrowed pointer; only
+    the widget owns that reference.
+    """
+
+    _fields_ = [
+        ("start", _ctypes.c_uint32),
+        ("image", _ctypes.c_void_p),
+        ("width", _ctypes.c_float),
+        ("height", _ctypes.c_float),
+        ("align", _ctypes.c_int),
+        ("alt", _ctypes.c_char * 128),
     ]
 
 
@@ -1883,6 +1910,24 @@ _pt_widget_get_text_span = _proto(
     _c_void_p,
     _c_uint32,
     _ctypes.POINTER(TextSpan),
+)
+_pt_widget_set_text_images = _proto(
+    "pt_widget_set_text_images",
+    _c_bool,
+    _c_void_p,
+    _ctypes.POINTER(TextImage),
+    _c_uint32,
+)
+_pt_widget_clear_text_images = _proto("pt_widget_clear_text_images", None, _c_void_p)
+_pt_widget_get_text_image_count = _proto(
+    "pt_widget_get_text_image_count", _c_uint32, _c_void_p
+)
+_pt_widget_get_text_image = _proto(
+    "pt_widget_get_text_image",
+    _c_bool,
+    _c_void_p,
+    _c_uint32,
+    _ctypes.POINTER(TextImage),
 )
 _pt_widget_set_input_purpose = _proto(
     "pt_widget_set_input_purpose", None, _c_void_p, _c_int
@@ -3062,6 +3107,27 @@ class Widget:
         if not _pt_widget_get_text_span(self._ptr, index, _ctypes.byref(span)):
             return None
         return span
+
+    def set_text_images(self, images: "list[TextImage] | None") -> "Widget":
+        if not images:
+            _pt_widget_set_text_images(self._ptr, None, 0)
+            return self
+        array = (TextImage * len(images))(*images)
+        _pt_widget_set_text_images(self._ptr, array, len(images))
+        return self
+
+    def clear_text_images(self) -> "Widget":
+        _pt_widget_clear_text_images(self._ptr)
+        return self
+
+    def text_image_count(self) -> int:
+        return int(_pt_widget_get_text_image_count(self._ptr))
+
+    def text_image(self, index: int) -> Optional[TextImage]:
+        image = TextImage()
+        if not _pt_widget_get_text_image(self._ptr, index, _ctypes.byref(image)):
+            return None
+        return image
 
     def set_input_purpose(self, purpose: int) -> "Widget":
         _pt_widget_set_input_purpose(self._ptr, int(purpose))

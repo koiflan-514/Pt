@@ -200,6 +200,35 @@ typedef struct pt_text_span {
     float size;
 } pt_text_span;
 
+/* Vertical placement of an inline image relative to the text baseline. The zero
+ * value is the default: the image's bottom edge sits on the baseline. middle
+ * centres the image on the baseline and extends the line above and below. */
+typedef enum pt_text_image_align {
+    pt_text_image_align_baseline = 0,
+    pt_text_image_align_middle
+} pt_text_image_align;
+
+struct pt_icon_image;
+
+/* One inline image run over a U+FFFC object replacement character. start is the
+ * byte offset of the three-byte EF BF BC sequence in the widget text; the
+ * placeholder is inserted by the caller or by pt_text_area_insert_image.
+ * width and height are logical pixels; <= 0 or non-finite means intrinsic size
+ * (one positive dimension preserves the aspect ratio). alt is a NUL-terminated
+ * UTF-8 string copied into the descriptor and truncated at 127 bytes; it is
+ * what a copied selection and AT-SPI expose instead of U+FFFC. image is
+ * reference counted: the setter takes a reference and releases it on replace,
+ * clear, text replacement or widget destruction. A getter returns the handle
+ * borrowed from the widget. */
+typedef struct pt_text_image {
+    uint32_t start;
+    struct pt_icon_image *image;
+    float width;
+    float height;
+    pt_text_image_align align;
+    char alt[128];
+} pt_text_image;
+
 typedef enum pt_color_scheme {
     pt_color_scheme_dark = 0,
     pt_color_scheme_light

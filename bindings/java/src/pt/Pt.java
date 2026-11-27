@@ -318,6 +318,20 @@ public final class Pt {
         }
     }
 
+    /** One inline image run over a U+FFFC placeholder.
+     *
+     * <p>{@code start} is the UTF-8 byte offset of the three-byte placeholder;
+     * {@code image} is the native icon pointer (the setter takes its own
+     * reference). A zero or non-finite width or height means the intrinsic icon
+     * size. {@code alt} is copied and truncated to 127 bytes.
+     */
+    public record TextImage(int start, long image, float width, float height, int align,
+            String alt) {
+        public TextImage(int start, long image, float width, float height, int align) {
+            this(start, image, width, height, align, "");
+        }
+    }
+
     /** One MIME entry of a structured drag; size zero means NUL-terminated data. */
     public record DragData(String mime_type, String data, long size) {}
 
@@ -431,6 +445,8 @@ public final class Pt {
     public static final int text_span_has_color = 1 << 3;
     public static final int text_span_has_family = 1 << 4;
     public static final int text_span_has_size = 1 << 5;
+    public static final int text_image_align_baseline = 0;
+    public static final int text_image_align_middle = 1;
 
     public static final int input_purpose_normal = 0;
     public static final int input_purpose_email = 1;
@@ -1157,6 +1173,14 @@ public final class Pt {
             "pt_widget_get_text_span_count", desc(i32, ptr));
     private static final MethodHandle widget_get_text_span = bind("pt_widget_get_text_span",
             desc(bool, ptr, i32, ptr));
+    private static final MethodHandle widget_set_text_images = bind("pt_widget_set_text_images",
+            desc(bool, ptr, ptr, i32));
+    private static final MethodHandle widget_clear_text_images = bind("pt_widget_clear_text_images",
+            FunctionDescriptor.ofVoid(ptr));
+    private static final MethodHandle widget_get_text_image_count = bind(
+            "pt_widget_get_text_image_count", desc(i32, ptr));
+    private static final MethodHandle widget_get_text_image = bind("pt_widget_get_text_image",
+            desc(bool, ptr, i32, ptr));
     private static final MethodHandle widget_set_input_purpose = bind(
             "pt_widget_set_input_purpose", FunctionDescriptor.ofVoid(ptr, i32));
     private static final MethodHandle widget_get_input_purpose = bind(
@@ -1171,6 +1195,15 @@ public final class Pt {
             ValueLayout.JAVA_INT.withName("flags"),
             MemoryLayout.sequenceLayout(64, ValueLayout.JAVA_BYTE).withName("family"),
             ValueLayout.JAVA_FLOAT.withName("size"));
+    private static final MemoryLayout text_image_layout = MemoryLayout.structLayout(
+            ValueLayout.JAVA_INT.withName("start"),
+            MemoryLayout.paddingLayout(4),
+            ValueLayout.JAVA_LONG.withName("image"),
+            ValueLayout.JAVA_FLOAT.withName("width"),
+            ValueLayout.JAVA_FLOAT.withName("height"),
+            ValueLayout.JAVA_INT.withName("align"),
+            MemoryLayout.sequenceLayout(128, ValueLayout.JAVA_BYTE).withName("alt"),
+            MemoryLayout.paddingLayout(4));
     private static final MethodHandle widget_set_size = bind("pt_widget_set_size",
             FunctionDescriptor.ofVoid(ptr, f32, f32));
     private static final MethodHandle widget_set_width = bind("pt_widget_set_width",
@@ -4006,6 +4039,64 @@ public final class Pt {
                     out.get(ValueLayout.JAVA_INT, 20), read_family(out), out.get(
                             ValueLayout.JAVA_FLOAT, 88));
         }
+    }
+
+    public static boolean widget_set_text_images(MemorySegment widget, TextImage[] images) {
+        if (images == null || images.length == 0) {
+            return (boolean) invoke(widget_set_text_images, widget, MemorySegment.NULL, 0);
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment array = arena.allocate(text_image_layout, images.length);
+            for (int i = 0; i < images.length; ++i) {
+                TextImage image = images[i];
+                MemorySegment slot =
+                        array.asSlice(i * text_image_layout.byteSize(), text_image_layout.byteSize());
+                slot.set(ValueLayout.JAVA_INT, 0, image.start());
+                slot.set(ValueLayout.JAVA_LONG, 8, image.image());
+                slot.set(ValueLayout.JAVA_FLOAT, 16, image.width());
+                slot.set(ValueLayout.JAVA_FLOAT, 20, image.height());
+                slot.set(ValueLayout.JAVA_INT, 24, image.align());
+                MemorySegment alt = slot.asSlice(28, 128);
+                alt.fill((byte) 0);
+                String text = image.alt();
+                if (text != null && !text.isEmpty()) {
+                    byte[] encoded = text.getBytes(StandardCharsets.UTF_8);
+                    MemorySegment source = MemorySegment.ofArray(encoded);
+                    MemorySegment.copy(source, 0, alt, 0, Math.min(encoded.length, 127));
+                }
+            }
+            return (boolean) invoke(widget_set_text_images, widget, array, images.length);
+        }
+    }
+
+    public static void widget_clear_text_images(MemorySegment widget) {
+        invoke(widget_clear_text_images, widget);
+    }
+
+    public static int widget_get_text_image_count(MemorySegment widget) {
+        return (int) invoke(widget_get_text_image_count, widget);
+    }
+
+    public static TextImage widget_get_text_image(MemorySegment widget, int index) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(text_image_layout);
+            if (!(boolean) invoke(widget_get_text_image, widget, index, out)) {
+                return null;
+            }
+            return new TextImage(out.get(ValueLayout.JAVA_INT, 0),
+                    out.get(ValueLayout.JAVA_LONG, 8), out.get(ValueLayout.JAVA_FLOAT, 16),
+                    out.get(ValueLayout.JAVA_FLOAT, 20), out.get(ValueLayout.JAVA_INT, 24),
+                    read_alt(out));
+        }
+    }
+
+    private static String read_alt(MemorySegment image) {
+        byte[] raw = image.asSlice(28, 128).toArray(ValueLayout.JAVA_BYTE);
+        int length = 0;
+        while (length < raw.length && raw[length] != 0) {
+            ++length;
+        }
+        return new String(raw, 0, length, StandardCharsets.UTF_8);
     }
 
     private static String read_family(MemorySegment span) {
