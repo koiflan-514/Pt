@@ -919,6 +919,231 @@ int main() {
     title.clear_text_spans();
     check(title.text_span_count() == 0);
 
+    /* ---- 2.3 inline image runs: descriptor mapping, round trip, lifetimes ---- */
+    check(pt_text_image_align_baseline == 0);
+    check(pt_text_image_align_middle == 1);
+    check(sizeof(pt_text_image::alt) == 128);
+    check(offsetof(pt_text_image, image) > offsetof(pt_text_image, start));
+    check(offsetof(pt_text_image, align) > offsetof(pt_text_image, height));
+
+    pt::icon_image run_icon =
+        pt::icon_image::load_memory(std::span<const uint8_t>(icon_png, sizeof(icon_png)));
+    check(run_icon.valid());
+    {
+        /* set/get round trip: alt, size and alignment survive the copy. */
+        pt::widget runs = pt::label(column.get(), "a\xEF\xBF\xBC" "b\xEF\xBF\xBC" "c");
+        pt_text_image first{};
+        first.start = 1;
+        first.image = run_icon.get();
+        first.width = 12.0f;
+        first.height = 18.0f;
+        first.align = pt_text_image_align_middle;
+        std::strcpy(first.alt, "first");
+        pt_text_image second{};
+        second.start = 5;
+        second.image = run_icon.get();
+        second.width = 0.0f;
+        second.height = -1.0f;
+        second.align = pt_text_image_align_baseline;
+        std::strcpy(second.alt, "second");
+        check(runs.set_text_images({first, second}));
+        check(runs.text_image_count() == 2);
+        const std::optional<pt_text_image> got_first = runs.text_image(0);
+        check(got_first.has_value());
+        if (got_first) {
+            check(got_first->start == 1);
+            check(got_first->image == run_icon.get());
+            check(got_first->width == 12.0f && got_first->height == 18.0f);
+            check(got_first->align == pt_text_image_align_middle);
+            check(std::strcmp(got_first->alt, "first") == 0);
+        }
+        const std::optional<pt_text_image> got_second = runs.text_image(1);
+        check(got_second.has_value());
+        if (got_second) {
+            check(got_second->start == 5);
+            check(got_second->width == 0.0f && got_second->height == -1.0f);
+            check(got_second->align == pt_text_image_align_baseline);
+            check(std::strcmp(got_second->alt, "second") == 0);
+        }
+        /* Out-of-range indices are the optional empty state. */
+        check(!runs.text_image(2).has_value());
+        check(!runs.text_image(99).has_value());
+
+        /* A vector input goes through the same path as the initializer list. */
+        std::vector<pt_text_image> vector_input{second};
+        check(runs.set_text_images(vector_input));
+        check(runs.text_image_count() == 1);
+        check(runs.text_image(0).has_value());
+        if (const std::optional<pt_text_image> only = runs.text_image(0)) {
+            check(only->start == 5 && std::strcmp(only->alt, "second") == 0);
+        }
+
+        /* alt is truncated on a UTF-8 boundary at 127 bytes. */
+        pt_text_image long_alt{};
+        long_alt.start = 1;
+        long_alt.image = run_icon.get();
+        for (int i = 0; i < 127; ++i) {
+            long_alt.alt[i] = 'x';
+        }
+        long_alt.alt[127] = '\0';
+        check(runs.set_text_images({long_alt}));
+        const std::optional<pt_text_image> truncated = runs.text_image(0);
+        check(truncated.has_value());
+        if (truncated) {
+            check(std::strlen(truncated->alt) == 127);
+        }
+
+        /* An empty vector clears the table. */
+        check(runs.set_text_images(std::vector<pt_text_image>{}));
+        check(runs.text_image_count() == 0);
+        check(!runs.text_image(0).has_value());
+
+        /* The explicit clear is a no-op on an empty table and drops entries. */
+        runs.clear_text_images();
+        check(runs.text_image_count() == 0);
+        check(runs.set_text_images({first}));
+        check(runs.text_image_count() == 1);
+        runs.clear_text_images();
+        check(runs.text_image_count() == 0);
+        check(!runs.text_image(0).has_value());
+
+        /* A NULL image is dropped rather than clearing the whole table. */
+        pt_text_image null_entry{};
+        null_entry.start = 1;
+        null_entry.image = nullptr;
+        check(runs.set_text_images({null_entry, first}));
+        check(runs.text_image_count() == 1);
+        if (const std::optional<pt_text_image> kept = runs.text_image(0)) {
+            check(kept->start == 1 && std::strcmp(kept->alt, "first") == 0);
+        }
+        /* A start that is not a placeholder is dropped too. */
+        pt_text_image misaligned = first;
+        misaligned.start = 0;
+        check(runs.set_text_images({misaligned}));
+        check(runs.text_image_count() == 0);
+        runs.clear_text_images();
+
+        /* The setter rejects widgets that cannot hold runs and leaves the
+         * previous table in place. */
+        pt::widget plain_button = pt::button(column.get(), "no runs");
+        check(!plain_button.set_text_images({first}));
+        check(plain_button.text_image_count() == 0);
+        check(runs.set_text_images({first}));
+        check(runs.text_image_count() == 1);
+        check(!plain_button.set_text_images({first}));
+        check(runs.text_image_count() == 1);
+
+        /* Ownership: the setter takes its own reference, so releasing the
+         * caller's handle keeps the run usable, and the widget drops it on
+         * clear. */
+        pt::icon_image caller_handle = run_icon.ref();
+        check(caller_handle.get() == run_icon.get());
+        pt_text_image owned = first;
+        owned.image = caller_handle.get();
+        check(runs.set_text_images({owned}));
+        const pt_icon_image *borrowed = nullptr;
+        if (const std::optional<pt_text_image> entry = runs.text_image(0)) {
+            borrowed = entry->image;
+        }
+        check(borrowed != nullptr);
+        caller_handle.reset();
+        check(!caller_handle.valid());
+        check(run_icon.valid());
+        /* Borrowed pointer is still alive (shared with run_icon). */
+        check(borrowed != nullptr && pt_icon_image_width(borrowed) == 2);
+        /* The same handle may fill more than one descriptor. */
+        pt_text_image twice_a = first;
+        pt_text_image twice_b = second;
+        twice_a.image = run_icon.get();
+        twice_b.image = run_icon.get();
+        check(runs.set_text_images({twice_a, twice_b}));
+        check(runs.text_image_count() == 2);
+        if (const std::optional<pt_text_image> a = runs.text_image(0)) {
+            check(a->image == twice_b.image);
+        }
+        runs.clear_text_images();
+        check(run_icon.valid());
+
+        /* ---- 2.3 insert_image: offset, placeholder text, shifting ---- */
+        pt::widget area = pt::text_area(column.get());
+        area.set_text("ab");
+        area.set_selection(1, 1);
+        check(area.text() == "ab");
+        pt_text_image inserted{};
+        inserted.image = run_icon.get();
+        inserted.width = 10.0f;
+        inserted.height = 0.0f;
+        inserted.align = pt_text_image_align_middle;
+        std::strcpy(inserted.alt, "inline");
+        inserted.start = 999; /* ignored by insert_image */
+        const std::optional<uint32_t> at = area.insert_image(inserted);
+        check(at.has_value());
+        check(at && *at == 1);
+        check(area.text() == "a\xEF\xBF\xBC" "b");
+        check(area.text_image_count() == 1);
+        if (const std::optional<pt_text_image> entry = area.text_image(0)) {
+            check(entry->start == 1);
+            check(entry->width == 10.0f && entry->height == 0.0f);
+            check(entry->align == pt_text_image_align_middle);
+            check(std::strcmp(entry->alt, "inline") == 0);
+        }
+
+        /* A second insert inside a run shifts the byte offsets of later runs. */
+        area.set_selection(0, 0);
+        pt_text_image head{};
+        head.image = run_icon.get();
+        std::strcpy(head.alt, "head");
+        const std::optional<uint32_t> head_at = area.insert_image(head);
+        check(head_at.has_value());
+        check(head_at && *head_at == 0);
+        check(area.text_image_count() == 2);
+        if (const std::optional<pt_text_image> entry = area.text_image(0)) {
+            check(entry->start == 0 && std::strcmp(entry->alt, "head") == 0);
+        }
+        if (const std::optional<pt_text_image> entry = area.text_image(1)) {
+            check(entry->start == 4 && std::strcmp(entry->alt, "inline") == 0);
+        }
+
+        /* Ownership: after a successful insert the caller may release its
+         * handle; the text area keeps the run alive. */
+        pt::icon_image insert_handle = run_icon.ref();
+        area.set_selection(area.text().size(), area.text().size());
+        pt_text_image tail{};
+        tail.image = insert_handle.get();
+        std::strcpy(tail.alt, "tail");
+        const std::optional<uint32_t> tail_at = area.insert_image(tail);
+        check(tail_at.has_value());
+        insert_handle.reset();
+        check(!insert_handle.valid());
+        check(area.text_image_count() == 3);
+        if (const std::optional<pt_text_image> entry = area.text_image(2)) {
+            check(std::strcmp(entry->alt, "tail") == 0);
+            check(entry->image != nullptr && entry->image == run_icon.get());
+        }
+
+        /* Failure states leave the text and table untouched. */
+        const std::string before = area.text();
+        const uint32_t count_before = area.text_image_count();
+        pt_text_image null_image{};
+        null_image.image = nullptr;
+        check(!area.insert_image(null_image).has_value());
+        check(area.text() == before);
+        check(area.text_image_count() == count_before);
+        /* Not a text area. */
+        check(!runs.insert_image(head).has_value());
+        check(!plain_button.insert_image(head).has_value());
+        check(area.text() == before);
+        check(area.text_image_count() == count_before);
+        /* An endpoint inside a placeholder sequence is rejected. */
+        area.set_selection(1, 1);
+        check(!area.insert_image(head).has_value());
+        check(area.text() == before);
+        check(area.text_image_count() == count_before);
+        area.clear_text_images();
+        check(area.text_image_count() == 0);
+        check(area.text().find("\xEF\xBF\xBC") != std::string::npos);
+    }
+
     pt::widget button = pt::button(column.get(), "Press");
     button.set_button_variant(pt_button_primary).on_click(nullptr);
     pt::widget entry = pt::entry(column.get(), "placeholder");
