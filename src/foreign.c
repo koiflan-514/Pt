@@ -7,8 +7,9 @@
 #include "internal.h"
 
 /* Argument validation lives here; the Wayland hook owns the object lifecycle
- * and the absent-global/headless fallback. W1 ships the fallback semantics and
- * W4 fills in the protocol bodies. */
+ * and the absent-global/headless fallback. The protocol bodies are in place:
+ * export/import report false (or are no-ops) when the global is absent or the
+ * platform is headless. */
 
 bool pt_window_export_foreign_handle(pt_window *window,
                                      pt_foreign_handle_callback callback,

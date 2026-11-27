@@ -1226,7 +1226,8 @@ static inline bool fake_compositor_popup_record_at(fake_compositor *fc, size_t i
 }
 
 /* Clears the request log and popup-record table; object state is retained. */
-static inline void fake_compositor_clear(fake_compositor *fc) {    pthread_mutex_lock(&fc->state_lock);
+static inline void fake_compositor_clear(fake_compositor *fc) {
+    pthread_mutex_lock(&fc->state_lock);
     fc->request_count = 0;
     fc->request_overflow = false;
     fc->popup_count = 0;
