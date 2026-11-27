@@ -2503,6 +2503,201 @@ W5 ~70, W6 ~70. DuMate carries W1 + W3 (~50%); Loomy runs W2 as a single agent
 takes docs/examples and integration/release (~17%). No wave may lower the 2.0
 LTR gate, the 2.2 RTL gate or binding parity to land images.
 
+## M26 - 2.4.0: Wayland protocol extensions (proposed; research complete 2026-11-27)
+
+**Status: proposed, no feature code.** Research and scaffolding were done on the
+published 2.3.0 tree `7a5b1cc` (branch `m26/scaffold`). The design record,
+protocol-version evidence, niri live probe, API semantics, wave ownership and
+risk register are in [m26-design.md](m26-design.md). Baseline is **581 functions
+/ 960 entries**; the proposed surface is **587 / 968** (6 functions and 2
+callbacks, no new enum or struct), `ABI_MAJOR = 1`, SONAME `libpt.so.1`.
+
+M26 takes the post-2.0 "additional protocols" item only where there is a real
+need and where the existing best-effort platform pattern can carry a fallback:
+**xdg-activation-v1** for startup notification and inter-client activation,
+and **xdg-foreign-unstable-v2** for out-of-process dialog parenting. The other
+three candidates in the post-2.0 horizon are deferred with evidence below:
+color-management, Vulkan/EGL and the standalone theme editor.
+
+### Scope
+
+- **xdg-activation-v1** (staging, interface v1). Two functions and one
+  callback: request a token for another client, and activate this window with a
+  token received out of band. `XDG_ACTIVATION_TOKEN` is read and unset at
+  startup only when the global is bound, then consumed once on the first mapped
+  window. The API requests activation; the compositor may decline.
+- **xdg-foreign-unstable-v2** (unstable, interface v1; v2 only). Four functions
+  and one callback: export an opaque toplevel handle, revoke it, import a
+  handle and set this window as its child, and clear the imported parent. This
+  is parent/child stacking, not surface embedding.
+- Out of scope: xdg-foreign v1, color-management/HDR, a GPU renderer, theme
+  serialization/editing, X11, and any change to rendering, layout, input
+  serials, accessibility, LTR/RTL or the public enums/structs.
+
+Scope fallback: if the foreign wave fails its live or fallback gate, M26 ships
+activation only at **583 / 963** (2 functions + 1 callback). Foreign is removed
+before release rather than left partial.
+
+### Feasibility and protocol versions (verified 2026-11-27)
+
+`wayland-protocols` is **1.50** at `/usr/share/wayland-protocols`.
+`xdg-activation-v1.xml` is now in **staging** (not stable; the XML still carries
+a testing-phase warning), interface v1. xdg-foreign has only **unstable** XML;
+both v1 and v2 are installed, all interfaces v1; v1 is the deprecated spelling
+and niri exposes only v2. `color-management-v1.xml` is **staging**, manager
+interface **v3**, 1,756 lines with ICC/parametric creators, mastering metadata
+and surface feedback. xdg-shell is stable v7 in both the system and vendored
+XML.
+
+| Area | Verdict | Reason |
+| --- | --- | --- |
+| xdg-activation | **feasible**, low-medium risk | Token is async (`get_activation_token` -> `done`), then one `activate(token, surface)`. `set_serial` is optional but some compositors refuse activation without a recent serial; Pt already tracks button/key serials and can set it. No rendering or layout impact. Live niri 26.04 and the nested CI niri both expose v1, issue a 32-character opaque token, and accept the activate request. |
+| xdg-foreign v2 | **feasible**, medium risk | Export is async (`handle`), and the exported object must stay alive to keep the handle valid; imported parents use `set_parent_of`. The protocol is experimental and v1 is rejected. Live niri accepts same-client export -> import -> `set_parent_of` with no protocol error. Isolated module and a scope fallback contain the risk. |
+| color-management | **defer** | Staging v3 and a full color pipeline, while Pt is premultiplied ARGB8888 sRGB (`WL_SHM_FORMAT_ARGB8888`) with no 10/12-bit, linear or float buffer and no output color-space/tone-mapping path. niri 26.04 (live and nested) has no `wp_color_manager_v1`; no measured need exists. Register the deferral; re-open only with a stable/frozen subset, a wide-gamut buffer path and a matrix compositor live test. |
+| Vulkan/EGL | **defer** | Archived 4K full paint is **37.657-47.808 ms**, 4K one-row damage **3.291-4.070 ms**; a fresh 2026-11-27 run on this host measured dense **9.142 ms**, 4K full **13.367 ms**, 4K damage **0.933 ms**, 100k scroll **8.112 ms** of 20 ms, and every ceiling held. The documented target is damage-driven or static 4K, and the 4K full ceiling is a derived regression guard, not a latency promise. No product requirement for continuous full-window 4K animation exists. The single-digit "4K ~9.9 ms" figure is not a recorded 4K full-paint value; the closest fresh number is the 1280x800 dense frame at 9.142 ms. Re-open with a repeatable budget miss plus pixel-parity/fallback tests. |
+| theme editor | **defer to a tools track** | 38 theme roles and 10 metrics, but no theme file parser or serialization (`docs/theming.md` limits); an editor needs a versioned C/JSON format, WCAG checks and preview while staying outside the core ABI. It is a separate proposal, not a protocol release item. |
+
+**Niri matrix (live, 2026-11-27).** The registry contains `xdg_activation_v1` 1,
+`zxdg_exporter_v2` 1 and `zxdg_importer_v2` 1; it does not contain
+`wp_color_manager_v1`. A probe built from the system XML issued one token
+(`done=1 len=32 empty=0`), exported one handle (`done=1 len=32 empty=0`),
+imported it in the same client, called `set_parent_of` on a second unmapped
+surface (`rc=2`, no protocol error). The same result was reproduced through
+`tools/nested-wayland.sh`, the live CI path. The probe created only unmapped
+surfaces and did not assert visible focus. The public matrix rows are:
+
+| Compositor | xdg-activation | xdg-foreign v2 |
+| --- | --- | --- |
+| Mutter 51, KWin 6.7, Sway 1.11, Hyprland 0.57.2, COSMIC 1.11.0, Muffin 6.7.4 | 1 | 1 |
+| niri 26.04 | 1 (live B) | 1 (live B) |
+| Weston 15.0.1 | — | — |
+
+`docs/compositor-matrix.md` gains these columns plus protocol-semantics rows and
+quirks: a token may be ineffective without a recent serial (Q-ACT-001); the
+environment token must be unset after reading (Q-ACT-002); bind v2 only and
+never parse the opaque handle (Q-FOR-001/002); destroying an export invalidates
+its imports (Q-FOR-003).
+
+### API summary
+
+The declarations append to `include/pt/window.h`; the design record has the
+full contracts.
+
+```c
+typedef void (*pt_activation_token_callback)(pt_window *window, const char *token,
+                                             void *user_data);
+pt_api bool pt_window_request_activation_token(pt_window *window, const char *app_id,
+                                               pt_activation_token_callback callback,
+                                               void *user_data);
+pt_api bool pt_window_activate(pt_window *window, const char *token);
+
+typedef void (*pt_foreign_handle_callback)(pt_window *window, const char *handle,
+                                           void *user_data);
+pt_api bool pt_window_export_foreign_handle(pt_window *window,
+                                            pt_foreign_handle_callback callback,
+                                            void *user_data);
+pt_api void pt_window_unexport_foreign_handle(pt_window *window);
+pt_api bool pt_window_set_foreign_parent(pt_window *window, const char *handle);
+pt_api void pt_window_clear_foreign_parent(pt_window *window);
+```
+
+Callback strings are borrowed for the call. All failure paths return `false` or
+no-op: no global, headless, NULL/empty token or handle, or an invalid token.
+`pt_window_activate` and the token callback mean "request sent", never "focus
+granted". `pt_app_create` adopts `XDG_ACTIVATION_TOKEN` only when
+`xdg_activation_v1` is bound, unsets it, and consumes it once on the first
+mapped window.
+
+Zero regression: absent globals create no objects and send no requests; the
+environment is untouched when activation is absent; no paint, layout, damage,
+a11y, LTR/RTL or serial path changes; no enum value or struct layout moves.
+Pixels remain byte-identical. The release gate repeats both
+`tools/ltr-compat.sh` runs (11/11 `SAME`).
+
+### Matrix rows and fallback tests (hard requirement)
+
+- Fake compositor: opt-in `FC_OPT_ACTIVATION` and `FC_OPT_FOREIGN` (appended
+  bits, not in `FC_OPT_ALL`), six appended interface kinds, exact opcode tables,
+  and injection helpers for `done`, `handle` and `destroyed`.
+- Supported and unsupported paths for both protocols: absent global returns
+  false with zero requests; present global asserts the exact request sequence
+  (`get_activation_token`/`set_serial`/`set_surface`/`commit`, `activate`;
+  `export_toplevel`/`handle`, `import_toplevel`/`set_parent_of`), callback
+  delivery, replacement/revocation, invalid-token/handle recovery, and
+  window/platform teardown without leaks.
+- Niri live: token non-empty and activate accepted; export handle non-empty,
+  same-client import + `set_parent_of`, clear/unexport, both windows still open;
+  skip the assertions cleanly when a global is absent. Runs through
+  `tools/nested-wayland.sh --fullscreen`.
+- Binding coverage for all six functions in C++, Python and Java, including
+  string callbacks and borrowed-token lifetime.
+
+### Waves
+
+The protocol cores are independent; `src/wayland/platform.c` and
+`src/wayland/window.c` are the serial hot spot and have one owner. The Makefile
+is edited sequentially (W1 protocol/test lines, W7 example target, W8 version).
+
+| Wave | Scope | Files owned | Depends on | Runs in parallel with | Owner |
+| --- | --- | --- | --- | --- | --- |
+| W0 | This proposal and the design record | `docs/ROADMAP.md`, `docs/m26-design.md` | - | - | scaffold |
+| W1 | Vendor XML, scanner rules, headers, core/platform stubs, baseline 587/968, test stubs | `protocols/xdg-activation-v1.xml`, `protocols/xdg-foreign-unstable-v2.xml` (new), `Makefile` (protocol/test names), `include/pt/window.h`, `src/internal.h`, `src/wayland/wayland_internal.h`, `src/activation.c`, `src/foreign.c`, `src/wayland/activation.c`, `src/wayland/foreign.c` (new), `tests/test_protocol_wire.c`, `tests/test_activation.c`, `tests/test_foreign.c` (new), `api/pt.api`, `docs/api-reference.md`, `THIRD_PARTY.md`, `NOTICE` | W0 | none | DuMate |
+| W2 | Fake compositor tables/globals/helpers and facility test | `tests/fake_compositor.h`, `tests/test_protocol_wire.c` | W1 | none (blocks W3/W4) | WB-CN (DuMate reviews) |
+| W3 | Activation public + Wayland core + wire/fallback tests | `src/activation.c`, `src/wayland/activation.c`, `tests/test_activation.c` | W2 | W4 | DuMate |
+| W4 | Foreign public + Wayland core + wire/fallback tests | `src/foreign.c`, `src/wayland/foreign.c`, `tests/test_foreign.c` | W2 | W3 | Loomy (single agent) |
+| W5 | Registry bind/destroy, startup env adoption, first-map hook, live test, matrix rows | `src/wayland/platform.c`, `src/wayland/window.c`, `tests/test_wayland.c`, `docs/compositor-matrix.md` | W3, W4 | none (serial hot spot) | DuMate |
+| W6a | C++ wrappers and tests | `bindings/cpp/pt/pt.hpp`, `bindings/cpp/test_pt.cpp` | W5 | W6b, W7 | Q-CN |
+| W6b | Python and Java wrappers and tests | `bindings/python/pt.py`, `bindings/python/test_pt.py`, `bindings/java/src/pt/Pt.java`, `bindings/java/test/pt/PtTest.java` | W5 | W6a, W7 | WB-CN |
+| W7 | Guides, README, examples, existing bilingual pairs, example target | `README.md` + `README.zh-CN.md`, `docs/quickstart.md` + zh, `docs/architecture.md` + zh, `docs/bindings.md` + zh, `examples/` (new), `Makefile` (example target only) | W5 | W6a, W6b | Lobster |
+| W8 | Merge, full gate, 2.4.0 version/release record, final status | `include/pt/base.h` (version macros), `Makefile` (`VERSION`), `docs/release.md`, `docs/ROADMAP.md`, `docs/m26-design.md`, `docs/compositor-matrix.md` | W1-W7 | none | Lobster + DuMate |
+
+Dependency graph: W0 -> W1 -> W2 -> {W3 || W4} -> W5 -> {W6a || W6b || W7} -> W8.
+Each wave uses an independent worktree and branch; reviewers merge explicit
+tips with `git merge --no-ff` into `m26/integration`. W3 and W4 rebase on the
+merged W2 tip; W5 merges both before touching the serial hot spot; W6/W7 branch
+from W5. Every wave is independently reviewed PASS before its dependants merge.
+W4 is the scope gate for foreign: a failed live/fallback path drops it and
+records the 583/963 activation-only release.
+
+### Completion criteria
+
+- `api/pt.api` reads 587 / 968 (583 / 963 if foreign is dropped); binding parity
+  587/587 in C++, Python and Java; `ABI_MAJOR` 1 and SONAME `libpt.so.1`; no
+  existing enum value or struct layout moves.
+- Activation and foreign supported/unsupported paths pass in the fake
+  compositor and in nested niri; absent globals return false with zero requests;
+  invalid tokens/handles recover silently; teardown is leak-free.
+- Startup `XDG_ACTIVATION_TOKEN` is read/unset only when the global is bound and
+  consumed exactly once on the first mapped window; a second window does not
+  repeat it.
+- Text, layout, hit-testing, accessibility, LTR and RTL are unchanged:
+  `tools/ltr-compat.sh 1.4.0 HEAD` and `2.2.0 HEAD` are 11/11 `SAME`, existing
+  snapshots are unchanged, and `make -j2 check` is green.
+- `make -j2 check-bindings`, `gen-api-reference.py --check`,
+  `gen-binding-stubs.py --check --strict`, the serial sanitizer pass, the
+  staged-install consumers, the reproducible tarball and a clean `git status`
+  are green.
+- The deferred register below is recorded in ROADMAP and no partial protocol
+  code ships.
+
+### Deferred past 2.4
+
+| Item | Evidence | Re-open trigger |
+| --- | --- | --- |
+| color-management-v1 | staging manager v3, 1,756-line XML; ARGB8888 sRGB canvas; no HDR format/output path; niri 26.04 has no global; no measured need | stable/frozen subset + 10/12-bit or float canvas + matrix compositor live test |
+| Vulkan/EGL | archived 4K full 37.657-47.808 ms, 4K damage 3.291-4.070 ms, 100k seek 11.531-14.921 of 20 ms; fresh 2026-11-27: dense 9.142 ms, 4K full 13.367 ms, 4K damage 0.933 ms, 100k scroll 8.112 of 20 ms; all ceilings hold; damage is the documented target | concrete continuous 4K full-window animation requirement + a repeatable budget miss + parity/fallback plan |
+| Theme editor | 38 tokens/10 metrics; no theme file format; outside core ABI | separate tools proposal with a versioned C/JSON format, WCAG checks and preview |
+| xdg-foreign v1 | deprecated; niri only v2; a second lifecycle for no user gain | a real v1-only target that cannot use v2 |
+
+### Budget
+
+~850-950 credits. W0 ~60, W1 ~110, W2 ~90, W3 ~140, W4 ~140, W5 ~100, W6a ~60,
+W6b ~70, W7 ~70, W8 ~80. DuMate carries W1 + W3 + W5 (~40%, including the
+protocol serial hot spot); WB-CN carries W2 + W6b (~20%); Loomy runs W4 as a
+single agent (~15%, no child agents); Q-CN carries W6a (~8%, with DuMate as
+backup); Lobster carries W7 + W8 (~17%). Dropping foreign at the W5 gate saves
+the W4 budget and part of W8.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
