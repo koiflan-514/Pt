@@ -88,6 +88,7 @@ TEST_NAMES := test_core test_abi test_canvas test_font test_layout test_widget t
 	test_popup test_font_fallback test_clipboard_media test_column_persist \
 	test_picker test_icon test_fake_compositor test_wire_input \
 	test_protocol_stubs test_protocol_wire test_activation \
+	test_foreign \
 	test_direction test_bidi test_bidi_conformance test_bidi_fuzz test_text_image
 TEST_BINS := $(addprefix $(TEST_BIN)/,$(TEST_NAMES))
 TEST_OBJECTS := $(CORE_OBJECTS)
