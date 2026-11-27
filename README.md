@@ -6,15 +6,15 @@ English | [简体中文](README.zh-CN.md)
 Applications can be written in C, C++, Python or Java against one flat C ABI.
 The name is the chemical symbol for platinum: small, dense and unreactive.
 
-Status: **2.2.0**. The RTL editing-polish release: multi-line selection paints
-its collapsed visual edge, Shift crosses a soft wrap one visual row per press in
-RTL, and the horizontal wheel axis is routed to tables with RTL direction. It
-adds **no public API**: the surface stays at **576 functions**, 0 removed and 0
-changed against 2.1.0.
-The surface is a 576-function C ABI wrapped in C++/Python/Java with
+Status: **2.3.0**. The inline image runs release: a label or text area can place
+a reference-counted raster image inside its UTF-8 text through a U+FFFC object
+replacement character, backed by a frozen side table. It adds **5 public
+functions, 2 enum values and 1 struct**, so the surface becomes **581 functions
+and 960 baseline entries**, 0 removed and 0 changed against 2.2.0.
+The surface is a 581-function C ABI wrapped in C++/Python/Java with
 binding parity enforced;
-SONAME stays `libpt.so.1` because 2.2 only changes behavior inside existing
-declarations and every default keeps 2.1 behavior (`ABI_MAJOR` is tracked
+SONAME stays `libpt.so.1` because 2.3 is additive and every widget without an
+image keeps the 2.2 text path byte for byte (`ABI_MAJOR` is tracked
 separately from `VERSION`). The
 release record is tag-ready with the gate run markers filled in; see
 [docs/release.md](docs/release.md). The API
@@ -69,6 +69,46 @@ compatibility policy; see [docs/api-reference.md](docs/api-reference.md),
 - Software rendering over `wl_shm`: fast cold start, under 0.3% of one core idle
   with an unfocused window, no GPU driver dependency.
 - Apache-2.0, snake_case identifiers throughout, no hidden global state.
+
+## What is new in 2.3.0
+
+2.3.0 is the inline image runs release. A label or text area can place a
+reference-counted raster image inside its UTF-8 text through a **U+FFFC object
+replacement character** (`EF BF BC`); the image descriptor lives in a sorted
+side table keyed by that byte offset, so the text stays the single source of
+truth and no existing offset shifts. The release adds **5 public functions, 2
+enum values and 1 struct** and the surface becomes **581 functions and 960
+baseline entries**, 0 removed and 0 changed against 2.2.0. The API is additive:
+`pt_text_span` is frozen, `ABI_MAJOR` stays 1 and the SONAME stays
+`libpt.so.1`. A widget that never sets an image takes the same layout, measure
+and paint path as 2.2.0, byte for byte, and the LTR compatibility gate reports
+no difference against 1.4.0 and 2.2.0.
+
+- **Side-table model, frozen text struct.** `pt_widget_set_text_images`,
+  `pt_widget_clear_text_images`, `pt_widget_get_text_image_count`,
+  `pt_widget_get_text_image` and `pt_text_area_insert_image` manage a sorted
+  descriptor table; `pt_text_image` carries the byte offset, a
+  reference-counted image handle, logical size, alignment and a UTF-8 alt
+  string. Ordinary edits shift, clamp and drop descriptors with the text.
+- **Fontless runs in the text pipeline.** Measurement, wrapping, the visual map
+  and paint treat the placeholder as one atomic box that bypasses shaping. The
+  box has logical and device units, so fractional scaling stays crisp, and
+  baseline or middle alignment grows the line's ascent or descent.
+- **Atomic editing and selection.** Caret movement, selection, deletion, paste
+  and IME never split the three-byte placeholder; a selection endpoint inside a
+  placeholder snaps outward before copy or cut. Copy and cut write the alt text
+  (or U+FFFC when alt is empty), and undo/redo restores the text and the image
+  table together with a deep copy.
+- **Embedded-object accessibility.** The AT-SPI bridge exposes one virtual image
+  child per run with role `image` and the alt name, real Component extents and
+  hit testing, and CutText/DeleteText through the normal text-delete path so the
+  edit is one undo step. The Text interface still reports raw U+FFFC and
+  unchanged character offsets.
+- **Bindings and documentation.** C++, Python and Java wrap the new functions
+  with the same ownership rules (binding parity is 581/581), the bilingual
+  inline-images guide records the delivered contract, and C, C++, Python and
+  Java examples embed a PNG, set aligned placeholders and insert one at the
+  caret.
 
 ## What is new in 2.2.0
 
