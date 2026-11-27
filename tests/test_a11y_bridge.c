@@ -27,6 +27,7 @@
 #define atspi_role_alert 2
 #define atspi_role_dialog 16
 #define atspi_role_frame 23
+#define atspi_role_image 27
 #define atspi_role_label 29
 #define atspi_role_list 31
 #define atspi_role_list_item 32
@@ -73,6 +74,8 @@ typedef struct signal_watch {
     char selected_path[256];
     int focus;
     char focus_path[256];
+    int children_changed;
+    char children_path[256];
 } signal_watch;
 
 static int button_clicks;
@@ -98,6 +101,11 @@ static DBusHandlerResult watch_signals(DBusConnection *connection, DBusMessage *
     }
     if (strcmp(iface, "org.a11y.atspi.Event.Object") != 0) {
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    if (strcmp(member, "ChildrenChanged") == 0) {
+        ++watch->children_changed;
+        snprintf(watch->children_path, sizeof(watch->children_path), "%s", path);
+        return DBUS_HANDLER_RESULT_HANDLED;
     }
     if (strcmp(member, "TextChanged") == 0) {
         if (watch->path && strcmp(path, watch->path) == 0) {
@@ -2579,6 +2587,299 @@ static int reexec_private_bus(char *self) {
     nftw(directory, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
     return status;
 }
+
+/* ---------- inline image virtual children ---------- */
+
+#define image_placeholder "\xEF\xBF\xBC"
+
+static pt_icon_image *make_image_icon(void) {
+    size_t size = 0;
+    uint32_t pixels[16];
+    for (int i = 0; i < 16; ++i) {
+        pixels[i] = 0x80FF0000u | (uint32_t)i;
+    }
+    uint8_t *png = pt_png_encode_argb_premultiplied(pixels, 4, 4, &size);
+    pt_check(png != NULL && size > 0);
+    pt_icon_image *image = pt_icon_image_load_memory(png, size);
+    free(png);
+    return image;
+}
+
+static int a11y_child_count_of(pt_app *app, DBusConnection *client, const char *bus,
+                               const char *path) {
+    DBusMessage *reply = a11y_get_property(app, client, bus, path,
+                                           "org.a11y.atspi.Accessible", "ChildCount");
+    int32_t count = -1;
+    bool ok = reply_int(reply, &count);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    pt_check(ok);
+    return ok ? (int)count : -1;
+}
+
+static bool a11y_char_count(pt_app *app, DBusConnection *client, const char *bus,
+                            const char *path, int32_t *out) {
+    DBusMessage *reply = a11y_get_property(app, client, bus, path,
+                                           "org.a11y.atspi.Text", "CharacterCount");
+    bool ok = reply_int(reply, out);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    return ok;
+}
+
+static bool a11y_get_text(pt_app *app, DBusConnection *client, const char *bus,
+                          const char *path, int32_t start, int32_t end, char *out,
+                          size_t size) {
+    DBusMessage *message = dbus_message_new_method_call(
+        bus, path, "org.a11y.atspi.Text", "GetText");
+    if (!message) {
+        return false;
+    }
+    dbus_int32_t first = start;
+    dbus_int32_t second = end;
+    dbus_message_append_args(message, DBUS_TYPE_INT32, &first, DBUS_TYPE_INT32, &second,
+                             DBUS_TYPE_INVALID);
+    DBusMessage *reply = a11y_call(app, client, message);
+    bool ok = reply_string(reply, out, size);
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+    return ok;
+}
+
+static bool path_ends_with(const char *path, const char *suffix) {
+    size_t path_length = strlen(path);
+    size_t suffix_length = strlen(suffix);
+    return path_length >= suffix_length &&
+           strcmp(path + path_length - suffix_length, suffix) == 0;
+}
+
+static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
+                                       pt_widget *multi_label, pt_widget *empty_label,
+                                       pt_widget *plain_label, pt_widget *image_area) {
+    DBusConnection *client = open_a11y_client();
+    pt_check(client != NULL);
+    if (!client) {
+        return;
+    }
+    signal_watch watch = {0};
+    dbus_connection_add_filter(client, watch_signals, &watch, NULL);
+    DBusError match_error;
+    dbus_error_init(&match_error);
+    dbus_bus_add_match(client, "type='signal',interface='org.a11y.atspi.Event.Object'",
+                       &match_error);
+    dbus_connection_flush(client);
+    pt_check(!dbus_error_is_set(&match_error));
+    dbus_error_free(&match_error);
+
+    a11y_ref roots[16];
+    int root_count = a11y_children(app, client, "org.a11y.atspi.Registry",
+                                   "/org/a11y/atspi/accessible/root", roots, 16);
+    pt_check(root_count > 0);
+    a11y_ref app_root = {0};
+    for (int i = 0; i < root_count; ++i) {
+        char name[256];
+        int role = a11y_role(app, client, roots[i].bus, roots[i].path);
+        bool named = a11y_name(app, client, roots[i].bus, roots[i].path, name,
+                               sizeof(name));
+        if (role == atspi_role_application && named &&
+            strcmp(name, "pt.tests.a11y-bridge") == 0) {
+            app_root = roots[i];
+            break;
+        }
+    }
+    pt_check(app_root.path[0] != '\0');
+    if (app_root.path[0] == '\0') {
+        dbus_connection_close(client);
+        dbus_connection_unref(client);
+        return;
+    }
+
+    a11y_ref windows[8];
+    pt_check(a11y_children(app, client, app_root.bus, app_root.path, windows, 8) == 1);
+    a11y_ref root_widget = {0};
+    pt_check(a11y_child_ref(app, client, windows[0].bus, windows[0].path, 0,
+                            &root_widget));
+    pt_check(root_widget.path[0] != '\0');
+
+    a11y_ref image_ref = {0};
+    a11y_ref multi_ref = {0};
+    a11y_ref empty_ref = {0};
+    a11y_ref plain_ref = {0};
+    a11y_ref area_ref = {0};
+    pt_check(find_child(app, client, windows[0].bus, root_widget.path,
+                        atspi_role_label, "Image label", &image_ref));
+    pt_check(find_child(app, client, windows[0].bus, root_widget.path,
+                        atspi_role_label, "Multi label", &multi_ref));
+    pt_check(find_child(app, client, windows[0].bus, root_widget.path,
+                        atspi_role_label, "Empty label", &empty_ref));
+    pt_check(find_child(app, client, windows[0].bus, root_widget.path,
+                        atspi_role_label, "Plain label", &plain_ref));
+    pt_check(find_child(app, client, windows[0].bus, root_widget.path,
+                        atspi_role_entry, "Image area", &area_ref));
+    pt_check(image_ref.path[0] != '\0' && multi_ref.path[0] != '\0' &&
+             empty_ref.path[0] != '\0' && plain_ref.path[0] != '\0' &&
+             area_ref.path[0] != '\0');
+
+    pt_icon_image *icon = make_image_icon();
+    pt_check(icon != NULL);
+    if (!icon) {
+        dbus_connection_close(client);
+        dbus_connection_unref(client);
+        return;
+    }
+    int children_before = watch.children_changed;
+
+    /* Attach the image runs. Every setter emits a structure-changed event. */
+    pt_text_image single = {0};
+    single.start = 1; /* the U+FFFC in "P<U+FFFC>Q" */
+    single.image = icon;
+    snprintf(single.alt, sizeof(single.alt), "%s", "photo");
+    pt_check(pt_widget_set_text_images(image_label, &single, 1));
+
+    pt_text_image first = {0};
+    first.start = 0;
+    first.image = icon;
+    snprintf(first.alt, sizeof(first.alt), "%s", "one");
+    pt_text_image second = {0};
+    second.start = 4; /* "<U+FFFC>A<U+FFFC>B" */
+    second.image = icon;
+    snprintf(second.alt, sizeof(second.alt), "%s", "\xe7\x85\xa7\xe7\x89\x87");
+    pt_text_image multi[2] = {first, second};
+    pt_check(pt_widget_set_text_images(multi_label, multi, 2));
+
+    pt_text_image empty = {0};
+    empty.start = 0;
+    empty.image = icon;
+    pt_check(pt_widget_set_text_images(empty_label, &empty, 1));
+
+    pt_text_image area = {0};
+    area.start = 0;
+    area.image = icon;
+    snprintf(area.alt, sizeof(area.alt), "%s", "area image");
+    pt_check(pt_widget_set_text_images(image_area, &area, 1));
+
+    /* A query flushes the queued structure events to the client. */
+    for (int i = 0; i < 100 && watch.children_changed < children_before + 4; ++i) {
+        pt_platform_dispatch(app, 5);
+        dbus_connection_read_write_dispatch(client, 10);
+    }
+    pt_check(a11y_child_count_of(app, client, image_ref.bus, image_ref.path) == 1);
+    pt_check(watch.children_changed >= children_before + 4);
+
+    /* ---- single image label ---- */
+    a11y_ref child = {0};
+    pt_check(a11y_child_ref(app, client, image_ref.bus, image_ref.path, 0, &child));
+    pt_check(child.path[0] != '\0');
+    pt_check(path_ends_with(child.path, "/i0"));
+    pt_check(a11y_role(app, client, child.bus, child.path) == atspi_role_image);
+    char name[256] = {0};
+    pt_check(a11y_name(app, client, child.bus, child.path, name, sizeof(name)));
+    pt_check(strcmp(name, "photo") == 0);
+
+    DBusMessage *parent_reply = a11y_get_property(app, client, child.bus, child.path,
+                                                  "org.a11y.atspi.Accessible", "Parent");
+    a11y_ref parent = {0};
+    pt_check(reply_ref(parent_reply, &parent));
+    if (parent_reply) {
+        dbus_message_unref(parent_reply);
+    }
+    pt_check(strcmp(parent.path, image_ref.path) == 0);
+
+    DBusMessage *index_reply = a11y_method(app, client, child.bus, child.path,
+                                           "org.a11y.atspi.Accessible", "GetIndexInParent");
+    int32_t index = -1;
+    pt_check(reply_int(index_reply, &index));
+    if (index_reply) {
+        dbus_message_unref(index_reply);
+    }
+    pt_check(index == 0);
+
+    a11y_ref none = {0};
+    pt_check(a11y_child_ref(app, client, image_ref.bus, image_ref.path, 1, &none));
+    pt_check(strcmp(none.path, "/org/a11y/atspi/null") == 0);
+
+    a11y_ref kids[4];
+    pt_check(a11y_children(app, client, image_ref.bus, image_ref.path, kids, 4) == 1);
+    pt_check(strcmp(kids[0].path, child.path) == 0);
+
+    /* Text interface keeps the raw placeholder and the character offsets. */
+    int32_t chars = 0;
+    pt_check(a11y_char_count(app, client, image_ref.bus, image_ref.path, &chars));
+    pt_check(chars == 3);
+    char text[64] = {0};
+    pt_check(a11y_get_text(app, client, image_ref.bus, image_ref.path, 0, 3, text,
+                           sizeof(text)));
+    pt_check(strcmp(text, "P" image_placeholder "Q") == 0);
+
+    /* ---- multiple images ---- */
+    pt_check(a11y_child_count_of(app, client, multi_ref.bus, multi_ref.path) == 2);
+    a11y_ref m0 = {0};
+    a11y_ref m1 = {0};
+    pt_check(a11y_child_ref(app, client, multi_ref.bus, multi_ref.path, 0, &m0));
+    pt_check(a11y_child_ref(app, client, multi_ref.bus, multi_ref.path, 1, &m1));
+    pt_check(path_ends_with(m0.path, "/i0"));
+    pt_check(path_ends_with(m1.path, "/i1"));
+    pt_check(a11y_role(app, client, m1.bus, m1.path) == atspi_role_image);
+    pt_check(a11y_name(app, client, m0.bus, m0.path, name, sizeof(name)));
+    pt_check(strcmp(name, "one") == 0);
+    pt_check(a11y_name(app, client, m1.bus, m1.path, name, sizeof(name)));
+    pt_check(strcmp(name, "\xe7\x85\xa7\xe7\x89\x87") == 0);
+    DBusMessage *index1_reply = a11y_method(app, client, m1.bus, m1.path,
+                                            "org.a11y.atspi.Accessible", "GetIndexInParent");
+    int32_t index1 = -1;
+    pt_check(reply_int(index1_reply, &index1));
+    if (index1_reply) {
+        dbus_message_unref(index1_reply);
+    }
+    pt_check(index1 == 1);
+
+    /* ---- empty alt is unnamed ---- */
+    pt_check(a11y_child_count_of(app, client, empty_ref.bus, empty_ref.path) == 1);
+    a11y_ref e0 = {0};
+    pt_check(a11y_child_ref(app, client, empty_ref.bus, empty_ref.path, 0, &e0));
+    pt_check(a11y_role(app, client, e0.bus, e0.path) == atspi_role_image);
+    pt_check(a11y_name(app, client, e0.bus, e0.path, name, sizeof(name)));
+    pt_check(strcmp(name, "") == 0);
+
+    /* ---- text area image ---- */
+    pt_check(a11y_child_count_of(app, client, area_ref.bus, area_ref.path) == 1);
+    a11y_ref a0 = {0};
+    pt_check(a11y_child_ref(app, client, area_ref.bus, area_ref.path, 0, &a0));
+    pt_check(a11y_role(app, client, a0.bus, a0.path) == atspi_role_image);
+    pt_check(a11y_name(app, client, a0.bus, a0.path, name, sizeof(name)));
+    pt_check(strcmp(name, "area image") == 0);
+
+    /* ---- a widget without images keeps an unchanged tree ---- */
+    pt_check(pt_widget_get_text_image_count(plain_label) == 0);
+    pt_check(a11y_child_count_of(app, client, plain_ref.bus, plain_ref.path) == 0);
+    pt_check(a11y_children(app, client, plain_ref.bus, plain_ref.path, kids, 4) == 0);
+
+    /* ---- structure refresh on replace, clear and set_text ---- */
+    pt_text_image replaced = {0};
+    replaced.start = 1;
+    replaced.image = icon;
+    snprintf(replaced.alt, sizeof(replaced.alt), "%s", "replaced");
+    pt_check(pt_widget_set_text_images(image_label, &replaced, 1));
+    pt_check(a11y_child_count_of(app, client, image_ref.bus, image_ref.path) == 1);
+    a11y_ref r0 = {0};
+    pt_check(a11y_child_ref(app, client, image_ref.bus, image_ref.path, 0, &r0));
+    pt_check(a11y_name(app, client, r0.bus, r0.path, name, sizeof(name)));
+    pt_check(strcmp(name, "replaced") == 0);
+
+    pt_widget_clear_text_images(image_label);
+    pt_check(a11y_child_count_of(app, client, image_ref.bus, image_ref.path) == 0);
+    pt_check(a11y_children(app, client, image_ref.bus, image_ref.path, kids, 4) == 0);
+
+    pt_widget_set_text(multi_label, "plain");
+    pt_check(a11y_child_count_of(app, client, multi_ref.bus, multi_ref.path) == 0);
+
+    pt_icon_image_destroy(icon);
+    dbus_connection_close(client);
+    dbus_connection_unref(client);
+}
 #endif /* PT_HAVE_DBUS */
 
 int main(int argc, char **argv) {
@@ -2625,6 +2926,17 @@ int main(int argc, char **argv) {
     pt_widget_set_ui_direction(arabic, pt_ui_direction_rtl);
     pt_widget_set_ui_direction(rtl_field, pt_ui_direction_rtl);
     pt_widget_set_a11y_name(rtl_field, "RTL field");
+    pt_widget *image_label = pt_label_create(root, "P\xEF\xBF\xBCQ");
+    pt_widget_set_a11y_name(image_label, "Image label");
+    pt_widget *multi_label = pt_label_create(root, "\xEF\xBF\xBC" "A" "\xEF\xBF\xBC" "B");
+    pt_widget_set_a11y_name(multi_label, "Multi label");
+    pt_widget *empty_label = pt_label_create(root, "\xEF\xBF\xBCX");
+    pt_widget_set_a11y_name(empty_label, "Empty label");
+    pt_widget *plain_label = pt_label_create(root, "No image");
+    pt_widget_set_a11y_name(plain_label, "Plain label");
+    pt_widget *image_area = pt_text_area_create(root, "Area");
+    pt_widget_set_text(image_area, "\xEF\xBF\xBC" "Area");
+    pt_widget_set_a11y_name(image_area, "Image area");
     pt_widget *volume = pt_slider_create(root);
     pt_widget_set_text(search, "hello");
     pt_widget_set_text(password_entry, "secret");
@@ -2688,6 +3000,8 @@ int main(int argc, char **argv) {
         test_bridge_live(app, search, password_entry, volume, save, table, tree,
                          tree_root_node, tree_child_node, tabs, sidebar, notes);
         test_bridge_direction(app, rtl_field);
+        test_bridge_image_children(app, image_label, multi_label, empty_label, plain_label,
+                                   image_area);
         pt_app_disable_a11y(app);
         pt_check(pt_app_get_a11y_status(app) == pt_a11y_status_disabled);
         pt_check(pt_app_enable_a11y(app));
