@@ -19,9 +19,9 @@ extern "C" {
 
 /* Frozen interface for the preview module (M27 W0).
  *
- * A preview is one second top-level Pt window owned by the module. It shows a
- * representative sample of real controls and is restyled only through the public
- * per-window override API: pt_window_set_theme_color() and
+ * A preview is one second top-level Pt window created by the module and owned
+ * by the application. It shows a representative sample of real controls and is
+ * restyled only through the public per-window override API: pt_window_set_theme_color() and
  * pt_window_set_theme_metric(). The editor's own window is never restyled by
  * this module. Only public headers are used; there is no private Pt state.
  *
@@ -51,7 +51,8 @@ void te_preview_reset(te_preview *preview);
  * pointer is valid until te_preview_destroy(). */
 pt_window *te_preview_window(const te_preview *preview);
 
-/* Destroys the preview window and the handle. NULL is a no-op. */
+/* Destroys the preview handle and requests the window to close. The application
+ * owns the window and releases it at pt_app_destroy(); NULL is a no-op. */
 void te_preview_destroy(te_preview *preview);
 
 #ifdef __cplusplus
