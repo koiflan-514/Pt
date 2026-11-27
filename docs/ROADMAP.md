@@ -2734,6 +2734,127 @@ single agent (~15%, no child agents); Q-CN carries W6a (~8%, with DuMate as
 backup); Lobster carries W7 + W8 (~17%). Dropping foreign at the W5 gate saves
 the W4 budget and part of W8.
 
+## M27 - 2.5.0: standalone theme editor (proposed; not started)
+
+**Status: proposed (2026-11-27), design only.** No implementation or build file
+is changed. The design-time baseline is the 2.4.0 tree `82a5b79`: `api/pt.api`
+**587 functions / 968 entries**, `ABI_MAJOR = 1`, SONAME `libpt.so.1`, version
+2.4.0. The full feasibility evidence, schema, test plan and file ownership are
+in [m27-design.md](m27-design.md). This proposal supersedes the M26 "theme
+editor" deferral row; the 2.4.0 record stays historical.
+
+Goal: ship the post-1.0 **standalone visual theme editor** as a Pt application
+under `tools/theme-editor`, editing the existing token table, previewing through
+the public per-window override API, exporting versioned JSON and compilable C,
+and reporting WCAG 2.x contrast. The tool stays outside `libpt.so`; the core
+surface does not move.
+
+### Scope
+
+- **Token editing.** 38 colour roles and 10 metrics (`include/pt/theme.h:34-93`)
+  in a Pt UI: one `pt_color_picker` per role (its hex field already accepts
+  `#RRGGBBAA`), number pickers for metrics, and built-in dark/light seeds read
+  from the public app getters.
+- **Versioned JSON.** `pt-theme/1`, one scheme per file, full 38+10 table,
+  deterministic canonical output, bounded hand-written parser (1 MiB, depth 8,
+  duplicate rejection, locale-independent numbers), tolerant unknown keys with
+  warnings and `--strict`.
+- **C export.** One `theme_apply_<slug>(pt_app *)` function that switches to
+  the recorded scheme and sets every colour and metric with public API; the
+  output compiles as C23 against `<pt/pt.h>`.
+- **WCAG checks.** A pure tool-local module implementing sRGB linearisation,
+  relative luminance, contrast ratio and straight-alpha compositing, with the
+  twelve floors from `docs/theming.md` plus the two `selection_text` composites
+  from `tests/test_theme.c`. `--check` and `--strict` are headless.
+- **Preview.** A second top-level Pt window styled only through
+  `pt_window_set_theme_color` / `pt_window_set_theme_metric`, showing real
+  controls in rest/hover/focus/disabled states. The editor window keeps the
+  neutral palette.
+- **Dogfooding and docs.** The tool uses only public headers; an editor section
+  extends the existing `docs/theming.md` pair (no twelfth public guide).
+
+### Feasibility (read 2026-11-27)
+
+| Candidate | Verdict | Evidence |
+| --- | --- | --- |
+| A. Theme editor | **select** | 38 roles/10 metrics already have a complete public setter/getter surface; no parser or serializer exists (`docs/theming.md:265-275`); the tool can link `libpt.a` with zero header or symbol changes; pure WCAG and format modules are independent and highly parallel |
+| B. Inline-image rich paste | **defer** | Clipboard storage is single-MIME/single-payload (`src/wayland/platform.c:2220-2253`), the source offers one type (`:2274-2285`), paste is plain text (`src/widget.c:4024-4035`), and the icon handle has no public pixel export (`include/pt/icon.h:127-160`). Needs multi-MIME storage, a rich serializer, new public API and edits to the clipboard hot spot; a core feature, not a tool |
+| C. Other deferred features | **defer** | The 0.6 list is mostly stale: multi-column sorting (`include/pt/widget.h:690-757`) and keyed row selection (`:540-592`, `:763-768`) shipped. Remaining variable row heights are core layout across three views; the SVG subset is a third-party parser surface; color-management/Vulkan/X11 carry measured deferrals |
+
+### Design and zero-regression
+
+The JSON v1 document, C exporter, WCAG pair table, UI flow, CLI contract and
+test matrix are specified in [m27-design.md](m27-design.md). The zero-core-ABI
+argument is structural:
+
+- no `include/`, `src/`, `bindings/`, `api/` or `third_party/` edit;
+- tool objects are not in `LIB_SOURCES`, so no `te_*` symbol enters `libpt.so`;
+- the tool includes only `<pt/pt.h>` and links `build/libpt.a`;
+- `api/pt.api` remains 587/968, `nm -D` remains 587 `pt_*` symbols, SONAME stays
+  `libpt.so.1`;
+- only the root Makefile adds `theme-editor`, `run-theme-editor` and two test
+  rules; the tool is not part of `all`.
+
+The core's approximate `pt_theme_contrast_text` (`src/theme.c:128-134`) is not
+changed: the editor reports the real WCAG ratio and lets the user set
+`accent_text` explicitly. A core contrast correction would be a separate
+visual-review change.
+
+### Parallel waves
+
+Files are the unit of ownership; the root Makefile is W0-only. W1/W2/W3a/W3b/W4
+have disjoint files after W0 freezes the three interfaces (`theme_format.h`,
+`theme_wcag.h`, `preview.h`).
+
+| Wave | Scope | Files owned (exclusive) | Depends on | Owner |
+| --- | --- | --- | --- | --- |
+| W0 | Interfaces, build skeleton, compiling stubs, test wiring | `tools/theme-editor/*.h`, stub `.c`, stub tests, `Makefile` | - | DuMate |
+| W1 | JSON v1 reader/writer, canonical output, C export, fixtures | `tools/theme-editor/theme_format.c`, `themes/*.json`, `tests/test_theme_format.c` | W0 | DuMate |
+| W2 | WCAG pure module and vectors | `tools/theme-editor/theme_wcag.c`, `tests/test_theme_wcag.c` | W0 | WB-CN |
+| W3a | Editor shell, colour/metric editors, contrast panel, CLI | `tools/theme-editor/theme_editor.c` | W0 (links W1/W2 at integration) | DuMate |
+| W3b | Preview window, overrides, tool README | `tools/theme-editor/preview.c`, `tools/theme-editor/README.md` | W0 | WB-CN (after W2) |
+| W4 | Editor section in the existing English/Chinese theming pair | `docs/theming.md`, `docs/zh-CN/theming.md` | W0 spec | Loomy (single agent) |
+| W5 | Integration, review, gate, 2.5.0 version/release status | `docs/ROADMAP.md`, `docs/release.md`, `docs/m27-design.md`, `include/pt/base.h` (version macros only), `Makefile` (`VERSION` only) | W1-W4 | CodeArts + DuMate |
+
+Critical path: W0 -> W1 -> W3a -> W5, with W2/W3b/W4 in parallel. W4 extends the
+existing guide pair, so `tools/check-bilingual-docs.py` stays at 11 pairs. Loomy
+runs one agent at a time and takes only W4; it does not overlap a second Loomy
+wave.
+
+### Completion criteria
+
+- `make -j2 theme-editor` and `make -j2 check` are green with `werror=1`; the two
+  new suites join the existing 47 C executables without changing any old test.
+- JSON round-trips the dark/light goldens deterministically; malformed cases and
+  `--strict` exit codes are covered; the C export compiles as C23.
+- WCAG matches the documented floors within 0.01 and runs without a display.
+- GUI smoke under nested niri edits a role, updates the preview, imports,
+  exports and closes without protocol errors.
+- `api/pt.api` stays **587 / 968**, `nm -D` shows 587 `pt_*` and no `te_*`,
+  SONAME stays `libpt.so.1`, binding parity stays 587/587,
+  `gen-api-reference.py --check` is clean, the bilingual check reports 11 pairs,
+  the serial sanitizer pass is green and `git status` is clean.
+
+### Budget
+
+~660-740 credits: W0 60, W1 130, W2 70, W3a 150, W3b 80, W4 70, W5 110 and ~60
+contingency. DuMate carries W0/W1/W3a and gate fixes (~55%), WB-CN W2/W3b
+(~20%), Loomy W4 only (~10%, exactly one agent), CodeArts W5 review (~12%),
+with Q-CN as the W2/W4 backup. Lobster is not assigned. All builds use `-j2`;
+sanitizer runs are serial.
+
+### Deferred register additions
+
+| Item | Evidence | Re-open trigger |
+| --- | --- | --- |
+| Rich clipboard paste of inline image runs | single-MIME clipboard store, plain-text paste, no public icon pixels; core API + `platform.c`/`widget.c` | a product requirement plus a dedicated MIME/API design and clipboard-budget plan |
+| Variable row heights | scalar row height in list/table/tree (`include/pt/widget.h:562,726,950`); measurement/recycling/hit-testing | a concrete model need plus a layout/recycling design and performance guard |
+| Remaining SVG subset | text, raster images, filters, masks, clipPath, use/symbol, markers, animation, full CSS cascade ignored by design (`docs/ROADMAP.md:1771-1777`) | an icon set that cannot use the current subset |
+| Multi-scheme theme bundle / live desktop theme import | v1 is one scheme per file; no portal dependency in a token editor | a v2 schema agreement, or a stable cross-desktop preference API |
+
+color-management-v1, Vulkan/EGL, X11 and xdg-foreign v1 keep their 2.4.0
+deferrals and re-open triggers; nothing in this proposal changes them.
+
 ## Post-1.0 horizons
 
 Candidates are grouped by the horizon the external research (2026-11-22)
