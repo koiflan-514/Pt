@@ -2219,33 +2219,77 @@ class window {
         std::string value = copy_string(text);
         return pt_window_primary_set_serial(handle_, value.c_str(), serial);
     }
-    /* Activation token request (xdg-activation-v1). The callback receives a
-     * borrowed token valid only during the call; copy it if it must outlive
-     * the callback. Returns false when the protocol is unavailable. */
-    bool request_activation_token(const char *app_id,
+    /* xdg-activation-v1 (staging) token request. app_id names the client that
+     * will be activated; an empty value, the default C NULL case, omits the
+     * field. The callback runs once on the UI thread. Its token is borrowed
+     * from Pt only for that call, and an empty string means the compositor
+     * returned an invalid token. Copy the characters inside the callback if
+     * they must outlive it; never store the raw pointer. Only one request may
+     * be in flight per window: a second request destroys the pending token
+     * object and drops the previous callback without calling it. Returns false
+     * without creating an object for an invalid wrapper, a NULL callback, an
+     * absent activation global, or a headless platform. A true return means
+     * the request was queued, not that focus will move: the protocol is a
+     * compositor request, never a guarantee. */
+    bool request_activation_token(std::string_view app_id,
                                   pt_activation_token_callback callback,
                                   void *data = nullptr) const {
-        return pt_window_request_activation_token(handle_, app_id, callback, data);
+        std::string value = copy_string(app_id);
+        return pt_window_request_activation_token(handle_, value.c_str(), callback, data);
     }
-    /* Sends an activation request; true means sent, never "focused". */
+    /* Sends an activation request for this window with a token received out of
+     * band. The token is sent once and not retained, so the caller may release
+     * it immediately; an empty token is rejected before the C call. Returns
+     * false for an invalid wrapper, an empty token, an absent activation
+     * global, or a headless platform. A true return means the request was
+     * sent: the compositor may ignore a stale token and Pt cannot observe
+     * focus, so this is never a "window is focused" result. */
     bool activate(std::string_view token) const {
+        if (token.empty()) {
+            return false;
+        }
         std::string value = copy_string(token);
         return pt_window_activate(handle_, value.c_str());
     }
-    /* xdg-foreign-unstable-v2. The handle is opaque and borrowed during the
-     * callback; the export stays alive until unexport or destruction. */
+    /* Exports this toplevel through xdg-foreign-unstable-v2 (experimental) and
+     * delivers its opaque handle once through callback. The handle is borrowed
+     * only for the duration of the call: copy it inside the callback; never
+     * parse, log, persist or store the raw pointer. The export object stays
+     * alive until unexport_foreign_handle() or window destruction, and
+     * destroying it invalidates every import built from the handle. Exporting
+     * again first destroys the previous export, invalidates its handle and
+     * drops its pending callback without calling it. Returns false without
+     * creating an object when the wrapper is invalid, callback is NULL, the
+     * exporter global is absent, or the platform is headless. */
     bool export_foreign_handle(pt_foreign_handle_callback callback,
                                void *data = nullptr) const {
         return pt_window_export_foreign_handle(handle_, callback, data);
     }
+    /* Revokes the export and drops any pending callback without calling it;
+     * imports built from the old handle are invalidated. Idempotent: a no-op
+     * for an invalid wrapper or when nothing is exported. */
     void unexport_foreign_handle() const {
         pt_window_unexport_foreign_handle(handle_);
     }
-    /* Imports an opaque handle as this window's parent (best-effort). */
+    /* Imports an opaque compositor-defined handle as this window's parent, with
+     * the stacking and positioning semantics of xdg_toplevel.set_parent. It
+     * does not embed the child or transfer pixels. The handle is passed through
+     * unchanged and is not retained, so the caller may release it after the
+     * call. An empty handle is rejected before the C call. A previous import is
+     * replaced. Returns false for an invalid wrapper, an empty handle, an
+     * absent importer global, or a headless platform; the compositor may still
+     * invalidate the relationship later, which clears the import silently and
+     * lets a later call succeed again. */
     bool set_foreign_parent(std::string_view handle) const {
+        if (handle.empty()) {
+            return false;
+        }
         std::string value = copy_string(handle);
         return pt_window_set_foreign_parent(handle_, value.c_str());
     }
+    /* Destroys the imported parent and invalidates the relationship.
+     * Idempotent: a no-op for an invalid wrapper or when no parent is
+     * imported. */
     void clear_foreign_parent() const {
         pt_window_clear_foreign_parent(handle_);
     }

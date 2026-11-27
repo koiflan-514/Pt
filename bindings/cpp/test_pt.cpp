@@ -19,6 +19,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <fcntl.h>
@@ -94,6 +95,9 @@ int wd_sync(void *app);
 int wd_settle(void *app);
 int wd_wait_configured(void *app, void *window, int attempts);
 uint32_t wd_toplevel_surface(void);
+uint32_t wd_live_id(uint32_t kind);
+int wd_global_bound(uint32_t kind);
+int wd_request_count(uint32_t kind, uint32_t opcode);
 int wd_request_overflowed(void);
 int wd_pending_fd_count(void);
 void wd_keyboard_enter(uint32_t serial, uint32_t surface);
@@ -589,6 +593,40 @@ void color_changed(pt_widget *widget, pt_color color, void *data) {
     probe->value = color;
 }
 
+/* M26 2.4 callback contracts. Both typedefs receive the window, a string that
+ * is borrowed only for the call, and the user data pointer. The probes copy the
+ * string inside the callback, which is the documented way to keep it. */
+static_assert(std::is_same_v<pt_activation_token_callback,
+                             void (*)(pt_window *, const char *, void *)>);
+static_assert(std::is_same_v<pt_foreign_handle_callback,
+                             void (*)(pt_window *, const char *, void *)>);
+
+struct activation_token_probe {
+    int calls = 0;
+    pt_window *window = nullptr;
+    std::string token;
+};
+
+void activation_token_ready(pt_window *window, const char *token, void *data) {
+    auto *probe = static_cast<activation_token_probe *>(data);
+    probe->calls += 1;
+    probe->window = window;
+    probe->token = token ? token : ""; // copy while the string is borrowed
+}
+
+struct foreign_handle_probe {
+    int calls = 0;
+    pt_window *window = nullptr;
+    std::string handle;
+};
+
+void foreign_handle_ready(pt_window *window, const char *handle, void *data) {
+    auto *probe = static_cast<foreign_handle_probe *>(data);
+    probe->calls += 1;
+    probe->window = window;
+    probe->handle = handle ? handle : ""; // copy while the string is borrowed
+}
+
 /* End-to-end wire test: a private Wayland compositor injects real key and
  * pointer events, the C library translates them, and the header-only C++
  * wrapper's raw callbacks observe them. This is the live-seat replacement for
@@ -736,6 +774,193 @@ void run_wire_dispatch_test() {
     }
 }
 
+/* Wire support path for the six 2.4 methods. The fake-compositor driver exposes
+ * request counters and live-object queries but no event-injection helpers for
+ * xdg_activation_token_v1.done or zxdg_exported_v2.handle, so string delivery
+ * is covered by the C suites (tests/test_activation.c, tests/test_foreign.c).
+ * This section proves the wrappers reach the protocol: the globals bind, each
+ * call emits the expected request, a repeated request destroys the previous
+ * object, and unexport/clear are idempotent. */
+void run_activation_foreign_wire_test() {
+    const char *saved_headless = getenv("PT_HEADLESS");
+    std::string saved_value = saved_headless ? saved_headless : "";
+    const bool had_headless = saved_headless != nullptr;
+    unsetenv("PT_HEADLESS");
+
+    /* FC_OPT_ALL | FC_OPT_ACTIVATION | FC_OPT_FOREIGN. The two M26 options are
+     * deliberately outside FC_OPT_ALL, so only this session advertises them. */
+    constexpr unsigned int wire_options = 0x1ffu | (1u << 11) | (1u << 12);
+    /* fc_kind values from tests/fake_compositor.h. New kinds are appended
+     * before FC_K_COUNT, so these indices stay stable. */
+    constexpr uint32_t kind_activation = 44;
+    constexpr uint32_t kind_token = 45;
+    constexpr uint32_t kind_exporter = 46;
+    constexpr uint32_t kind_exported = 47;
+    constexpr uint32_t kind_importer = 48;
+    constexpr uint32_t kind_imported = 49;
+
+    check(wd_start(wire_options) == 0);
+    if (const char *error = wd_error()) {
+        std::fprintf(stderr, "wire driver start failed: %s\n", error);
+        if (had_headless) {
+            setenv("PT_HEADLESS", saved_value.c_str(), 1);
+        }
+        return;
+    }
+
+    {
+        pt::app wire_application("pt.tests.cpp.m26");
+        check(wire_application.valid());
+        if (wire_application.valid()) {
+            check(wd_settle(wire_application.get()) == 0);
+            pt::window wire_window(wire_application, "cpp m26 wire", 240, 160);
+            check(wire_window.valid());
+            wire_window.show();
+            check(wd_wait_configured(wire_application.get(), wire_window.get(), 300) == 1);
+            check(wd_settle(wire_application.get()) == 0);
+            check(wd_global_bound(kind_activation) == 1);
+            check(wd_global_bound(kind_exporter) == 1);
+            check(wd_global_bound(kind_importer) == 1);
+
+            activation_token_probe token_probe;
+            foreign_handle_probe handle_probe;
+
+            /* A NULL callback is rejected before any protocol object exists. */
+            check(!wire_window.request_activation_token("pt.tests.cpp", nullptr,
+                                                        &token_probe));
+            check(!wire_window.export_foreign_handle(nullptr, &handle_probe));
+            check(wd_live_id(kind_token) == 0);
+            check(wd_live_id(kind_exported) == 0);
+
+            /* A token request queues get_activation_token, set_app_id and
+             * commit; delivery waits for the compositor's done event. */
+            check(wire_window.request_activation_token("pt.tests.cpp",
+                                                       activation_token_ready,
+                                                       &token_probe));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_activation, 1) == 1); // get_activation_token
+            check(wd_request_count(kind_token, 1) == 1);      // set_app_id
+            check(wd_request_count(kind_token, 3) == 1);      // commit
+            check(wd_live_id(kind_token) != 0);
+            check(token_probe.calls == 0);
+
+            /* A second request destroys the pending token (opcode 4) and drops
+             * the previous callback; an empty app_id omits set_app_id. */
+            check(wire_window.request_activation_token("", activation_token_ready,
+                                                       &token_probe));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_activation, 1) == 2);
+            check(wd_request_count(kind_token, 4) == 1);
+            check(wd_request_count(kind_token, 3) == 2);
+            check(wd_request_count(kind_token, 1) == 1);
+            check(token_probe.calls == 0);
+
+            /* activate sends the token once; an empty token is a local reject. */
+            check(wire_window.activate("opaque-token"));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_activation, 2) == 1);
+            check(!wire_window.activate(""));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_activation, 2) == 1);
+
+            /* Export; re-export destroys the old object; unexport revokes the
+             * current one and is idempotent. */
+            check(wire_window.export_foreign_handle(foreign_handle_ready,
+                                                    &handle_probe));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_exporter, 1) == 1);
+            check(wd_live_id(kind_exported) != 0);
+            check(handle_probe.calls == 0);
+            check(wire_window.export_foreign_handle(foreign_handle_ready,
+                                                    &handle_probe));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_exporter, 1) == 2);
+            check(wd_request_count(kind_exported, 0) == 1);
+            wire_window.unexport_foreign_handle();
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_exported, 0) == 2);
+            check(wd_live_id(kind_exported) == 0);
+            wire_window.unexport_foreign_handle();
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_exported, 0) == 2);
+
+            /* Import a parent; a second import replaces it; clear destroys the
+             * current import and is idempotent; an empty handle is a reject. */
+            check(!wire_window.set_foreign_parent(""));
+            check(wire_window.set_foreign_parent("opaque-handle"));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_importer, 1) == 1);
+            check(wd_request_count(kind_imported, 1) == 1); // set_parent_of
+            check(wd_live_id(kind_imported) != 0);
+            check(wire_window.set_foreign_parent("opaque-handle-2"));
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_importer, 1) == 2);
+            check(wd_request_count(kind_imported, 0) == 1);
+            check(wd_request_count(kind_imported, 1) == 2);
+            wire_window.clear_foreign_parent();
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_imported, 0) == 2);
+            check(wd_live_id(kind_imported) == 0);
+            wire_window.clear_foreign_parent();
+            check(wd_sync(wire_application.get()) == 0);
+            check(wd_request_count(kind_imported, 0) == 2);
+
+            check(wd_request_overflowed() == 0);
+            check(wd_pending_fd_count() == 0);
+            check(wd_error() == nullptr);
+        }
+    }
+    wd_stop();
+    if (had_headless) {
+        setenv("PT_HEADLESS", saved_value.c_str(), 1);
+    } else {
+        unsetenv("PT_HEADLESS");
+    }
+}
+
+/* Headless and invalid-wrapper fallback for the six 2.4 methods: every bool
+ * action reports false without calling its callback, and the void revocations
+ * are safe no-ops that stay idempotent. Empty tokens/handles and NULL
+ * callbacks are rejected by the wrapper or the C layer. */
+void run_activation_foreign_headless_test(pt::app &application) {
+    activation_token_probe token_probe;
+    foreign_handle_probe handle_probe;
+
+    pt::window null_window;
+    check(!null_window.request_activation_token("pt.tests.cpp", activation_token_ready,
+                                                 &token_probe));
+    check(!null_window.request_activation_token("", nullptr, &token_probe));
+    check(!null_window.activate("opaque-token"));
+    check(!null_window.export_foreign_handle(foreign_handle_ready, &handle_probe));
+    check(!null_window.export_foreign_handle(nullptr, &handle_probe));
+    null_window.unexport_foreign_handle();
+    check(!null_window.set_foreign_parent("opaque-handle"));
+    null_window.clear_foreign_parent();
+    check(token_probe.calls == 0);
+    check(handle_probe.calls == 0);
+
+    pt::window headless_window(application, "cpp 2.4 fallback", 200, 120);
+    check(headless_window.valid());
+    check(!headless_window.request_activation_token("pt.tests.cpp",
+                                                     activation_token_ready, &token_probe));
+    check(!headless_window.request_activation_token("", activation_token_ready,
+                                                     &token_probe));
+    check(!headless_window.request_activation_token("pt.tests.cpp", nullptr,
+                                                     &token_probe));
+    check(!headless_window.activate("opaque-token"));
+    check(!headless_window.activate(""));
+    check(!headless_window.export_foreign_handle(foreign_handle_ready, &handle_probe));
+    check(!headless_window.export_foreign_handle(nullptr, &handle_probe));
+    headless_window.unexport_foreign_handle();
+    headless_window.unexport_foreign_handle(); // idempotent
+    check(!headless_window.set_foreign_parent("opaque-handle"));
+    check(!headless_window.set_foreign_parent(""));
+    headless_window.clear_foreign_parent();
+    headless_window.clear_foreign_parent(); // idempotent
+    check(token_probe.calls == 0);
+    check(handle_probe.calls == 0);
+}
+
 /* Runs `call` once per allocation budget 0..N, forcing std::bad_alloc at each
  * successive allocation. The wrapper's RAII guard must free the C allocation
  * on the throwing path, so the sanitized gate (LeakSanitizer) proves the
@@ -800,6 +1025,7 @@ int main() {
     unsetenv("PT_REDUCED_MOTION");
 
     run_wire_dispatch_test();
+    run_activation_foreign_wire_test();
     setenv("PT_HEADLESS", "1", 1);
 
     pt::app application("pt.tests.cpp");
@@ -2573,6 +2799,9 @@ int main() {
     check(!null_picker.set_number_text("1"));
     check(!null_picker.set_color_hex("#000000"));
     check(!null_picker.is_select_open());
+
+    /* ---- 2.4 activation / foreign fallback and wrapper rejection ---- */
+    run_activation_foreign_headless_test(application);
 
     /* ---- owned getters: bad_alloc must not leak the C allocation ---- */
     run_bad_alloc_hardening_test(window, table);
