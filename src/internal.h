@@ -372,6 +372,12 @@ typedef struct pt_text_visual_segment {
     pt_font *font;
     hb_direction_t direction;
     uint8_t level;
+    /* Inline image payload (2.3). A segment with an image has font == NULL and
+     * is never shaped. `image_width` is the resolved logical width in device
+     * pixels (logical * scale), so the map keeps its device-pixel x
+     * convention without a second conversion. */
+    const pt_text_image *image;
+    float image_width;
 } pt_text_visual_segment;
 
 typedef struct pt_text_run {
@@ -386,6 +392,11 @@ typedef struct pt_text_run {
      * measure still sums overlapping ranges, and drawing walks the array. */
     uint8_t level;
     hb_direction_t direction;
+    /* Inline image payload (2.3): a fontless, atomic run over the three-byte
+     * U+FFFC placeholder. Points into the widget's sorted side table, which
+     * stays alive for the run list's lifetime (a layout rebuild follows any
+     * descriptor change). NULL marks an ordinary font run. */
+    const pt_text_image *image;
 } pt_text_run;
 
 typedef struct pt_text_runs {

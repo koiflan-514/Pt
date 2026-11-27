@@ -225,6 +225,72 @@ static const pt_text_span *rich_span_for(const pt_widget *widget, size_t positio
     return winner;
 }
 
+/* Resolves the logical box of one inline image. A positive, finite descriptor
+ * dimension wins; zero/non-finite falls back to the icon's source size, and a
+ * single positive dimension preserves the intrinsic aspect ratio. A missing
+ * handle or a zero intrinsic size collapses to zero, which measures as no
+ * advance and draws nothing (the painter skips non-positive boxes). */
+static void rich_image_size(const pt_text_image *image, float *width, float *height) {
+    float w = 0.0f;
+    float h = 0.0f;
+    if (image && image->image) {
+        bool want_w = isfinite(image->width) && image->width > 0.0f;
+        bool want_h = isfinite(image->height) && image->height > 0.0f;
+        float intrinsic_w = (float)pt_icon_image_width(image->image);
+        float intrinsic_h = (float)pt_icon_image_height(image->image);
+        if (want_w && want_h) {
+            w = image->width;
+            h = image->height;
+        } else if (want_w) {
+            w = image->width;
+            h = intrinsic_w > 0.0f && intrinsic_h > 0.0f
+                    ? w * intrinsic_h / intrinsic_w
+                    : intrinsic_h;
+        } else if (want_h) {
+            h = image->height;
+            w = intrinsic_w > 0.0f && intrinsic_h > 0.0f
+                    ? h * intrinsic_w / intrinsic_h
+                    : intrinsic_w;
+        } else {
+            w = intrinsic_w;
+            h = intrinsic_h;
+        }
+    }
+    if (!isfinite(w) || w < 0.0f) {
+        w = 0.0f;
+    }
+    if (!isfinite(h) || h < 0.0f) {
+        h = 0.0f;
+    }
+    if (width) {
+        *width = w;
+    }
+    if (height) {
+        *height = h;
+    }
+}
+
+/* True when [start, end) is exactly one valid image placeholder: the side-table
+ * entry starts there and the text still carries EF BF BC. The builder splits at
+ * every image start, so a fontless piece is either a whole image or a text
+ * range that happens to share its start. */
+static const pt_text_image *rich_image_for(const pt_widget *widget, size_t start, size_t end) {
+    if (!widget || widget->image_count == 0 || end - start != 3u) {
+        return NULL;
+    }
+    const char *text = widget->text ? widget->text : "";
+    const unsigned char *bytes = (const unsigned char *)text + start;
+    if (bytes[0] != 0xEFu || bytes[1] != 0xBFu || bytes[2] != 0xBCu) {
+        return NULL;
+    }
+    for (uint32_t i = 0; i < widget->image_count; ++i) {
+        if (widget->images[i].start == start) {
+            return &widget->images[i];
+        }
+    }
+    return NULL;
+}
+
 static void rich_run_reserve(pt_text_runs *runs) {
     if (runs->count < runs->capacity) {
         return;
@@ -236,11 +302,12 @@ static void rich_run_reserve(pt_text_runs *runs) {
 
 static void rich_run_append(pt_text_runs *runs, size_t start, size_t end, pt_font *font,
                             pt_color color, uint32_t flags, uint8_t level,
-                            hb_direction_t direction) {
+                            hb_direction_t direction, const pt_text_image *image) {
     if (runs->count > 0) {
         pt_text_run *last = &runs->items[runs->count - 1];
         if (last->end == start && last->font == font && last->color == color &&
-            last->flags == flags && last->level == level && last->direction == direction) {
+            last->flags == flags && last->level == level && last->direction == direction &&
+            last->image == image) {
             last->end = end;
             return;
         }
@@ -254,6 +321,7 @@ static void rich_run_append(pt_text_runs *runs, size_t start, size_t end, pt_fon
     run->flags = flags;
     run->level = level;
     run->direction = direction;
+    run->image = image;
 }
 
 /* Resolves the span style covering `start` and appends the [start, end) piece.
@@ -265,6 +333,30 @@ static void rich_append_piece(const pt_widget *widget, const pt_layout_ctx *ctx,
                               hb_direction_t direction) {
     const char *text = out->text;
     float scale = out->scale;
+    const pt_text_image *image = rich_image_for(widget, start, end);
+    if (image) {
+        /* An image run is atomic, fontless and never shaped. Its logical box
+         * raises the composed metrics exactly like a styled run: baseline puts
+         * the whole height above the baseline, middle splits it. The line
+         * height is max over every run, which the caller combines below. */
+        float image_height = 0.0f;
+        rich_image_size(image, NULL, &image_height);
+        float above = image->align == pt_text_image_align_middle ? image_height * 0.5f
+                                                                 : image_height;
+        float below = image->align == pt_text_image_align_middle ? image_height * 0.5f
+                                                                 : 0.0f;
+        if (above > out->ascent) {
+            out->ascent = above;
+        }
+        if (below > out->descent) {
+            out->descent = below;
+        }
+        if (above + below > out->line_height) {
+            out->line_height = above + below;
+        }
+        rich_run_append(out, start, end, NULL, 0, 0, level, direction, image);
+        return;
+    }
     const pt_text_span *span = rich_span_for(widget, start);
     pt_font_weight weight = base_weight;
     pt_font_slant slant = pt_font_slant_upright;
@@ -314,7 +406,7 @@ static void rich_append_piece(const pt_widget *widget, const pt_layout_ctx *ctx,
     if (ascent + descent > out->line_height) {
         out->line_height = ascent + descent;
     }
-    rich_run_append(out, start, end, font, color, flags, level, direction);
+    rich_run_append(out, start, end, font, color, flags, level, direction, NULL);
 }
 
 static void rich_append_line_runs(const pt_widget *widget, const pt_layout_ctx *ctx,
@@ -395,7 +487,7 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
     const char *text = widget->text ? widget->text : "";
     size_t len = strlen(text);
     float scale = ctx && ctx->scale > 0.0f ? ctx->scale : 1.0f;
-    size_t max_runs = (size_t)widget->span_count * 2 + 2;
+    size_t max_runs = (size_t)(widget->span_count + widget->image_count) * 2 + 2;
     out->items = pt_alloc_zeroed(max_runs, sizeof(*out->items));
     out->capacity = max_runs;
     out->text = text;
@@ -421,6 +513,20 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
         }
         boundaries[boundary_count++] = start;
         boundaries[boundary_count++] = end;
+    }
+    /* An image placeholder is a hard boundary: one codepoint, never part of a
+     * neighbouring font run, so it cannot be shaped or split. Invalid entries
+     * (the text no longer carries U+FFFC there) contribute nothing. */
+    for (uint32_t i = 0; i < widget->image_count; ++i) {
+        size_t start = widget->images[i].start;
+        if (start > len || len - start < 3u) {
+            continue;
+        }
+        if (rich_image_for(widget, start, start + 3u) != &widget->images[i]) {
+            continue;
+        }
+        boundaries[boundary_count++] = start;
+        boundaries[boundary_count++] = start + 3u;
     }
     qsort(boundaries, boundary_count, sizeof(*boundaries), rich_compare_positions);
     size_t unique = 0;
@@ -576,6 +682,17 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
         }
     }
     free(boundaries);
+    if (widget->image_count > 0) {
+        /* With an image the design's composition is explicit: ascent and
+         * descent are the maxima over every piece and the composed line height
+         * is their sum, so a baseline image's descent-bearing neighbours are
+         * not clipped. Image-free builds keep the historical max-of-pieces
+         * line height byte-identical. */
+        float composed = out->ascent + out->descent;
+        if (composed > out->line_height) {
+            out->line_height = composed;
+        }
+    }
     if (out->count == 0) {
         rich_run_reserve(out);
         pt_text_run *run = &out->items[out->count++];
@@ -584,6 +701,7 @@ bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_te
         run->font = base;
         run->level = 0;
         run->direction = HB_DIRECTION_INVALID;
+        run->image = NULL;
     }
     return true;
 }
@@ -632,6 +750,14 @@ float pt_text_runs_measure(const pt_text_runs *runs, size_t start, size_t end) {
         size_t a = start > run->start ? start : run->start;
         size_t b = end < run->end ? end : run->end;
         if (a >= b) {
+            continue;
+        }
+        if (run->image) {
+            /* Overlap of any size counts the whole atomic box (the design's
+             * partial-range rule). Device space here, divided with the rest. */
+            float image_width = 0.0f;
+            rich_image_size(run->image, &image_width, NULL);
+            width += image_width * (runs->scale > 0.0f ? runs->scale : 1.0f);
             continue;
         }
         if (run->direction != HB_DIRECTION_INVALID) {
@@ -749,8 +875,9 @@ typedef struct rich_segments {
 } rich_segments;
 
 static void rich_segments_push(rich_segments *builder, size_t start, size_t end, pt_font *font,
-                               hb_direction_t direction, uint8_t level) {
-    if (start >= end || !font) {
+                               const pt_text_image *image, hb_direction_t direction,
+                               uint8_t level, float scale) {
+    if (start >= end || (!font && !image)) {
         return;
     }
     if (builder->count == builder->capacity) {
@@ -758,8 +885,20 @@ static void rich_segments_push(rich_segments *builder, size_t start, size_t end,
         builder->items = pt_realloc_mem(builder->items,
                                         builder->capacity * sizeof(*builder->items));
     }
-    builder->items[builder->count++] =
-        (pt_text_visual_segment){start, end, font, direction, level};
+    float image_width = 0.0f;
+    if (image) {
+        float logical_width = 0.0f;
+        rich_image_size(image, &logical_width, NULL);
+        image_width = logical_width * (scale > 0.0f ? scale : 1.0f);
+    }
+    pt_text_visual_segment *segment = &builder->items[builder->count++];
+    segment->start = start;
+    segment->end = end;
+    segment->font = font;
+    segment->direction = direction;
+    segment->level = level;
+    segment->image = image;
+    segment->image_width = image_width;
 }
 
 static const pt_text_run *rich_style_at(const pt_text_runs *runs, size_t position) {
@@ -786,7 +925,8 @@ static void rich_line_segments(const pt_text_runs *runs, size_t start, size_t en
             const pt_text_run *run = &runs->items[i];
             size_t a = start > run->start ? start : run->start;
             size_t b = end < run->end ? end : run->end;
-            rich_segments_push(out, a, b, run->font, run->direction, run->level);
+            rich_segments_push(out, a, b, run->font, run->image, run->direction, run->level,
+                               runs->scale);
         }
         return;
     }
@@ -805,7 +945,8 @@ static void rich_line_segments(const pt_text_runs *runs, size_t start, size_t en
             const pt_text_run *run = &runs->items[i];
             size_t a = start > run->start ? start : run->start;
             size_t b = end < run->end ? end : run->end;
-            rich_segments_push(out, a, b, run->font, run->direction, run->level);
+            rich_segments_push(out, a, b, run->font, run->image, run->direction, run->level,
+                               runs->scale);
         }
         return;
     }
@@ -848,7 +989,9 @@ static void rich_line_segments(const pt_text_runs *runs, size_t start, size_t en
                 continue;
             }
             const pt_text_run *style = rich_style_at(runs, a);
-            rich_segments_push(out, a, b, style ? style->font : NULL, direction, run->level);
+            rich_segments_push(out, a, b, style ? style->font : NULL,
+                               style ? style->image : NULL, direction, run->level,
+                               runs->scale);
         }
     }
     free(boundaries);
@@ -919,10 +1062,19 @@ static const pt_text_run *rich_run_at(const pt_text_runs *runs, size_t position)
     return runs->count > 0 ? &runs->items[0] : NULL;
 }
 
+static const pt_font *rich_first_font(const pt_text_runs *runs) {
+    for (size_t i = 0; runs && i < runs->count; ++i) {
+        if (runs->items[i].font) {
+            return runs->items[i].font;
+        }
+    }
+    return NULL;
+}
+
 static void rich_draw_ellipsis(pt_canvas *canvas, const pt_text_runs *runs, float x,
                                float baseline, pt_color color) {
     static const char ellipsis[] = "\xE2\x80\xA6";
-    const pt_font *font = runs->count > 0 ? runs->items[0].font : NULL;
+    const pt_font *font = rich_first_font(runs);
     if (font) {
         pt_canvas_draw_text_line_direction(canvas, font, ellipsis, sizeof(ellipsis) - 1, x,
                                            baseline, 0, pt_text_align_start, color, false,
@@ -957,13 +1109,19 @@ void pt_text_runs_draw_line_base(pt_canvas *canvas, const pt_text_runs *runs, si
         if (ellipsis) {
             static const char ellipsis_bytes[] = "\xE2\x80\xA6";
             const pt_text_run *ellipsis_run = rich_run_at(runs, start);
-            const pt_font *font = ellipsis_run ? ellipsis_run->font : runs->items[0].font;
+            const pt_font *font =
+                ellipsis_run && ellipsis_run->font ? ellipsis_run->font
+                                                   : rich_first_font(runs);
             hb_direction_t ellipsis_direction =
-                ellipsis_run ? ellipsis_run->direction : HB_DIRECTION_LTR;
-            ellipsis_width =
-                pt_font_measure_direction(font, ellipsis_bytes, sizeof(ellipsis_bytes) - 1,
-                                          ellipsis_direction) /
-                runs->scale;
+                ellipsis_run && ellipsis_run->font ? ellipsis_run->direction
+                                                   : HB_DIRECTION_LTR;
+            if (font) {
+                ellipsis_width =
+                    pt_font_measure_direction(font, ellipsis_bytes,
+                                              sizeof(ellipsis_bytes) - 1,
+                                              ellipsis_direction) /
+                    runs->scale;
+            }
             size_t fit = start;
             size_t scan = start;
             while (scan < end) {
@@ -1029,7 +1187,22 @@ void pt_text_runs_draw_line_base(pt_canvas *canvas, const pt_text_runs *runs, si
         pt_color run_color =
             style && (style->flags & pt_run_has_color) ? style->color : color;
         float segment_width;
-        if (segment->direction != HB_DIRECTION_INVALID) {
+        if (segment->image) {
+            /* Atomic image box: the pen advance is logical, the drawn rect is
+             * placed from the descriptor's logical height. The map already
+             * carries the device width, so only this local conversion is
+             * needed here and measure stays a separate logical path. */
+            float image_width = 0.0f;
+            float image_height = 0.0f;
+            rich_image_size(segment->image, &image_width, &image_height);
+            float below = segment->image->align == pt_text_image_align_middle
+                              ? image_height * 0.5f
+                              : 0.0f;
+            pt_icon_draw_canvas(canvas, segment->image->image, x + pen,
+                                baseline + below - image_height, image_width,
+                                image_height, 0);
+            segment_width = image_width;
+        } else if (segment->direction != HB_DIRECTION_INVALID) {
             segment_width = pt_font_measure_direction(segment->font, runs->text + segment->start,
                                                       segment->end - segment->start,
                                                       segment->direction) /
