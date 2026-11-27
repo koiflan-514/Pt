@@ -94,6 +94,20 @@ TEST_BINS := $(addprefix $(TEST_BIN)/,$(TEST_NAMES))
 TEST_OBJECTS := $(CORE_OBJECTS)
 TEST_DEPS := $(CORE_OBJECTS:.o=.d)
 
+# Standalone theme editor (M27). Tool objects are never part of LIB_SOURCES, so
+# no te_* symbol can enter libpt.so. The tool is not part of `all`; only
+# `make theme-editor` builds it. The two pure-module test binaries join
+# `make check` but never create a window or touch the library's source lists.
+THEME_DIR := tools/theme-editor
+THEME_OBJ := $(BUILD)/tools/theme-editor
+THEME_MODULES := theme_format theme_wcag
+THEME_MODULE_OBJS := $(addprefix $(THEME_OBJ)/,$(addsuffix .o,$(THEME_MODULES)))
+THEME_TOOL_OBJS := $(THEME_MODULE_OBJS) $(THEME_OBJ)/preview.o $(THEME_OBJ)/theme_editor.o
+THEME_BIN := $(BUILD)/theme-editor
+THEME_TEST_NAMES := test_theme_format test_theme_wcag
+THEME_TEST_BINS := $(addprefix $(TEST_BIN)/,$(THEME_TEST_NAMES))
+THEME_DEPS := $(THEME_TOOL_OBJS:.o=.d)
+
 C_EXAMPLES := $(patsubst examples/c/%.c,$(EXAMPLES)/c/%,$(wildcard examples/c/*.c))
 CPP_EXAMPLES := $(patsubst examples/cpp/%.cpp,$(EXAMPLES)/cpp/%,$(wildcard examples/cpp/*.cpp))
 
@@ -208,6 +222,42 @@ $(TEST_BIN)/%: tests/%.c $(wildcard tests/*.h) $(BUILD)/libpt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) -I tests $< $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
 
+# Theme editor objects stay under build/tools/theme-editor and never enter
+# LIB_OBJECTS. Only public headers are visible; no -Isrc is needed.
+$(THEME_OBJ)/%.o: $(THEME_DIR)/%.c $(wildcard $(THEME_DIR)/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) -I$(THEME_DIR) -MMD -MP -c $< -o $@
+
+$(THEME_BIN): $(THEME_TOOL_OBJS) $(BUILD)/libpt.a
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) $(THEME_TOOL_OBJS) $(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+
+theme-editor: $(THEME_BIN)
+
+.PHONY: theme-editor run-theme-editor check-theme-editor
+
+run-theme-editor: $(THEME_BIN)
+	$(THEME_BIN)
+
+check-theme-editor: $(THEME_BIN)
+	$(THEME_BIN) --check $(THEME_DIR)/themes/dark.json
+	$(THEME_BIN) --check $(THEME_DIR)/themes/light.json
+
+# The pure-module tests link only their own module plus libpt.a so W2 can read
+# the default palettes through the public app getters. They are separate rules,
+# not TEST_NAMES, so the generic test build never picks up tool sources.
+$(TEST_BIN)/test_theme_format: tests/test_theme_format.c $(THEME_OBJ)/theme_format.o \
+		$(BUILD)/libpt.a $(wildcard tests/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) -I tests -I$(THEME_DIR) $< $(THEME_OBJ)/theme_format.o \
+		$(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+
+$(TEST_BIN)/test_theme_wcag: tests/test_theme_wcag.c $(THEME_OBJ)/theme_wcag.o \
+		$(BUILD)/libpt.a $(wildcard tests/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) -I tests -I$(THEME_DIR) $< $(THEME_OBJ)/theme_wcag.o \
+		$(BUILD)/libpt.a $(PKG_LIBS) $(SAN_LIBS) -o $@
+
 # Unicode bidi conformance fixtures ship gzipped (-9n, reproducible) and are
 # expanded into the build tree. PT_BIDI_TEST_DIR still wins when set; the
 # compiled default points at the expanded copy so plain `make check` works.
@@ -243,9 +293,13 @@ api-update: lib
 api-docs:
 	$(PYTHON) tools/gen-api-reference.py --write
 
-check: $(TEST_BINS) check-bindings api-check
+check: $(TEST_BINS) $(THEME_TEST_BINS) check-bindings api-check
 	@mkdir -p $(TEST_BIN)
 	@for test in $(TEST_BINS); do \
+		echo "== $$test"; \
+		$$test || exit $$?; \
+	done
+	@for test in $(THEME_TEST_BINS); do \
 		echo "== $$test"; \
 		$$test || exit $$?; \
 	done
@@ -261,9 +315,13 @@ check-wayland: $(TEST_BIN)/test_wayland
 		$(TEST_BIN)/test_wayland; \
 	fi
 
-check-sanitize: $(TEST_BINS) $(TEST_BIN)/test_cpp
+check-sanitize: $(TEST_BINS) $(THEME_TEST_BINS) $(TEST_BIN)/test_cpp
 	@mkdir -p $(TEST_BIN)
 	@for test in $(TEST_BINS); do \
+		echo "== $$test (sanitized)"; \
+		ASAN_OPTIONS=detect_leaks=1 $$test || exit $$?; \
+	done
+	@for test in $(THEME_TEST_BINS); do \
 		echo "== $$test (sanitized)"; \
 		ASAN_OPTIONS=detect_leaks=1 $$test || exit $$?; \
 	done
@@ -481,7 +539,7 @@ dist:
 	@echo "wrote $(BUILD)/dist/pt-$(VERSION).tar.gz (SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH))"
 	@echo "wrote $(BUILD)/dist/pt-$(VERSION).tar.gz.sha256"
 
--include $(LIB_DEPS) $(TEST_DEPS)
+-include $(LIB_DEPS) $(TEST_DEPS) $(THEME_DEPS)
 
 run-popup-demo: $(EXAMPLES)/c/popup_demo
 	$(EXAMPLES)/c/popup_demo
