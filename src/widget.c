@@ -32,6 +32,7 @@ typedef struct pt_edit_history {
 #define pt_grid_max_columns 1024u
 
 static void entry_after_edit(pt_widget *entry);
+static void entry_delete_range(pt_widget *entry, size_t start, size_t end);
 static void entry_ime_clear_hints(pt_widget *widget);
 static bool kind_is_checked_control(pt_widget_kind kind);
 static void checked_control_set(pt_widget *widget, bool checked, bool notify);
@@ -425,7 +426,19 @@ static char *entry_selected_text(const pt_widget *entry) {
 }
 
 static bool entry_copy_selection(pt_widget *entry, bool cut) {
-    char *selected = entry_selected_text(entry);
+    if (!entry_has_selection(entry)) {
+        return false;
+    }
+    size_t start = 0;
+    size_t end = 0;
+    entry_selection_range(entry, &start, &end);
+    pt_widget_images_snap_range(entry, &start, &end);
+    if (start >= end) {
+        return false;
+    }
+    /* Plain-text copy replaces a contained inline image with its alt text; an
+     * empty alt keeps U+FFFC and an image without a descriptor is untouched. */
+    char *selected = pt_widget_images_copy_text(entry, start, end, NULL);
     if (!selected) {
         return false;
     }
@@ -435,15 +448,9 @@ static bool entry_copy_selection(pt_widget *entry, bool cut) {
     }
     free(selected);
     if (cut) {
-        size_t start = 0;
-        size_t end = 0;
-        entry_selection_range(entry, &start, &end);
-        entry_history_push(entry);
-        size_t len = entry_length(entry);
-        memmove(entry->text + start, entry->text + end, len - end + 1);
-        entry->cursor = start;
-        entry->selection_anchor = start;
-        entry_after_edit(entry);
+        /* The regular delete path shifts spans/images, records history and
+         * notifies text changed; the clipboard keeps the alt text. */
+        entry_delete_range(entry, start, end);
     }
     return true;
 }

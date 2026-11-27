@@ -786,6 +786,75 @@ static void test_pipeline_runs(pt_widget *root) {
     pt_icon_image_destroy(icon);
 }
 
+/* W3c clipboard text: a contained descriptor becomes its alt text, an empty
+ * alt keeps U+FFFC, a raw placeholder without a descriptor is untouched and a
+ * defensive partial range still emits one whole U+FFFC. */
+static void test_copy_text(pt_widget *root) {
+    pt_widget *label = pt_label_create(root, "a" placeholder "b" placeholder "c");
+    pt_icon_image *icon = make_icon();
+    pt_check(label != NULL && icon != NULL);
+    if (!label || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_widget_destroy(label);
+        return;
+    }
+    pt_text_image with_alt = descriptor(1, icon);
+    memcpy(with_alt.alt, "ALT", 4);
+    pt_check(pt_widget_set_text_images(label, &with_alt, 1));
+    const char *text = pt_widget_get_text(label);
+    size_t length = strlen(text);
+
+    size_t copied_length = 0;
+    char *copied = pt_widget_images_copy_text(label, 0, length, &copied_length);
+    pt_check(copied != NULL);
+    if (copied) {
+        pt_check(strcmp(copied, "aALTb" placeholder "c") == 0);
+        pt_check(copied_length == strlen(copied));
+        free(copied);
+    }
+
+    /* A partial range at the leading edge of the placeholder becomes U+FFFC. */
+    copied = pt_widget_images_copy_text(label, 0, 2, &copied_length);
+    pt_check(copied != NULL);
+    if (copied) {
+        pt_check(strcmp(copied, "a" placeholder) == 0);
+        pt_check(copied_length == 4);
+        free(copied);
+    }
+    /* A range that begins inside the placeholder also emits it whole. */
+    copied = pt_widget_images_copy_text(label, 3, length, &copied_length);
+    pt_check(copied != NULL);
+    if (copied) {
+        pt_check(strcmp(copied, placeholder "b" placeholder "c") == 0);
+        free(copied);
+    }
+
+    /* Empty alt keeps the raw object replacement character. */
+    with_alt.alt[0] = '\0';
+    pt_check(pt_widget_set_text_images(label, &with_alt, 1));
+    copied = pt_widget_images_copy_text(label, 0, length, &copied_length);
+    pt_check(copied != NULL);
+    if (copied) {
+        pt_check(strcmp(copied, text) == 0);
+        free(copied);
+    }
+
+    /* With no descriptor at all the raw bytes are copied verbatim, and an
+     * empty range has no clipboard text. */
+    pt_widget_clear_text_images(label);
+    copied = pt_widget_images_copy_text(label, 0, length, &copied_length);
+    pt_check(copied != NULL);
+    if (copied) {
+        pt_check(strcmp(copied, text) == 0);
+        free(copied);
+    }
+    pt_check(pt_widget_images_copy_text(label, 2, 2, NULL) == NULL);
+    pt_check(pt_widget_images_copy_text(NULL, 0, 1, NULL) == NULL);
+
+    pt_icon_image_destroy(icon);
+    pt_widget_destroy(label);
+}
+
 static void test_zero_regression(pt_widget *root) {
     pt_widget *label = pt_label_create(root, "plain text");
     pt_check(pt_widget_get_text_image_count(label) == 0);
@@ -829,6 +898,7 @@ int main(void) {
     test_insert_rejections(root);
     test_insert_undo_text(root);
     test_pipeline_runs(root);
+    test_copy_text(root);
     test_zero_regression(root);
 
     pt_window_free(window);

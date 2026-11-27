@@ -1016,6 +1016,86 @@ static void test_entry_placeholder_ellipsis(pt_app *app) {
     pt_window_free(window);
 }
 
+#define IMAGE_PLACEHOLDER "\xEF\xBF\xBC"
+
+/* W3c copy/cut on an inline image: the clipboard gets the alt text (empty alt
+ * keeps U+FFFC), cut removes the placeholder and descriptor together, and a
+ * pasted raw placeholder does not manufacture an image. */
+static pt_icon_image *make_inline_icon(void) {
+    uint32_t pixels[16];
+    for (int i = 0; i < 16; ++i) {
+        pixels[i] = 0x80FF0000u | (uint32_t)i;
+    }
+    size_t size = 0;
+    uint8_t *png = pt_png_encode_argb_premultiplied(pixels, 4, 4, &size);
+    pt_check(png != NULL && size > 0);
+    pt_icon_image *image = png ? pt_icon_image_load_memory(png, size) : NULL;
+    free(png);
+    return image;
+}
+
+static void test_copy_cut_inline_image(pt_app *app) {
+    pt_window *window = pt_window_create(app, "inline-copy", 360, 220);
+    pt_check(window != NULL);
+    if (!window) {
+        return;
+    }
+    pt_widget *area = pt_text_area_create(pt_window_root(window), "");
+    pt_icon_image *icon = make_inline_icon();
+    pt_check(area != NULL && icon != NULL);
+    if (!area || !icon) {
+        pt_icon_image_destroy(icon);
+        pt_window_free(window);
+        return;
+    }
+    pt_widget_set_text(area, "x" IMAGE_PLACEHOLDER "y");
+    pt_text_image entry = {0};
+    entry.start = 1;
+    entry.image = icon;
+    memcpy(entry.alt, "ALT", 4);
+    pt_check(pt_widget_set_text_images(area, &entry, 1));
+    size_t length = strlen(pt_widget_get_text(area));
+    pt_check(pt_widget_focus(area));
+
+    pt_text_area_set_selection(area, 0, (uint32_t)length);
+    pt_window_input_key(window, XKB_KEY_c, (uint32_t)pt_key_modifier_ctrl, NULL, true);
+    char *clipboard = pt_window_clipboard_get(window);
+    pt_check(clipboard != NULL && strcmp(clipboard, "xALTy") == 0);
+    free(clipboard);
+    /* Copy does not mutate the object. */
+    pt_check(pt_widget_get_text_image_count(area) == 1);
+    pt_check(strcmp(pt_widget_get_text(area), "x" IMAGE_PLACEHOLDER "y") == 0);
+
+    /* An empty alt keeps the object replacement character in plain text. */
+    entry.alt[0] = '\0';
+    pt_check(pt_widget_set_text_images(area, &entry, 1));
+    pt_text_area_set_selection(area, 0, (uint32_t)length);
+    pt_window_input_key(window, XKB_KEY_c, (uint32_t)pt_key_modifier_ctrl, NULL, true);
+    clipboard = pt_window_clipboard_get(window);
+    pt_check(clipboard != NULL && strcmp(clipboard, "x" IMAGE_PLACEHOLDER "y") == 0);
+    free(clipboard);
+
+    /* Cut writes the alt text and removes the placeholder with its descriptor. */
+    memcpy(entry.alt, "ALT", 4);
+    pt_check(pt_widget_set_text_images(area, &entry, 1));
+    pt_text_area_set_selection(area, 0, (uint32_t)length);
+    pt_window_input_key(window, XKB_KEY_x, (uint32_t)pt_key_modifier_ctrl, NULL, true);
+    clipboard = pt_window_clipboard_get(window);
+    pt_check(clipboard != NULL && strcmp(clipboard, "xALTy") == 0);
+    free(clipboard);
+    pt_check(strcmp(pt_widget_get_text(area), "") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+
+    /* Plain paste of U+FFFC is text only; it must not invent a descriptor. */
+    pt_check(pt_window_clipboard_set(window, "a" IMAGE_PLACEHOLDER "b"));
+    pt_window_input_key(window, XKB_KEY_v, (uint32_t)pt_key_modifier_ctrl, NULL, true);
+    pt_check(strcmp(pt_widget_get_text(area), "a" IMAGE_PLACEHOLDER "b") == 0);
+    pt_check(pt_widget_get_text_image_count(area) == 0);
+
+    pt_icon_image_destroy(icon);
+    pt_window_free(window);
+}
+
 int main(void) {
     setenv("PT_HEADLESS", "1", 1);
     pt_app *app = pt_app_create("pt.tests.editing");
@@ -1030,6 +1110,7 @@ int main(void) {
     test_rtl_entry_anchor(app);
     test_rtl_entry_caret_pixels(app);
     test_entry_placeholder_ellipsis(app);
+    test_copy_cut_inline_image(app);
     pt_app_destroy(app);
     return pt_test_finish("editing");
 }

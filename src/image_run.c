@@ -245,6 +245,126 @@ void pt_widget_images_snap_range(const pt_widget *widget, size_t *start, size_t 
     *end = b;
 }
 
+/* ---------- clipboard text ---------- */
+
+/* Kept out of line: the caller passes ranges derived from the side table and
+ * GCC's inliner otherwise assumes a wrapped size and rejects the memcpy bound. */
+__attribute__((noinline)) static bool copy_text_append(char **buffer, size_t *capacity,
+                                                       size_t *used, const char *bytes,
+                                                       size_t length) {
+    if (length == 0) {
+        return true;
+    }
+    if (*used + length + 1u > *capacity) {
+        size_t next = *capacity ? *capacity : 64u;
+        while (next < *used + length + 1u) {
+            next *= 2u;
+        }
+        char *grown = pt_realloc_mem(*buffer, next);
+        if (!grown) {
+            return false;
+        }
+        *buffer = grown;
+        *capacity = next;
+    }
+    memcpy(*buffer + *used, bytes, length);
+    *used += length;
+    return true;
+}
+
+char *pt_widget_images_copy_text(const pt_widget *widget, size_t start, size_t end,
+                                 size_t *out_length) {
+    if (out_length) {
+        *out_length = 0;
+    }
+    if (!widget) {
+        return NULL;
+    }
+    const char *text = widget->text ? widget->text : "";
+    size_t length = strlen(text);
+    if (start > length) {
+        start = length;
+    }
+    if (end > length) {
+        end = length;
+    }
+    if (start >= end) {
+        return NULL;
+    }
+    static const char placeholder[pt_image_placeholder_bytes] = {'\xEF', '\xBF', '\xBC'};
+    size_t capacity = 0;
+    size_t used = 0;
+    char *out = NULL;
+    size_t cursor = start;
+    if (widget->image_count > 0) {
+        for (uint32_t i = 0; i < widget->image_count; ++i) {
+            const pt_text_image *image = &widget->images[i];
+            size_t image_start = image->start;
+            size_t image_end = image_start + pt_image_placeholder_bytes;
+            if (image_end <= cursor || image_start >= end) {
+                continue;
+            }
+            if (image_start < cursor) {
+                /* The range begins inside this placeholder: keep the object as
+                 * one U+FFFC instead of copying continuation bytes. */
+                if (!copy_text_append(&out, &capacity, &used, placeholder,
+                                      pt_image_placeholder_bytes)) {
+                    free(out);
+                    return NULL;
+                }
+                cursor = image_end < end ? image_end : end;
+            } else {
+                if (!copy_text_append(&out, &capacity, &used, text + cursor,
+                                      image_start - cursor)) {
+                    free(out);
+                    return NULL;
+                }
+                cursor = image_start;
+                if (image_end <= end) {
+                    size_t alt_length = strlen(image->alt);
+                    const char *piece = alt_length > 0 ? image->alt : placeholder;
+                    size_t piece_length = alt_length > 0 ? alt_length : pt_image_placeholder_bytes;
+                    if (!copy_text_append(&out, &capacity, &used, piece, piece_length)) {
+                        free(out);
+                        return NULL;
+                    }
+                    cursor = image_end;
+                } else {
+                    /* Defensive partial tail: the object stays U+FFFC. */
+                    if (!copy_text_append(&out, &capacity, &used, placeholder,
+                                          pt_image_placeholder_bytes)) {
+                        free(out);
+                        return NULL;
+                    }
+                    cursor = end;
+                }
+            }
+            if (cursor >= end) {
+                break;
+            }
+        }
+    }
+    if (cursor > end) {
+        cursor = end;
+    }
+    if (cursor < end &&
+        !copy_text_append(&out, &capacity, &used, text + cursor, end - cursor)) {
+        free(out);
+        return NULL;
+    }
+    if (!out) {
+        out = pt_alloc(1);
+        if (!out) {
+            return NULL;
+        }
+    }
+    out[used] = '\0';
+    if (out_length) {
+        *out_length = used;
+    }
+    return out;
+}
+
 /* ---------- edit hooks ---------- */
 
 void pt_widget_images_on_insert(pt_widget *widget, size_t position, size_t length) {
