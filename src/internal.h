@@ -2102,6 +2102,25 @@ int pt_platform_dispatch(pt_app *app, int timeout_ms);
 int pt_platform_dispatch_once(pt_app *app);
 void pt_platform_flush(pt_app *app);
 
+/* ---------- protocol extensions (2.4) ---------- */
+
+/* Core/platform boundary for xdg-activation-v1 and xdg-foreign-unstable-v2.
+ * src/activation.c and src/foreign.c validate arguments first; these hooks are
+ * then responsible only for the protocol object lifecycle, the absent-global
+ * false path and headless behavior. They never paint, lay out or touch input
+ * serial ownership. W1 freezes the boundary; W3 and W4 fill in the bodies in
+ * src/wayland/activation.c and src/wayland/foreign.c. */
+bool pt_platform_activation_token_request(pt_window *window, const char *app_id,
+                                          pt_activation_token_callback callback,
+                                          void *user_data);
+bool pt_platform_activation_activate(pt_window *window, const char *token);
+
+bool pt_platform_foreign_export(pt_window *window, pt_foreign_handle_callback callback,
+                                void *user_data);
+void pt_platform_foreign_unexport(pt_window *window);
+bool pt_platform_foreign_set_parent(pt_window *window, const char *handle);
+void pt_platform_foreign_clear_parent(pt_window *window);
+
 /* App-internal timer helper used by the caret blink implementation. */
 uint64_t pt_app_add_timeout_internal(pt_app *app, uint32_t ms, pt_timer_callback callback,
                                      void *data);

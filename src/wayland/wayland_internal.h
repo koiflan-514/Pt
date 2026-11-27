@@ -19,7 +19,9 @@
 #include "tablet-unstable-v2-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol.h"
 #include "viewporter-client-protocol.h"
+#include "xdg-activation-v1-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
+#include "xdg-foreign-unstable-v2-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-toplevel-icon-v1-client-protocol.h"
 
@@ -86,6 +88,18 @@ struct pt_wayland_window {
     int toplevel_icon_height;
     int toplevel_icon_scale;
     uint64_t toplevel_icon_submissions;
+
+    /* xdg-activation-v1 and xdg-foreign-unstable-v2 state, owned by this
+     * window. All pointers are zero on allocation, so the absent-global path
+     * needs no initialization branch. The callback and its data are cleared
+     * before delivery so a re-entrant request cannot clobber the call. */
+    struct xdg_activation_token_v1 *activation_token;
+    pt_activation_token_callback activation_token_callback;
+    void *activation_token_data;
+    struct zxdg_exported_v2 *foreign_exported;
+    pt_foreign_handle_callback foreign_export_callback;
+    void *foreign_export_data;
+    struct zxdg_imported_v2 *foreign_parent;
 
     pt_wl_buffer buffers[pt_wl_buffer_count];
     void *pool_data;
@@ -219,6 +233,17 @@ struct pt_platform {
     pt_window *text_input_window;
     bool text_input_enabled;
 
+    /* Optional protocol globals (2.4). Each is bound independently and left
+     * NULL when the compositor does not advertise it; every consumer checks
+     * the pointer. pending_activation_token is the adopted
+     * XDG_ACTIVATION_TOKEN string owned by the platform and consumed at most
+     * once by the first mapped window. */
+    struct xdg_activation_v1 *activation;
+    struct zxdg_exporter_v2 *foreign_exporter;
+    struct zxdg_importer_v2 *foreign_importer;
+    char *pending_activation_token;
+    bool pending_activation_consumed;
+
     struct wl_cursor_theme *cursor_theme;
     struct wl_surface *cursor_surface;
     struct wl_cursor_image *cursor_image;
@@ -300,5 +325,29 @@ void pt_wl_window_update_viewport(pt_window *window);
  * keyboard repeat. Must run before the window's platform data is freed so
  * later input events cannot touch a dangling window. */
 void pt_platform_window_forget_focus(pt_window *window);
+
+/* ---------- protocol lifecycle hooks (2.4) ---------- */
+
+/* Wayland-side half of the protocol extensions, called by the serial hot spot
+ * files (platform.c and window.c) in W5. Each hook tolerates a NULL window or
+ * platform and an absent global so the teardown paths stay unconditional. The
+ * core/platform half (pt_platform_activation_* and pt_platform_foreign_*) is
+ * declared in internal.h. */
+
+/* Reads and unsets XDG_ACTIVATION_TOKEN when xdg_activation_v1 is bound;
+ * without the global the environment is untouched. */
+void pt_activation_adopt_environment(pt_platform *platform);
+/* Called after the first successful mapped-frame commit. If an unconsumed
+ * startup token exists, sends activate(token, window->surface) once. */
+void pt_activation_window_mapped(pt_window *window);
+/* Destroys a pending token object, drops its callback and clears the state. */
+void pt_activation_window_destroy(pt_window *window);
+/* Frees the pending startup string and destroys the activation global. */
+void pt_activation_platform_destroy(pt_platform *platform);
+
+/* Destroys the exported and imported objects and drops pending callbacks. */
+void pt_foreign_window_destroy(pt_window *window);
+/* Destroys the exporter and importer globals. */
+void pt_foreign_platform_destroy(pt_platform *platform);
 
 #endif

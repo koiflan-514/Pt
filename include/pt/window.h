@@ -302,6 +302,86 @@ pt_api bool pt_window_primary_set_serial(pt_window *window, const char *text,
 /* Since 1.1. */
 pt_api char *pt_window_primary_get(pt_window *window);
 
+/* Activation tokens (xdg-activation-v1, staging). A client that launches or
+ * hands off to another client asks the compositor for a one-shot token and
+ * passes the opaque string out of band; the receiving client calls
+ * pt_window_activate with it. The protocol is a request, never a guarantee:
+ * the compositor may ignore a stale token or refuse activation, and Pt cannot
+ * observe whether focus moved.
+ *
+ * Startup is automatic and has no extra function. When the compositor exposes
+ * xdg_activation_v1, the platform reads and unsets XDG_ACTIVATION_TOKEN after
+ * the first registry roundtrip, and the first window that reaches the mapped
+ * state consumes that token exactly once. Without the global the environment
+ * variable is neither read nor unset, so an unsupported compositor sees no
+ * behavior change. */
+typedef void (*pt_activation_token_callback)(pt_window *window, const char *token,
+                                             void *user_data);
+/* Asks the compositor for an activation token that can be passed to another
+ * client. app_id may be NULL; when non-NULL it names the client that will be
+ * activated. The request uses the latest pointer-button or key-press serial
+ * when one exists and otherwise omits it, so a compositor that requires a
+ * recent serial may still decline. The callback runs once on the UI thread;
+ * token is borrowed for the duration of the call and an empty string means the
+ * compositor returned an invalid token. Only one request can be in flight per
+ * window: a new request destroys the pending token object and drops its
+ * callback. Returns false without creating an object when window or callback
+ * is NULL, the activation global is absent, or the platform is headless. Since
+ * 2.4. */
+pt_api bool pt_window_request_activation_token(pt_window *window, const char *app_id,
+                                               pt_activation_token_callback callback,
+                                               void *user_data);
+
+/* Requests activation of this window with a token received out of band. The
+ * token is sent once and not retained, so the caller may free it after the
+ * call. Returns false for a NULL window, a NULL or empty token, an absent
+ * activation global, or a headless platform. A true return means the request
+ * was sent, not that the compositor honoured it; use the focus callback for
+ * the observed keyboard focus. Since 2.4. */
+pt_api bool pt_window_activate(pt_window *window, const char *token);
+
+/* Foreign toplevel handles (xdg-foreign-unstable-v2, experimental). The
+ * protocol lets one client export a toplevel and another import the opaque
+ * handle as a parent, so an out-of-process dialog stacks and positions with
+ * its caller. It expresses only a parent/child toplevel relationship; it does
+ * not embed, reparent into a widget, or transfer pixels. Only v2 is bound. A
+ * compositor with only v1 or no xdg-foreign global gets the documented no-op
+ * fallback. Handles are opaque and compositor-defined: never parse, log or
+ * persist them beyond the exported object's lifetime.
+ *
+ * The export callback runs once on the UI thread and borrows handle only for
+ * the duration of the call. The export object stays alive until
+ * pt_window_unexport_foreign_handle or window destruction, and destroying it
+ * invalidates every import built from its handle. Re-exporting first destroys
+ * the previous export and drops its pending callback. */
+typedef void (*pt_foreign_handle_callback)(pt_window *window, const char *handle,
+                                           void *user_data);
+/* Exports this toplevel and delivers its opaque handle once through callback.
+ * Returns false without creating an object when window or callback is NULL,
+ * the exporter global is absent, or the platform is headless. Exporting again
+ * replaces the previous export (see the typedef contract above). Since 2.4. */
+pt_api bool pt_window_export_foreign_handle(pt_window *window,
+                                            pt_foreign_handle_callback callback,
+                                            void *user_data);
+
+/* Revokes the export and drops any pending callback. The compositor invalidates
+ * imported relationships built from its handle. A no-op for a NULL window or
+ * when nothing is exported. Since 2.4. */
+pt_api void pt_window_unexport_foreign_handle(pt_window *window);
+
+/* Imports an opaque handle and sets this window as its child, with the same
+ * stacking and positioning semantics as xdg_toplevel.set_parent. The handle is
+ * passed through unchanged and is not retained or logged. Replaces a previous
+ * imported parent. Returns false for a NULL window, a NULL or empty handle, an
+ * absent importer global, or a headless platform; an invalid handle clears the
+ * import silently when the compositor sends destroyed, and a later import can
+ * still succeed. Since 2.4. */
+pt_api bool pt_window_set_foreign_parent(pt_window *window, const char *handle);
+
+/* Destroys the imported parent object and invalidates the relationship. A
+ * no-op for a NULL window or when no parent is imported. Since 2.4. */
+pt_api void pt_window_clear_foreign_parent(pt_window *window);
+
 #ifdef __cplusplus
 }
 #endif
