@@ -63,13 +63,16 @@ just as it clears styled spans.
 ## Accessibility (2.3.0)
 
 The accessibility tree exposes each image as a **virtual child** of the owning
-label or text area, ordered by side-table index. The child has role `image` and
-its name is the `alt` text, falling back to the image description when `alt` is
-empty. The Text interface keeps returning the raw U+FFFC and unchanged
-character offsets, so an application or AT that does not understand embedded
-objects still observes a placeholder in the right position. Setting, clearing
-or editing a placeholder emits a structure-changed accessibility event; the
-usual text-changed event still reports the byte change.
+label or text area, ordered by side-table index. The child has role `image`
+(AT-SPI role 27) and its name is the `alt` text, falling back to the image
+description when `alt` is empty. The child is a real `Component`: `GetExtents`,
+`GetPosition` and `GetSize` return the placeholder's screen rectangle, and
+`GetAccessibleAtPoint` resolves a point inside that rectangle to the image child
+rather than to the owning text widget. The Text interface keeps returning the
+raw U+FFFC and unchanged character offsets, so an application or AT that does
+not understand embedded objects still observes a placeholder in the right
+position. Setting, clearing or editing a placeholder emits a structure-changed
+accessibility event; the usual text-changed event still reports the byte change.
 
 ## Quick start
 
@@ -240,9 +243,11 @@ Copying a selection writes the alt text in place of each fully contained
 U+FFFC. A run without alt text keeps the three placeholder bytes. A partial
 selection that starts or ends inside a placeholder is snapped outward before
 the copy, so an object is copied whole or not at all. Cut removes the raw
-placeholder and its descriptor; the clipboard receives plain text. Pasting an
-image, or a rich clipboard type that recreates descriptors, is not part of
-2.3.0.
+placeholder and its descriptor; the clipboard receives plain text. Deleting or
+cutting through the accessibility `EditableText` interface goes through the same
+text-delete path, so only the descriptors overlapping the removed bytes are
+dropped and the deletion is a single undoable step. Pasting an image, or a rich
+clipboard type that recreates descriptors, is not part of 2.3.0.
 
 ## Bindings
 
