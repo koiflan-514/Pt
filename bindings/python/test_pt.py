@@ -2359,6 +2359,203 @@ class M19BindingTests(unittest.TestCase):
         self.assertIn(pointer, destroyed)
 
     # ------------------------------------------------------------------
+    # Inline image runs (2.3)
+    # ------------------------------------------------------------------
+
+    def _text_image(self, image: "pt.IconImage", start: int, alt: bytes = b"",
+                    width: float = 16.0, height: float = 16.0,
+                    align: int = pt.text_image_align_baseline) -> "pt.TextImage":
+        descriptor = pt.TextImage()
+        descriptor.start = start
+        descriptor.image = image.raw
+        descriptor.width = width
+        descriptor.height = height
+        descriptor.align = align
+        descriptor.alt = alt
+        return descriptor
+
+    def test_23_text_image_defaults_and_enum(self) -> None:
+        self.assertEqual(pt.text_image_align_baseline, 0)
+        self.assertEqual(pt.text_image_align_middle, 1)
+        descriptor = pt.TextImage()
+        self.assertEqual(descriptor.start, 0)
+        self.assertEqual(descriptor.image, None)
+        self.assertEqual((descriptor.width, descriptor.height), (0.0, 0.0))
+        self.assertEqual(descriptor.align, pt.text_image_align_baseline)
+        self.assertEqual(descriptor.alt, b"")
+
+    def test_23_set_get_count_clear_round_trip(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        label = pt.label(self.column, "one \uFFFC two")
+        # Byte offset of the U+FFFC placeholder is len("one ") == 4.
+        descriptor = self._text_image(image, 4, alt=b"first", width=20.0, height=12.0,
+                                      align=pt.text_image_align_middle)
+        self.assertTrue(label.set_text_images([descriptor]))
+        self.assertEqual(label.text_image_count(), 1)
+        stored = label.text_image(0)
+        self.assertIsNotNone(stored)
+        if stored is not None:
+            self.assertEqual(stored.start, 4)
+            self.assertEqual(stored.width, 20.0)
+            self.assertEqual(stored.height, 12.0)
+            self.assertEqual(stored.align, pt.text_image_align_middle)
+            self.assertEqual(stored.alt, b"first")
+            # The setter takes its own reference; stored pointer equals the
+            # caller's handle.
+            self.assertEqual(stored.image, image.raw)
+        # Out-of-range and negative indices yield None (empty state).
+        self.assertIsNone(label.text_image(1))
+        self.assertIsNone(label.text_image(-1))
+        # An empty list (and None) clears and still succeeds.
+        self.assertTrue(label.set_text_images([]))
+        self.assertEqual(label.text_image_count(), 0)
+        self.assertTrue(label.set_text_images(None))
+        self.assertEqual(label.text_image_count(), 0)
+        # clear_text_images is the fluent clear.
+        self.assertTrue(label.set_text_images([descriptor]))
+        self.assertEqual(label.text_image_count(), 1)
+        self.assertIs(label.clear_text_images(), label)
+        self.assertEqual(label.text_image_count(), 0)
+        image.destroy()
+
+    def test_23_set_text_images_rejects_unsupported_kind(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        button = pt.button(self.column, "Icon")
+        descriptor = self._text_image(image, 0, alt=b"x")
+        # A button is not a span host; the setter returns False and keeps the
+        # (empty) table untouched.
+        self.assertFalse(button.set_text_images([descriptor]))
+        self.assertEqual(button.text_image_count(), 0)
+        image.destroy()
+
+    def test_23_set_text_images_drops_null_and_invalid_entries(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        label = pt.label(self.column, "\uFFFC\uFFFC")
+        # offset 0 -> placeholder, offset 3 -> placeholder, offset 1 -> interior.
+        good_a = self._text_image(image, 0, alt=b"a")
+        good_b = self._text_image(image, 3, alt=b"b")
+        null_image = pt.TextImage()
+        null_image.start = 0
+        null_image.image = 0
+        interior = self._text_image(image, 1, alt=b"c")
+        off_end = self._text_image(image, 6, alt=b"d")
+        # A NULL image and non-placeholder starts are dropped; only the two
+        # valid entries survive, sorted by start.
+        self.assertTrue(label.set_text_images([good_b, null_image, interior, good_a, off_end]))
+        self.assertEqual(label.text_image_count(), 2)
+        self.assertEqual(label.text_image(0).start, 0)
+        self.assertEqual(label.text_image(0).alt, b"a")
+        self.assertEqual(label.text_image(1).start, 3)
+        self.assertEqual(label.text_image(1).alt, b"b")
+        # A duplicate start keeps the last input entry.
+        first = self._text_image(image, 0, alt=b"first")
+        last = self._text_image(image, 0, alt=b"last")
+        self.assertTrue(label.set_text_images([first, last]))
+        self.assertEqual(label.text_image_count(), 1)
+        self.assertEqual(label.text_image(0).alt, b"last")
+        # An entry that is only a NULL image drops to an empty table but the
+        # call still succeeds.
+        self.assertTrue(label.set_text_images([null_image]))
+        self.assertEqual(label.text_image_count(), 0)
+        image.destroy()
+
+    def test_23_alt_truncation_utf8_boundary(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        text_area = pt.text_area(self.column, "\uFFFC")
+        text_area.text = "\uFFFC"
+        # 127 ASCII bytes fit exactly; the fixed alt buffer truncates a
+        # 128-byte input to 127.
+        for length, expected in ((126, 126), (127, 127)):
+            descriptor = self._text_image(image, 0, alt=b"a" * length)
+            self.assertTrue(text_area.set_text_images([descriptor]))
+            self.assertEqual(len(text_area.text_image(0).alt), expected)
+        descriptor = self._text_image(image, 0, alt=b"a" * 127)
+        self.assertTrue(text_area.set_text_images([descriptor]))
+        # A multi-byte alt that fits is preserved intact.
+        uni = self._text_image(image, 0, alt="日本".encode("utf-8"))
+        self.assertTrue(text_area.set_text_images([uni]))
+        self.assertEqual(text_area.text_image(0).alt, "日本".encode("utf-8"))
+        image.destroy()
+
+    def test_23_insert_image_round_trip(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        text_area = pt.text_area(self.column, "")
+        text_area.text = "hello"
+        text_area.set_selection(5, 5)
+        descriptor = self._text_image(image, 0, alt=b"icon")
+        offset = text_area.insert_image(descriptor)
+        self.assertEqual(offset, 5)
+        self.assertEqual(text_area.text, "hello\uFFFC")
+        self.assertEqual(text_area.text_image_count(), 1)
+        self.assertEqual(text_area.text_image(0).start, 5)
+        self.assertEqual(text_area.text_image(0).alt, b"icon")
+        # Inserting before the existing placeholder shifts its start.
+        text_area.set_selection(0, 0)
+        second = self._text_image(image, 0, alt=b"head")
+        second_offset = text_area.insert_image(second)
+        self.assertEqual(second_offset, 0)
+        self.assertEqual(text_area.text, "\uFFFChello\uFFFC")
+        self.assertEqual(text_area.text_image_count(), 2)
+        self.assertEqual(text_area.text_image(0).start, 0)
+        self.assertEqual(text_area.text_image(1).start, 8)
+        # The area copies the descriptor and takes its own reference: the
+        # caller may drop its handle and the table stays valid.
+        borrowed_before = text_area.text_image(0).image
+        image.destroy()
+        self.assertEqual(text_area.text_image_count(), 2)
+        self.assertEqual(text_area.text_image(0).image, borrowed_before)
+
+    def test_23_insert_image_rejections(self) -> None:
+        png = _make_png(4, 4)
+        image = pt.IconImage.load_memory(png)
+        self.assertIsNotNone(image)
+        if image is None:
+            return
+        text_area = pt.text_area(self.column, "")
+        text_area.text = "hello"
+        text_area.set_selection(2, 2)
+        descriptor = self._text_image(image, 0, alt=b"i")
+        # A None descriptor and a NULL image pointer are rejected up front.
+        self.assertIsNone(text_area.insert_image(None))
+        null_image = pt.TextImage()
+        null_image.image = 0
+        self.assertIsNone(text_area.insert_image(null_image))
+        self.assertEqual(text_area.text, "hello")
+        self.assertEqual(text_area.text_image_count(), 0)
+        # A non-text-area widget rejects the insert.
+        label = pt.label(self.column, "text")
+        self.assertIsNone(label.insert_image(descriptor))
+        # The caret inside an existing placeholder is rejected.
+        text_area.set_selection(5, 5)
+        self.assertEqual(text_area.insert_image(descriptor), 5)
+        self.assertEqual(text_area.text, "hello\uFFFC")
+        text_area.set_selection(6, 6)  # interior byte of the placeholder
+        self.assertEqual(text_area.insert_image(descriptor), None)
+        self.assertEqual(text_area.text, "hello\uFFFC")
+        self.assertEqual(text_area.text_image_count(), 1)
+        image.destroy()
+
+    # ------------------------------------------------------------------
     # Pickers: select
     # ------------------------------------------------------------------
 

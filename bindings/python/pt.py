@@ -1050,11 +1050,18 @@ class TextImage(_ctypes.Structure):
     """One inline image run over a U+FFFC placeholder.
 
     ``start`` is the UTF-8 byte offset of the three-byte placeholder and
-    ``image`` is the raw pointer of an :class:`IconImage` (setter takes its own
-    reference, so the caller may destroy its handle after the call). A zero or
-    non-finite width or height means the intrinsic icon size. ``alt`` is copied
-    and truncated to 127 bytes. Getter results carry a borrowed pointer; only
-    the widget owns that reference.
+    ``image`` is the raw pointer of an :class:`IconImage` (``icon.raw``). The
+    setter and :meth:`Widget.insert_image` take their own reference, so the
+    caller may destroy its handle after a successful call. A zero or non-finite
+    width or height means the intrinsic icon size. ``alt`` is copied and
+    truncated on a UTF-8 boundary at no more than 127 bytes.
+
+    ``image`` is untyped as an ``int`` to keep the structure a plain ctypes
+    record over the fixed C layout. :meth:`Widget.text_image` returns copies
+    whose ``image`` is borrowed from the widget and only valid while its side
+    table entry is alive; wrap it with ``pt._owned_icon`` for an owned
+    reference. Alt text is written through this fixed ``alt`` field, so the
+    default is an empty string rather than an unset attribute.
     """
 
     _fields_ = [
@@ -3115,13 +3122,23 @@ class Widget:
             return None
         return span
 
-    def set_text_images(self, images: "list[TextImage] | None") -> "Widget":
+    def set_text_images(self, images: "list[TextImage] | None") -> bool:
+        """Replaces the inline image table; returns False when rejected.
+
+        The C setter copies the array, keeps the last entry for a duplicate
+        placeholder, drops entries whose ``image`` is NULL or whose ``start``
+        is not a U+FFFC byte offset in the current text, sorts by ``start`` and
+        takes its own reference to every kept image. None or an empty list is
+        equivalent to :meth:`clear_text_images` and still returns True. Only
+        labels and text areas accept images; any other kind returns False
+        without touching the table. The previous table's image handles may have
+        been released, so the old descriptor list must not be reused to restore
+        the old images.
+        """
         if not images:
-            _pt_widget_set_text_images(self._ptr, None, 0)
-            return self
+            return bool(_pt_widget_set_text_images(self._ptr, None, 0))
         array = (TextImage * len(images))(*images)
-        _pt_widget_set_text_images(self._ptr, array, len(images))
-        return self
+        return bool(_pt_widget_set_text_images(self._ptr, array, len(images)))
 
     def clear_text_images(self) -> "Widget":
         _pt_widget_clear_text_images(self._ptr)
@@ -3131,6 +3148,15 @@ class Widget:
         return int(_pt_widget_get_text_image_count(self._ptr))
 
     def text_image(self, index: int) -> Optional[TextImage]:
+        """Returns a copy of one descriptor, or None for an out-of-range index.
+
+        The copied ``image`` field is a pointer borrowed from the widget: it is
+        valid only while the side table is alive and the entry has not been
+        replaced or cleared. Do not hold it across edits or a later
+        :meth:`set_text_images`; to keep the image longer, wrap it with
+        ``pt._owned_icon`` (which calls ``pt_icon_image_ref`` and returns an
+        owned :class:`IconImage`) or keep the original ``IconImage`` wrapper.
+        """
         image = TextImage()
         if not _pt_widget_get_text_image(self._ptr, index, _ctypes.byref(image)):
             return None
@@ -3717,12 +3743,19 @@ class Widget:
             return bool(_pt_text_area_redo(self._ptr))
         return bool(_pt_entry_redo(self._ptr))
 
-    def insert_image(self, image: TextImage) -> Optional[int]:
+    def insert_image(self, image: Optional[TextImage]) -> Optional[int]:
         """Insert one inline image at the caret; return its byte offset or None.
 
-        Only text areas accept an image. The widget takes its own reference to
-        ``image.image``; the caller may destroy its handle after a success.
+        Only text areas accept an image. A None ``image`` or one whose
+        ``image`` pointer is NULL is rejected up front and returns None without
+        changing the text. The area copies the descriptor, truncates ``alt`` to
+        127 bytes and takes its own reference to ``image.image``, so the caller
+        may destroy its handle after a success. A failed insert (wrong kind, a
+        caret inside an existing placeholder, or the text byte limit) also
+        returns None and leaves the text untouched.
         """
+        if image is None or not image.image:
+            return None
         start = _c_uint32(0)
         if not _pt_text_area_insert_image(
             self._ptr, _ctypes.byref(image), _ctypes.byref(start)
