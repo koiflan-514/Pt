@@ -1385,7 +1385,33 @@ bool pt_text_visual_map_build(const char *text, size_t len,
     float visual_x = 0.0f;
     for (size_t i = 0; i < count; ++i) {
         const pt_text_visual_segment *segment = &segments[i];
-        if (segment->end <= segment->start || !segment->font) {
+        if (segment->end <= segment->start) {
+            continue;
+        }
+        if (!segment->font) {
+            /* One atomic cluster for a fontless inline image. The placeholder is
+             * never shaped: its box comes from the descriptor, and its width is
+             * already in device pixels (logical * scale) so the map's x
+             * convention is preserved exactly once. */
+            if (!segment->image) {
+                continue;
+            }
+            float width = segment->image_width > 0.0f ? segment->image_width : 0.0f;
+            bool image_rtl = segment->direction == HB_DIRECTION_RTL;
+            pt_text_visual_cluster *cluster = &map->clusters[map->count++];
+            cluster->start = segment->start;
+            cluster->end = segment->end;
+            cluster->x0 = visual_x;
+            cluster->x1 = visual_x + width;
+            cluster->level = segment->level;
+            if (image_rtl) {
+                cluster->start_x = cluster->x1;
+                cluster->end_x = cluster->x0;
+            } else {
+                cluster->start_x = cluster->x0;
+                cluster->end_x = cluster->x1;
+            }
+            visual_x += width;
             continue;
         }
         const char *segment_text = text + segment->start;

@@ -140,22 +140,39 @@ bool pt_text_layout_build(const pt_widget *area, const pt_layout_ctx *ctx, float
     size_t len = strlen(text);
     out->font = font;
     out->scale = scale;
-    float text_ascent = 0.0f;
-    float text_descent = 0.0f;
-    pt_font_metrics_for_text(font, text, len, &text_ascent, &text_descent);
-    out->ascent = text_ascent / scale;
-    out->line_height = pt_max_float(text_ascent + text_descent, font->line_height) / scale;
+    if (area->image_count > 0) {
+        /* Do not shape the raw U+FFFC placeholder just to probe metrics: with
+         * an image the run list below measures every real text piece and the
+         * image box, and its composed metrics become authoritative. */
+        out->ascent = font->ascent / scale;
+        out->line_height = font->line_height / scale;
+    } else {
+        float text_ascent = 0.0f;
+        float text_descent = 0.0f;
+        pt_font_metrics_for_text(font, text, len, &text_ascent, &text_descent);
+        out->ascent = text_ascent / scale;
+        out->line_height =
+            pt_max_float(text_ascent + text_descent, font->line_height) / scale;
+    }
     out->display = pt_alloc(len + 1);
     memcpy(out->display, text, len + 1);
     out->display_len = len;
     out->caret = area->cursor <= len ? area->cursor : len;
-    if (area->span_count > 0 && pt_widget_supports_spans(area)) {
+    if ((area->span_count > 0 || area->image_count > 0) && pt_widget_supports_spans(area)) {
         if (pt_text_runs_build(area, ctx, &out->runs)) {
             out->runs.text = out->display;
             out->runs.length = len;
             out->has_runs = true;
             if (out->runs.line_height > out->line_height) {
                 out->line_height = out->runs.line_height;
+            }
+            if (area->image_count > 0) {
+                /* The image run makes the composed run list authoritative: it
+                 * measured every real text piece plus the image box, without
+                 * shaping the raw U+FFFC placeholder. */
+                out->ascent = out->runs.ascent;
+                out->line_height =
+                    pt_max_float(font->line_height / scale, out->runs.line_height);
             }
         }
     }
