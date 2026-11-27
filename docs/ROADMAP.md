@@ -2373,13 +2373,13 @@ this document), W1 ~80, W2 ~70, W3 ~40. If W2 cannot be verified live because th
 bench compositor/device never emits a horizontal axis, the routing still lands
 and W2's evidence is marked headless-only; the wave is not dropped.
 
-## M25 - 2.3.0: inline image runs (proposed)
+## M25 - 2.3.0: inline image runs (delivered; closed 2026-11-27)
 
-**Status: proposed, design only (2026-11-27).** This section and
-[m25-design.md](m25-design.md) are the scaffold for the next implementation
-round; no source, header, binding, test or generated baseline file is changed on
-this branch. The landed tree is `7c476bc` (2.2.0): `api/pt.api` reads **576
-functions / 952 entries**, `ABI_MAJOR = 1`, SONAME `libpt.so.1`.
+**Status: delivered and closed, tag-ready (2026-11-27).** The implementation
+landed on the published 2.2.0 tree `7c476bc` and the final gate tree is
+`m25/w6-gate`. `api/pt.api` reads **581 functions / 960 entries**, `ABI_MAJOR =
+1`, SONAME `libpt.so.1`, version 2.3.0. The full design record and the
+implementation rulings are in [m25-design.md](m25-design.md).
 
 M25 delivers the first item of the post-2.0 structural horizon: inline image
 runs in styled text and the text area. The placeholder is the U+FFFC object
@@ -2447,6 +2447,30 @@ domain: W1 and W3 are sequential and the same owner. `src/image_run.c`,
 independent and can run concurrently. `api/pt.api` and
 `docs/api-reference.md` are updated only by W1 and W3c, after implementation.
 
+### Delivered evidence
+
+Every wave was independently reviewed PASS before the gate:
+
+| Wave | Commit | Evidence |
+| --- | --- | --- |
+| W0 | `b78537c` | design proposal in this file and `m25-design.md` |
+| W1 | `d1e3c80` + `22d5db8` | side table, lifecycle, set/get/clear, alt helper, `test_text_image`, baseline 580/959 |
+| W2 | `41f81f6` + `b373160` + `2b065d5` | AT-SPI virtual image child, alt copy path, live D-Bus tests |
+| W3a | `a096176` | frozen `pt_text_area_insert_image` header and binding stubs |
+| W3b | `96f84a4` | fontless measure/wrap/visual-map tests |
+| W3c | `637c9e7` | paint, atomic editing/selection, alt copy, undo snapshot, goldens, baseline 581/960 |
+| W4a | `0f12e13` | C++ wrappers and tests |
+| W4b | `f5341f7` | Python and Java wrappers and tests |
+| W5 | `61ca960` | bilingual guide, four-language examples, README, 10-pair check |
+| W6 | `6aabcf1` + `c063e26` + `dc03e4b` + `211537e` + `d67436d` + `8b360b4` | partial integration, extents/hit testing, bilingual pair, guide closure, version 2.3.0, README, then the closure commit that carries this section |
+
+Final gate: `tools/ci.sh` exits 0 with `-j2`; the sanitizer links `libasan.so.8`
+and `libubsan.so.1`; staged install reports SONAME `libpt.so.1` and pkg-config
+2.3.0; `ltr-compat.sh 1.4.0 HEAD` and `2.2.0 HEAD` each report 11/11 `SAME`; the
+ABI diff is 576 → 581 with 0 removed and 0 changed; the tarball reproduces at
+`SOURCE_DATE_EPOCH=1767225600`. The gate-time digest and the tag-ready commit
+are quoted in [release.md](release.md).
+
 ### Completion criteria
 
 - `api/pt.api` reads 581 / 960 (580 / 959 if the insert helper is deferred);
@@ -2465,6 +2489,11 @@ independent and can run concurrently. `api/pt.api` and
 - `check-bilingual-docs.py`, `gen-api-reference.py --check`,
   `gen-binding-stubs.py --check --strict`, the staged-install consumers and the
   serial sanitizer pass are green; `git status` is clean.
+
+**Status: all criteria met on the 2.3.0 final gate.** The per-item measurements
+are in the Results table of [release.md](release.md); the completion criteria
+above were verified against the 581/960 baseline, both 11/11 LTR gates, the
+staged install, the sanitizer pass and the reproducible tarball.
 
 ### Budget
 
@@ -2511,7 +2540,8 @@ recommends, with the reason each is deferred. Sources and evidence grades are in
   layout/chrome, Unicode BidiTest conformance. Changes layout and hit-testing,
   so it could not land in a minor.
 - Inline image runs (U+FFFC object replacement, baseline alignment, atomic
-  selection, alt-text copy, embedded-object accessibility).
+  selection, alt-text copy, embedded-object accessibility) — delivered in M25
+  as 2.3.0 (tag-ready).
 - Optional Vulkan/EGL renderer behind the same canvas contract, software by
   default, pixel-parity tested, automatic fallback; only if 4K/complex-animation
   measurements justify it. The CPU `pt_paint_*` API and the GPU backend share

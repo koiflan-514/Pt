@@ -1,14 +1,14 @@
 # M25 - 2.3.0 design: inline image runs (U+FFFC)
 
-Status: **proposed** (research and scaffolding only, 2026-11-27). This document is
-the design input for the M25 implementation waves; no source, header, binding or
-test file is changed by it. The tree is `7c476bc` (2.2.0 landed on `main`).
+Status: **delivered** (2.3.0, final gate 2026-11-27, tag-ready). The design was
+implemented on the 2.2.0 tree `7c476bc` and closed on `m25/w6-gate`; every wave
+was independently reviewed PASS. This is the design and decision record, not the
+release checklist — the measurements are in [release.md](release.md).
 
-Baseline on this tree: `api/pt.api` reads **576 functions / 952 entries**,
-`ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.2.0. M25 targets 2.3.0 with the
-same ABI major. The feature is **additive**: the final estimate is 581
-functions / 960 entries (W1 adds four functions, one enum and one struct; W3 adds
-the editing entry point).
+Baseline at design time: `api/pt.api` read **576 functions / 952 entries**,
+`ABI_MAJOR = 1`, SONAME `libpt.so.1`, version 2.2.0. The delivered surface is
+**581 functions / 960 entries** (5 functions, 1 enum with 2 values and 1 struct
+added), with `ABI_MAJOR` and SONAME unchanged.
 
 ## Scope
 
@@ -586,6 +586,41 @@ inventing a parallel API.
    and would be a separate design.
 5. **Image tint.** Out of scope; untinted drawing preserves the source alpha and
    matches `pt_icon_draw_canvas(..., 0)`.
+
+## Implementation review decisions
+
+The implementation review settled these points after the waves landed. They are
+the record of what 2.3.0 actually does where the proposal left a choice.
+
+- **`noinline` for the copy helper.** The alt-copy helper is marked `noinline`
+  to stop GCC from folding it into `pt_widget_images_copy_text` and emitting a
+  false `-Wstringop-overflow` under `werror=1`. This is the first use of the
+  attribute in the tree; the review reproduced the warning with it removed, so
+  the attribute is a compiler workaround, not a behavioral change.
+- **One copy helper.** The alt-range substitution lives in one shared helper
+  used by both the widget copy/cut path and the AT-SPI `CopyText`/`CutText`
+  path. The a11y bridge does not carry a second copy of the logic.
+- **Accessibility deletes use the normal editor.** `CutText` and `DeleteText`
+  call `pt_widget_text_delete_range`, so they drop only the descriptors that
+  overlap the removed bytes and record one undo step; there is no separate
+  accessibility delete path.
+- **Extents and hit testing were implemented, not deferred.** Open question 3
+  proposed "minimum accessible child first"; review found the text layout
+  already exposes the rectangle, so the virtual child publishes real
+  `GetExtents`/`GetPosition`/`GetSize` and `GetAccessibleAtPoint` resolves to it.
+- **Java UTF-8 truncation fixed.** The Java wrapper's alt setter truncates on a
+  UTF-8 sequence boundary, matching the C copy rule instead of cutting a
+  multibyte sequence.
+- **W3a insertion double-shift fixed.** `pt_text_area_insert_image` no longer
+  shifts the descriptor table twice when it replaces a selection; the regression
+  is covered by `test_text_area`.
+- **Three old assertions updated by design.** Selection snap-out means a
+  programmatic endpoint inside a placeholder expands to the object edge; the
+  three assertions that expected the old interior offset were rewritten to the
+  intended semantics, and no other existing test changed.
+- **Open questions closed as recommended.** Alt stays at 127 bytes plus NUL;
+  the insert helper stays public; entry images, per-line metrics, tint and
+  animation stay out of scope.
 
 ## Completion criteria for 2.3.0
 

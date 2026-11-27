@@ -1158,6 +1158,163 @@ the archive digest: the sha256 quoted above is what the full gate measured for
 — re-measure there rather than trusting a digest quoted from inside the
 archive.
 
+## 2.3.0 validation record (2026-11-27, final — tag-ready)
+
+Environment: the final gate tree on `m25/w6-gate` on the reference machine
+(CachyOS, Wayland, niri 26.04, fcitx5 5.1.23) with GCC 16.2.1, Python 3.14.10
+and OpenJDK 25.0.2. The wave branches land on the published 2.2.0 tree
+`7c476bc`: W0 design `b78537c`; W1 model `d1e3c80` plus the lifecycle review
+`22d5db8`; W3a header/insert `a096176`; W3b pipeline `96f84a4`; W3c paint,
+editing, copy, undo `637c9e7`; W4a C++ `0f12e13`; W4b Python/Java `f5341f7`;
+W5 docs and examples `61ca960`; W2 accessibility `2b065d5` (Loomy's children
+`41f81f6`/`b373160`, DuMate's copy path); W6a partial integration `6aabcf1`;
+W6b merge and extents `c063e26`; the W6 gate commits `dc03e4b`, `211537e`,
+`d67436d` and `8b360b4`. Every wave was independently reviewed PASS.
+
+2.3.0 is the **inline image runs** release. A label or text area can place a
+reference-counted raster image inside its UTF-8 text through a **U+FFFC object
+replacement character** (`EF BF BC`); the descriptor lives in a sorted side
+table keyed by the placeholder's byte offset, so the text stays the single
+source of truth, every public offset stays a UTF-8 byte offset and
+`pt_text_span` stays frozen. It is **purely additive**: it adds **5 public
+functions, 1 enum (2 values) and 1 struct**, and the baseline becomes **581
+functions / 960 entries** (581 `func`, 305 `enum`, 43 `callback`, 12 `struct`,
+12 `opaque`, 6 `define`, 1 `type`), with 0 removed and 0 changed against 2.2.0.
+SONAME stays `libpt.so.1`; `ABI_MAJOR` stays `1`.
+
+### Scope
+
+- **W1 - descriptor model and lifecycle.** `pt_text_image` carries the byte
+  offset of the placeholder, a reference-counted `pt_icon_image` handle, a
+  logical width/height, a `pt_text_image_align` value (baseline or middle) and a
+  copied UTF-8 alt string. `pt_widget_set_text_images` validates, sorts and
+  takes references; `pt_widget_clear_text_images`,
+  `pt_widget_get_text_image_count` and `pt_widget_get_text_image` complete the
+  table. The setter mirrors text edits: insertion shifts, overlapping deletion
+  drops only the affected descriptor, and `pt_widget_set_text` clears the table.
+- **W3a/W3b - insertion and the fontless pipeline.** `pt_text_area_insert_image`
+  inserts one U+FFFC at the caret, replaces the selection and records one undo
+  step. Measurement, wrapping, the visual map and paint treat the placeholder as
+  one atomic box that bypasses shaping; the box uses logical and device units so
+  fractional scaling stays crisp, and baseline/middle alignment contributes
+  ascent or descent.
+- **W3c - painting, editing and history.** The painter draws one rectangle per
+  image with clipping; the golden scenes cover label, wrap, text area, RTL,
+  fractional scale and selection. Selection, deletion, paste and IME never split
+  the three-byte placeholder; a selection endpoint inside it snaps outward. Copy
+  and cut write the alt text (or U+FFFC when alt is empty). Undo/redo deep-copies
+  the image table and restores text and descriptors together.
+- **W2 - embedded-object accessibility.** One virtual image child per run with
+  role `image` (AT-SPI 27) and the alt name; real Component extents,
+  `GetPosition`/`GetSize` and `GetAccessibleAtPoint` hit testing;
+  `CutText`/`DeleteText` go through `pt_widget_text_delete_range`, so only the
+  overlapped descriptors are dropped and the edit is one undo step. The Text
+  interface still returns raw U+FFFC and unchanged character offsets.
+- **W4a/W4b - bindings.** C++ `set_text_images`/`clear_text_images`/
+  `text_image_count`/`text_image`/`insert_image`; Python `TextImage` and the
+  same methods; Java `Pt.TextImage`, `Pt.widget_set_text_images`,
+  `Pt.widget_get_text_image` and `Pt.text_area_insert_image` with `-1` as the
+  rejected insertion result. Binding parity is 581/581 in all three.
+- **W5 - guides and examples.** The bilingual `inline-images.md` pair and the C,
+  C++, Python and Java examples embed a PNG, set two aligned placeholders and
+  insert one at the caret; `PT_HEADLESS=1` runs the model check.
+
+### Behaviour changes
+
+These are the points an upgrading application must read:
+
+- **Images are opt-in at the descriptor level.** Text that contains U+FFFC but
+  no descriptor is shaped exactly like any other uncovered codepoint, which is
+  the 2.2 behaviour. A widget that never sets an image takes the same layout,
+  measure and paint path as 2.2.0, byte for byte.
+- **One line height is composed for the whole widget.** A tall image raises
+  every line, like a large styled run; per-line metrics remain a future item.
+- **A selection endpoint inside a placeholder snaps outward.** Three existing
+  assertions were updated to the intended new semantics (the selection expands
+  to the object edge) rather than to a regression.
+- **No existing declaration, enum value, struct layout or offset unit moved.**
+  `pt_text_span` is untouched and the public text/AT-SPI offsets stay logical.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Version agreement | pass: `include/pt/base.h` (`pt_version_major/minor/patch` = 2/3/0 and `pt_version_string` `"2.3.0"`), `Makefile` `VERSION := 2.3.0`, the README status line and the generated reference say 2.3.0; SONAME `libpt.so.1` matches `ABI_MAJOR := 1` |
+| API baseline | pass: `api/pt.api` reads 581 functions / 960 entries; `tools/gen-api-reference.py --check` is clean at 2.3.0 |
+| Binding parity | pass: 581/581 (C++, Python and Java), 0 missing, 0 allowlisted; the C++ suite is 951 checks, Python 75 tests and Java 757 checks, 0 failures |
+| Unicode conformance | pass: BidiTest 770,241 cases and BidiCharacterTest 91,707 cases, 0 failures |
+| LTR byte stability | pass: `tools/ltr-compat.sh 1.4.0 HEAD` and `tools/ltr-compat.sh 2.2.0 HEAD` each report 11/11 `SAME`, so 2.3 is byte-identical to 1.4 and 2.2 in LTR |
+| `make check` | pass: 42 C executables (587,355 checks in total, including the 454,380-check property sweep and the 350-check `test_text_image`), 0 failures; `api-check`, the exported-symbol audit and the generated reference are clean |
+| `make perf-check` | pass: every guard ceiling holds (`startup first frame 20.041 ms`, `idle 300 ms CPU 0.323 ms`, `dense layout 4.833 ms`, `dense full paint 9.141 ms`, `dense damage share 3.506%`, `4K full paint 13.346 ms`, `views full paint 5.722 ms`, `100k table scroll 8.173 ms`) and the bidi profiles hold (`mixed paragraph wrap+paint 1.527 ms` vs 2.0 ms, `rtl table 100 rows paint 5.441 ms` vs 7.0 ms, `rtl entry 1000 caret moves 78.911 ms` vs 100 ms) |
+| Sanitizers, staged install, reproducible tarball | pass end to end: bare `tools/ci.sh` (default `-j2`, `UBSAN_OPTIONS=halt_on_error=1`) exits 0 (`CI verification passed for Pt 2.3.0`) after the clean `werror=1` build, `make check`, `make perf-check`, both 11/11 LTR gates, staged install (SONAME `libpt.so.1`, pkg-config 2.3.0, the baseline ABI, the C/C++/Python/Java consumers and a clean `uninstall`), the ASan+UBSan rebuild (42 C binaries plus `test_cpp` 951 checks, the Python suite 75 tests and the Java suite 757 checks, nothing reported) and the reproducible tarball; `ldd` lists `libasan.so.8` and `libubsan.so.1` on `tests/test_core`, `libpt.so.2.3.0` and `tests/libwire_driver.so` |
+| Four live suites | pass under nested niri: `check-wayland` 48 checks; `check-typing` PASS (`ptdirect`, text-input-v3); `check-ime-live` PASS with `COMMIT=你好` (nihao + space); `check-rtl-live` RESULT PASS — the IME rectangle matches the visual caret map, Shift+Right keeps its anchor, both selection spans stay ordered and in bounds, and the entry rendered ink; the nested smoke exits 124 under its 3 s inner timeout as expected |
+| Bilingual documentation | pass: 10 public guides with byte-identical code blocks, including the delivered `inline-images.md` pair |
+| ABI diff against 2.2.0 | pass at the symbol level: 576 → 581 exported `pt_*` symbols, 0 removed, 0 changed, 5 added (listed under "ABI statement"), no non-`pt_*` export, SONAME `libpt.so.1` on both |
+| `tools/release-check.sh` | pass: every automated gate is green (version agreement, header surface, 581/960 baseline, 581/581 parity in three languages, reference coverage, deprecation inventory, the examples and their `run-*` targets, 10 bilingual guides); the two open items are human: the freeze commit/tag and the live-compositor sign-off, which is recorded above |
+| Reproducible tarball | pass: two independent `make dist` runs at `SOURCE_DATE_EPOCH=1767225600` reproduce `build/dist/pt-2.3.0.tar.gz` byte-identically (sidecar matches); the extracted tree rebuilds with `werror=1` and passes `make check`; the digests are recorded under "Release digests" below |
+
+### ABI statement
+
+2.3.0 adds five functions, one enum and one struct and changes no existing
+signature. The release minor is not an ABI change: `ABI_MAJOR := 1` keeps
+SONAME `libpt.so.1`, and `pt_text_image` is a new public struct rather than an
+extension of `pt_text_span`, so no existing layout moves. The final gate
+compared a fresh `make lib` build of `7c476bc` (2.2.0) against the gate build of
+the 2.3.0 tree with `nm -D --defined-only`: both libraries define only `pt_*`
+dynamic symbols (576 and 581 total), the counts are **576 → 581**, and the
+sorted diff is **0 removed, 0 changed, 5 added**:
+
+```
+pt_text_area_insert_image          pt_widget_get_text_image_count
+pt_widget_clear_text_images        pt_widget_get_text_image
+pt_widget_set_text_images
+```
+
+The added enum values are `pt_text_image_align_baseline` and
+`pt_text_image_align_middle`; the added struct is `pt_text_image`. A sorted diff
+of `api/pt.api` against 2.2.0 shows exactly the five function lines, the two
+enum lines and the one struct line, with **no old line removed or changed**.
+`readelf -d` reports `libpt.so.1` on both, and `Makefile` reads
+`ABI_MAJOR := 1` with `VERSION := 2.3.0`. `abidiff` (libabigail) is still
+unavailable on the reference machine, so the release-time run is symbol-level;
+a type-level run is recommended where libabigail exists.
+
+### Release digests
+
+Because this record ships inside the release archive, editing it changes the
+archive digest. Three values are recorded, in the 2.0/2.1/2.2 style:
+
+- **Gate-time.** `tools/ci.sh` reproduced
+  `11c80d2776845fddc9d7c170b62242017598d91a095ea5e69b6b9fe0f49c7ecf` on the
+  pre-record gate tree (`8b360b4`), twice, at `SOURCE_DATE_EPOCH=1767225600`,
+  with the sidecar matching both runs.
+- **Committed-tree.** The frozen tree that carries this record reproduces the
+  digest recorded in the tag-time sidecar. Writing this paragraph changes the
+  archive, so `make dist` on the final commit is the value to quote; the gate
+  measured the committed-tree digest on the tag-ready commit and it is recorded
+  with the release report.
+- **Tag-time sidecar.** `pt-2.3.0.tar.gz.sha256` is the authoritative value.
+
+### Known issues
+
+- **A U+FFFC without a descriptor is still shaped, not drawn.** This preserves
+  the 2.2 path for text that merely contains the codepoint, but a caller that
+  forgets the side table sees the font's placeholder glyph (tofu on fonts that
+  do not cover U+FFFC).
+- **`pt_text_span` stays frozen.** It has no image or direction field; paragraph
+  direction still comes from the widget or Unicode isolate controls.
+- **Missing glyphs are fallback/tofu**, reported by
+  `pt_app_font_uncovered_count`, not a hard configuration error.
+- **One line height for the whole widget.** Per-line metrics are not
+  implemented; a tall image raises every line, as a large styled run does.
+- **Sanitization is opt-in.** `pt_bidi_sanitize` and
+  `pt_bidi_control_inventory` stay the toolkit, not a policy.
+- **The locale table is small and CLDR-derived on purpose.** A missing language
+  or script resolves to LTR.
+- **Images are single logical boxes.** There is no image pasting, no rich
+  clipboard MIME type that recreates descriptors, no vector or animated run and
+  no fractional scaling of a partially visible run.
+
 ## 2.2.0 validation record (2026-11-24, final — tag-ready)
 
 Environment: the final gate tree on `m24/w3-gate` on the reference machine
