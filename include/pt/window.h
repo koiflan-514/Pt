@@ -340,7 +340,7 @@ pt_api bool pt_window_request_activation_token(pt_window *window, const char *ap
  * the observed keyboard focus. Since 2.4. */
 pt_api bool pt_window_activate(pt_window *window, const char *token);
 
-/* Foreign toplevel handles (xdg-foreign-unstable-v2, experimental). The
+/* Foreign toplevel handles (xdg-foreign-unstable-v2). The
  * protocol lets one client export a toplevel and another import the opaque
  * handle as a parent, so an out-of-process dialog stacks and positions with
  * its caller. It expresses only a parent/child toplevel relationship; it does
