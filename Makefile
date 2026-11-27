@@ -555,6 +555,11 @@ check-ime-live: $(TEST_BIN)/ime_live_probe $(TEST_BIN)/vkbd_type
 check-rtl-live: $(TEST_BIN)/rtl_live_probe $(TEST_BIN)/vkbd_type
 	BUILD=$(abspath $(BUILD)) tools/check-rtl-live.sh
 
+.PHONY: check-protocol-live
+
+check-protocol-live: $(TEST_BIN)/test_wayland
+	BUILD=$(abspath $(BUILD)) tools/check-protocol-live.sh
+
 .PHONY: check-ltr-compat
 
 check-ltr-compat:

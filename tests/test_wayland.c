@@ -26,6 +26,38 @@ static void quit_callback(pt_app *app, void *data) {
     pt_app_quit(app);
 }
 
+/* Runs one bounded dispatch slice so asynchronously delivered protocol events
+ * can arrive. A protocol error fails the roundtrip and surfaces as a nonzero
+ * return, which keeps a rejected request from hanging the live test. */
+static int run_slice(pt_app *app, uint32_t wait_ms) {
+    pt_app_add_timeout(app, wait_ms, quit_callback, NULL);
+    return pt_app_run_for(app, wait_ms + 1500);
+}
+
+typedef struct {
+    int calls;
+    char token[128];
+} live_token_log;
+
+static void live_token_callback(pt_window *window, const char *token, void *data) {
+    (void)window;
+    live_token_log *log = data;
+    ++log->calls;
+    snprintf(log->token, sizeof(log->token), "%s", token ? token : "");
+}
+
+typedef struct {
+    int calls;
+    char handle[128];
+} live_handle_log;
+
+static void live_handle_callback(pt_window *window, const char *handle, void *data) {
+    (void)window;
+    live_handle_log *log = data;
+    ++log->calls;
+    snprintf(log->handle, sizeof(log->handle), "%s", handle ? handle : "");
+}
+
 static double process_cpu_ms(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) != 0) {
@@ -286,6 +318,76 @@ int main(void) {
         pt_check(platform->popups == NULL);
     }
     pt_window_set_key_callback(window, NULL, NULL);
+
+    /* Live xdg-activation-v1: the platform has already bound the global from
+     * its registry. A compositor without it keeps the documented false
+     * fallback. The token is copied out of the borrowed callback argument
+     * before it is used for an activation request. */
+    live_token_log activation = {0};
+    bool activation_requested =
+        pt_window_request_activation_token(window, "pt.tests.wayland",
+                                           live_token_callback, &activation);
+    if (platform && platform->activation) {
+        pt_check(activation_requested);
+        pt_check(run_slice(app, 500) == 0);
+        pt_check(activation.calls == 1);
+        pt_check(activation.token[0] != '\0');
+        pt_check(pt_window_activate(window, activation.token));
+        pt_check(run_slice(app, 200) == 0);
+        printf("protocol-live activation=ok token_len=%zu\n", strlen(activation.token));
+    } else {
+        pt_check(!activation_requested);
+        pt_check(activation.calls == 0);
+        pt_check(!pt_window_activate(window, "no-activation-global"));
+        printf("protocol-live activation=skip (global absent)\n");
+        if (getenv("PT_PROTOCOL_LIVE_REQUIRED")) {
+            pt_check(false && "xdg_activation_v1 is required for this live run");
+        }
+    }
+
+    /* Live xdg-foreign-v2: export the mapped toplevel, import the opaque handle
+     * as the parent of a second toplevel in the same client, and confirm both
+     * windows survive the roundtrip. No handle content is parsed or logged. */
+    pt_window *child = pt_window_create(app, "Pt foreign child", 240, 160);
+    pt_check(child != NULL);
+    if (child) {
+        live_handle_log foreign = {0};
+        bool exported = pt_window_export_foreign_handle(window, live_handle_callback, &foreign);
+        if (platform && platform->foreign_exporter) {
+            pt_check(exported);
+            pt_check(run_slice(app, 500) == 0);
+            pt_check(foreign.calls == 1);
+            pt_check(foreign.handle[0] != '\0');
+            bool parented = pt_window_set_foreign_parent(child, foreign.handle);
+            if (platform->foreign_importer) {
+                pt_check(parented);
+                pt_check(run_slice(app, 200) == 0);
+                pt_window_clear_foreign_parent(child);
+                printf("protocol-live foreign=ok handle_len=%zu import=ok set_parent_of=ok\n",
+                       strlen(foreign.handle));
+            } else {
+                pt_check(!parented);
+                printf("protocol-live foreign=export-ok import=skip (importer absent)\n");
+                if (getenv("PT_PROTOCOL_LIVE_REQUIRED")) {
+                    pt_check(false && "zxdg_importer_v2 is required for this live run");
+                }
+            }
+            pt_window_unexport_foreign_handle(window);
+            pt_check(run_slice(app, 200) == 0);
+        } else {
+            pt_check(!exported);
+            pt_check(foreign.calls == 0);
+            pt_check(!pt_window_set_foreign_parent(child, "no-exporter"));
+            printf("protocol-live foreign=skip (exporter absent)\n");
+            if (getenv("PT_PROTOCOL_LIVE_REQUIRED")) {
+                pt_check(false && "zxdg_exporter_v2 is required for this live run");
+            }
+        }
+        pt_check(window->platform_window != NULL);
+        pt_check(child->platform_window != NULL);
+        pt_window_close(child);
+        pt_check(child->platform_window == NULL);
+    }
 
     int pixel_width = (int)((float)window->width * window->render_scale);
     int pixel_height = (int)((float)window->height * window->render_scale);

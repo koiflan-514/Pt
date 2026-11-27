@@ -1,10 +1,11 @@
 # Compositor and protocol matrix
 
-Status: reference snapshot, retrieved 2026-11-22. This page records which
-Wayland globals the target compositors actually expose, at which interface
-version, and the behaviour that matters to Pt. It is the evidence base for the
-platform-negotiation rules in [standards.md](standards.md) section 8 and for the
-decoration/primary-selection/text-input work in ROADMAP M18.
+Status: reference snapshot, updated 2026-11-27 for the M26 protocol extensions.
+This page records which Wayland globals the target compositors actually expose,
+at which interface version, and the behaviour that matters to Pt. It is the
+evidence base for the platform-negotiation rules in [standards.md](standards.md)
+section 8, the decoration/primary-selection/text-input work in ROADMAP M18, and
+the xdg-activation/xdg-foreign rows added by [m26-design.md](m26-design.md).
 
 It is an internal reference document, maintained in English only.
 
@@ -28,16 +29,22 @@ Values are the interface version the compositor reports; `—` means the global 
 absent (wayland.app records `x`). Source: the Compositor Support table on each
 protocol page (grade C).
 
-| Compositor (version) | xdg-decoration | text-input-v3 | primary-selection | fractional-scale | pointer-gestures | color-management | toplevel-icon |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Mutter 51 (GNOME) | — | 2 | 1 | 1 | 3 | 2 | — |
-| KWin 6.7 (Plasma) | 2 | 2 | 1 | 1 | 3 | 2 | 1 |
-| niri 26.04 | 1 | 1 | 1 | 1 | 3 | — | — |
-| Sway 1.11 (wlroots) | 1 | 1 | 1 | 1 | 3 | — | — |
-| Hyprland 0.57.2 | 2 | 1 | 1 | 1 | 3 | 3 | — |
-| COSMIC 1.11.0 | 1 | 1 | 1 | 1 | 3 | — | — |
-| Weston 15.0.1 | — | — | — | — | — | — | — |
-| Muffin 6.7.4 (Cinnamon) | — | 1 | 1 | — | 3 | — | 1 |
+| Compositor (version) | xdg-decoration | text-input-v3 | primary-selection | fractional-scale | pointer-gestures | color-management | toplevel-icon | xdg-activation | xdg-foreign v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Mutter 51 (GNOME) | — | 2 | 1 | 1 | 3 | 2 | — | 1 | 1 |
+| KWin 6.7 (Plasma) | 2 | 2 | 1 | 1 | 3 | 2 | 1 | 1 | 1 |
+| niri 26.04 | 1 | 1 | 1 | 1 | 3 | — | — | 1 | 1 |
+| Sway 1.11 (wlroots) | 1 | 1 | 1 | 1 | 3 | — | — | 1 | 1 |
+| Hyprland 0.57.2 | 2 | 1 | 1 | 1 | 3 | 3 | — | 1 | 1 |
+| COSMIC 1.11.0 | 1 | 1 | 1 | 1 | 3 | — | — | 1 | 1 |
+| Weston 15.0.1 | — | — | — | — | — | — | — | — | — |
+| Muffin 6.7.4 (Cinnamon) | — | 1 | 1 | — | 3 | — | 1 | 1 | 1 |
+
+The last two columns are M26 additions. The niri row is grade B for both: the
+nested niri 26.04 registry advertised `xdg_activation_v1` v1,
+`zxdg_exporter_v2` v1 and `zxdg_importer_v2` v1, and the live client exercised a
+token request/activate and an export/import/set_parent_of roundtrip. Every other
+row is grade C from the public matrix.
 
 ## Reading the matrix
 
@@ -60,6 +67,16 @@ protocol page (grade C).
 - **Window icon.** Only KWin/Labwc/Muffin/Jay/Pila expose `xdg-toplevel-icon-v1`;
   Mutter/niri/Sway do not. Window icons are best-effort: use the global when
   present, otherwise rely on `app_id` + `.desktop`.
+- **Activation and foreign.** Both M26 protocols are best-effort optional
+  globals. `xdg_activation_v1` describes a request, never a guarantee of focus;
+  a compositor may ignore a stale token. `zxdg_exporter_v2`/`zxdg_importer_v2`
+  express only a toplevel parent/child relationship and never embed pixels.
+  On a compositor without either global Pt binds nothing and every new call
+  returns false or no-ops silently, so the fallback is a behavioural downgrade,
+  not an error. Weston lacks both in this snapshot.
+- **Colour management.** niri 26.04 does not advertise
+  `wp_color_manager_v1`; it is deferred in M26 and is not a capability Pt
+  assumes, including on the other rows recorded as `—`.
 
 ## Protocol semantics that bind Pt
 
@@ -75,6 +92,8 @@ protocol page (grade C).
 | `tablet-v2` | stable | tool/contact/pressure separated; eraser and dial | [tablet-v2](https://wayland.app/protocols/tablet-unstable-v2) |
 | `color-management-v1` | staging, manager v2/v3 | surface image description; HDR/tonemapping incomplete; 1.x targets sRGB correctness only | [color-management](https://wayland.app/protocols/color-management-v1) |
 | `xdg-toplevel-icon-v1` | staging v1 | square `wl_shm` buffer per size/scale; buffer must stay alive and unmodified; cannot reuse a frame buffer | [toplevel-icon](https://wayland.app/protocols/xdg-toplevel-icon-v1) |
+| `xdg-activation-v1` | staging, `xdg_activation_v1` v1 | token request is async (`get_activation_token` + `commit` then `done`); attach the latest input serial when one exists; `activate` is a request, not a focus guarantee; absent global = false/no-op; startup token is read and unset only when bound | [xdg-activation](https://wayland.app/protocols/xdg-activation-v1) |
+| `xdg-foreign-unstable-v2` | unstable, exporter/importer v2 | handle is opaque and valid only while the export lives; export/import are separate optional globals; `set_parent_of` gives xdg-toplevel parent semantics, not embedding; absent global = false/no-op | [xdg-foreign-v2](https://wayland.app/protocols/xdg-foreign-unstable-v2) |
 
 ## Quirk register
 
