@@ -2237,6 +2237,14 @@ class window {
         std::string value = copy_string(app_id);
         return pt_window_request_activation_token(handle_, value.c_str(), callback, data);
     }
+    /* NULL-tolerant overload: the old const char* API accepted NULL as an
+     * empty app id. Constructing a string_view from a null pointer is
+     * undefined, so route it through the empty string explicitly. */
+    bool request_activation_token(const char *app_id, pt_activation_token_callback callback,
+                                  void *data = nullptr) const {
+        return app_id ? request_activation_token(std::string_view(app_id), callback, data)
+                      : request_activation_token(std::string_view(), callback, data);
+    }
     /* Sends an activation request for this window with a token received out of
      * band. The token is sent once and not retained, so the caller may release
      * it immediately; an empty token is rejected before the C call. Returns
@@ -2250,6 +2258,10 @@ class window {
         }
         std::string value = copy_string(token);
         return pt_window_activate(handle_, value.c_str());
+    }
+    /* NULL-tolerant overload: NULL (like an empty token) is a local reject. */
+    bool activate(const char *token) const {
+        return token ? activate(std::string_view(token)) : false;
     }
     /* Exports this toplevel through xdg-foreign-unstable-v2 (experimental) and
      * delivers its opaque handle once through callback. The handle is borrowed
@@ -2286,6 +2298,10 @@ class window {
         }
         std::string value = copy_string(handle);
         return pt_window_set_foreign_parent(handle_, value.c_str());
+    }
+    /* NULL-tolerant overload: NULL (like an empty handle) is a local reject. */
+    bool set_foreign_parent(const char *handle) const {
+        return handle ? set_foreign_parent(std::string_view(handle)) : false;
     }
     /* Destroys the imported parent and invalidates the relationship.
      * Idempotent: a no-op for an invalid wrapper or when no parent is
