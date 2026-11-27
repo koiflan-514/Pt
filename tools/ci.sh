@@ -50,6 +50,9 @@ export PT_WIRE_DRIVER
 
 makeit -j"$jobs" BUILD="$normal" werror=1 all
 makeit BUILD="$normal" werror=1 check
+# The two pure theme-module suites join `make check`; the CLI goldens need the
+# tool binary, so run the headless editor gate explicitly.
+makeit BUILD="$normal" werror=1 check-theme-editor
 makeit BUILD="$normal" werror=1 perf-check
 
 # Same-machine cross-version LTR byte gate: build 1.4.0 and HEAD in isolated
