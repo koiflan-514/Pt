@@ -195,7 +195,8 @@ static bool paint_rich_wrapped(pt_canvas *canvas, const pt_widget *widget, pt_co
 static void paint_single_line(pt_canvas *canvas, const pt_widget *widget, const char *text,
                               pt_color color, pt_text_align align, bool ellipsis,
                               float offset_x, pt_rect area) {
-    if (widget->kind == pt_widget_label && widget->span_count > 0 && text == widget->text) {
+    if (widget->kind == pt_widget_label && (widget->span_count > 0 || widget->image_count > 0) &&
+        text == widget->text) {
         paint_rich_single_line(canvas, widget, color, align, ellipsis, offset_x, area);
         return;
     }
@@ -421,7 +422,8 @@ static void paint_wrapped_text(pt_canvas *canvas, pt_widget *widget, const char 
                                pt_color color) {
     pt_rect area = text_area(widget);
     pt_canvas_push_clip(canvas, area.x, area.y, area.w, area.h);
-    if (widget->span_count > 0 && pt_widget_supports_spans(widget)) {
+    if ((widget->span_count > 0 || widget->image_count > 0) &&
+        pt_widget_supports_spans(widget)) {
         if (paint_rich_wrapped(canvas, widget, color, area)) {
             pt_canvas_pop_clip(canvas);
             return;
