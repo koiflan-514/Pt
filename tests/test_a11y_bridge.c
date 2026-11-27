@@ -2800,6 +2800,8 @@ static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
     a11y_ref none = {0};
     pt_check(a11y_child_ref(app, client, image_ref.bus, image_ref.path, 1, &none));
     pt_check(strcmp(none.path, "/org/a11y/atspi/null") == 0);
+    pt_check(a11y_child_ref(app, client, image_ref.bus, image_ref.path, -1, &none));
+    pt_check(strcmp(none.path, "/org/a11y/atspi/null") == 0);
 
     a11y_ref kids[4];
     pt_check(a11y_children(app, client, image_ref.bus, image_ref.path, kids, 4) == 1);
@@ -2835,6 +2837,9 @@ static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
         dbus_message_unref(index1_reply);
     }
     pt_check(index1 == 1);
+    a11y_ref m2 = {0};
+    pt_check(a11y_child_ref(app, client, multi_ref.bus, multi_ref.path, 2, &m2));
+    pt_check(strcmp(m2.path, "/org/a11y/atspi/null") == 0);
 
     /* ---- empty alt is unnamed ---- */
     pt_check(a11y_child_count_of(app, client, empty_ref.bus, empty_ref.path) == 1);
@@ -2852,10 +2857,77 @@ static void test_bridge_image_children(pt_app *app, pt_widget *image_label,
     pt_check(a11y_name(app, client, a0.bus, a0.path, name, sizeof(name)));
     pt_check(strcmp(name, "area image") == 0);
 
+    /* ---- Text copy replaces a contained U+FFFC with the alt text ---- */
+    DBusMessage *copy_reply = a11y_method_int2(
+        app, client, area_ref.bus, area_ref.path, "org.a11y.atspi.EditableText",
+        "CopyText", 0, 1);
+    bool copied = false;
+    pt_check(reply_bool(copy_reply, &copied) && copied);
+    if (copy_reply) {
+        dbus_message_unref(copy_reply);
+    }
+    char *clipboard = pt_platform_clipboard_get(pt_widget_window(image_area));
+    pt_check(clipboard != NULL && strcmp(clipboard, "area image") == 0);
+    free(clipboard);
+
+    /* A range that does not contain the object copies ordinary bytes. */
+    copy_reply = a11y_method_int2(app, client, area_ref.bus, area_ref.path,
+                                  "org.a11y.atspi.EditableText", "CopyText", 1, 5);
+    copied = false;
+    pt_check(reply_bool(copy_reply, &copied) && copied);
+    if (copy_reply) {
+        dbus_message_unref(copy_reply);
+    }
+    clipboard = pt_platform_clipboard_get(pt_widget_window(image_area));
+    pt_check(clipboard != NULL && strcmp(clipboard, "Area") == 0);
+    free(clipboard);
+
+    /* The full range substitutes once and keeps the surrounding text. */
+    copy_reply = a11y_method_int2(app, client, area_ref.bus, area_ref.path,
+                                  "org.a11y.atspi.EditableText", "CopyText", 0, 5);
+    copied = false;
+    pt_check(reply_bool(copy_reply, &copied) && copied);
+    if (copy_reply) {
+        dbus_message_unref(copy_reply);
+    }
+    clipboard = pt_platform_clipboard_get(pt_widget_window(image_area));
+    pt_check(clipboard != NULL && strcmp(clipboard, "area imageArea") == 0);
+    free(clipboard);
+
+    /* GetText still exposes the raw placeholder and its character offsets. */
+    char area_text[64] = {0};
+    pt_check(a11y_get_text(app, client, area_ref.bus, area_ref.path, 0, 5, area_text,
+                           sizeof(area_text)));
+    pt_check(strcmp(area_text, image_placeholder "Area") == 0);
+
+    /* An empty alt keeps U+FFFC in the copied text. */
+    pt_text_image empty_area = {0};
+    empty_area.start = 0;
+    empty_area.image = icon;
+    pt_check(pt_widget_set_text_images(image_area, &empty_area, 1));
+    pt_check(a11y_child_count_of(app, client, area_ref.bus, area_ref.path) == 1);
+    a11y_ref ea = {0};
+    pt_check(a11y_child_ref(app, client, area_ref.bus, area_ref.path, 0, &ea));
+    pt_check(a11y_name(app, client, ea.bus, ea.path, name, sizeof(name)));
+    pt_check(strcmp(name, "") == 0);
+    copy_reply = a11y_method_int2(app, client, area_ref.bus, area_ref.path,
+                                  "org.a11y.atspi.EditableText", "CopyText", 0, 1);
+    copied = false;
+    pt_check(reply_bool(copy_reply, &copied) && copied);
+    if (copy_reply) {
+        dbus_message_unref(copy_reply);
+    }
+    clipboard = pt_platform_clipboard_get(pt_widget_window(image_area));
+    pt_check(clipboard != NULL && strcmp(clipboard, image_placeholder) == 0);
+    free(clipboard);
+
     /* ---- a widget without images keeps an unchanged tree ---- */
     pt_check(pt_widget_get_text_image_count(plain_label) == 0);
     pt_check(a11y_child_count_of(app, client, plain_ref.bus, plain_ref.path) == 0);
     pt_check(a11y_children(app, client, plain_ref.bus, plain_ref.path, kids, 4) == 0);
+    a11y_ref plain_none = {0};
+    pt_check(a11y_child_ref(app, client, plain_ref.bus, plain_ref.path, 0, &plain_none));
+    pt_check(strcmp(plain_none.path, "/org/a11y/atspi/null") == 0);
 
     /* ---- structure refresh on replace, clear and set_text ---- */
     pt_text_image replaced = {0};

@@ -1740,6 +1740,123 @@ static void a11y_substring(const char *text, size_t start_char, size_t end_char,
     *out = copy;
 }
 
+/* Kept out of line for the same reason as the editing-side helper: the caller
+ * passes bounds derived from the side table and GCC's inliner otherwise
+ * assumes a wrapped size and rejects the memcpy bound. */
+__attribute__((noinline)) static bool a11y_copy_append(char **buffer, size_t *capacity,
+                                                       size_t *used, const char *bytes,
+                                                       size_t length) {
+    if (length == 0) {
+        return true;
+    }
+    if (*used + length + 1u > *capacity) {
+        size_t next = *capacity ? *capacity : 64u;
+        while (next < *used + length + 1u) {
+            next *= 2u;
+        }
+        char *grown = pt_realloc_mem(*buffer, next);
+        if (!grown) {
+            return false;
+        }
+        *buffer = grown;
+        *capacity = next;
+    }
+    memcpy(*buffer + *used, bytes, length);
+    *used += length;
+    return true;
+}
+
+/* Copies [start, end) bytes with each fully contained inline image replaced by
+ * its alt text; an empty alt keeps the raw U+FFFC. A defensive partial overlap
+ * emits U+FFFC rather than dropping the object. This mirrors the editing-side
+ * copy helper; the shared W3c declaration is not part of this branch's base,
+ * so the bridge keeps the same semantics locally over the W1 side table.
+ * Returns an allocated UTF-8 string, or NULL for an empty range. */
+static char *a11y_copy_text_with_images(const pt_widget *widget, size_t start, size_t end) {
+    if (!widget) {
+        return NULL;
+    }
+    const char *text = widget->text ? widget->text : "";
+    size_t length = strlen(text);
+    if (start > length) {
+        start = length;
+    }
+    if (end > length) {
+        end = length;
+    }
+    if (start >= end) {
+        return NULL;
+    }
+    static const char placeholder[] = "\xEF\xBF\xBC";
+    const size_t placeholder_length = sizeof(placeholder) - 1u;
+    size_t capacity = 0;
+    size_t used = 0;
+    char *out = NULL;
+    size_t cursor = start;
+    for (uint32_t i = 0; i < widget->image_count; ++i) {
+        const pt_text_image *image = &widget->images[i];
+        size_t image_start = image->start;
+        size_t image_end = image_start + placeholder_length;
+        if (image_end <= cursor || image_start >= end) {
+            continue;
+        }
+        if (image_start < cursor) {
+            /* The range begins inside this placeholder: keep the object as one
+             * U+FFFC instead of copying continuation bytes. */
+            if (!a11y_copy_append(&out, &capacity, &used, placeholder,
+                                  placeholder_length)) {
+                free(out);
+                return NULL;
+            }
+            cursor = image_end < end ? image_end : end;
+        } else {
+            if (!a11y_copy_append(&out, &capacity, &used, text + cursor,
+                                  image_start - cursor)) {
+                free(out);
+                return NULL;
+            }
+            cursor = image_start;
+            if (image_end <= end) {
+                size_t alt_length = strlen(image->alt);
+                const char *piece = alt_length > 0 ? image->alt : placeholder;
+                size_t piece_length = alt_length > 0 ? alt_length : placeholder_length;
+                if (!a11y_copy_append(&out, &capacity, &used, piece, piece_length)) {
+                    free(out);
+                    return NULL;
+                }
+                cursor = image_end;
+            } else {
+                /* Defensive partial tail: the object stays U+FFFC. */
+                if (!a11y_copy_append(&out, &capacity, &used, placeholder,
+                                      placeholder_length)) {
+                    free(out);
+                    return NULL;
+                }
+                cursor = end;
+            }
+        }
+        if (cursor >= end) {
+            break;
+        }
+    }
+    if (cursor > end) {
+        cursor = end;
+    }
+    if (cursor < end &&
+        !a11y_copy_append(&out, &capacity, &used, text + cursor, end - cursor)) {
+        free(out);
+        return NULL;
+    }
+    if (!out) {
+        out = pt_alloc(1);
+        if (!out) {
+            return NULL;
+        }
+    }
+    out[used] = '\0';
+    return out;
+}
+
 /* Unicode White_Space; ctype isspace() is undefined for the full codepoint
  * range and would classify bytes above 0x7F by locale. */
 static bool a11y_is_space(uint32_t code) {
@@ -3809,7 +3926,15 @@ static DBusHandlerResult a11y_editable_text(DBusConnection *connection,
         if (view.editable) {
             if (copy) {
                 char *selected = NULL;
-                a11y_substring(text, (size_t)start, (size_t)end, &selected);
+                if (end > start && entry->image_count > 0) {
+                    size_t byte_start =
+                        a11y_utf8_byte_offset(text, (size_t)start);
+                    size_t byte_end = a11y_utf8_byte_offset(text, (size_t)end);
+                    selected = a11y_copy_text_with_images(entry, byte_start, byte_end);
+                }
+                if (!selected) {
+                    a11y_substring(text, (size_t)start, (size_t)end, &selected);
+                }
                 pt_platform_clipboard_set(obj->window, selected);
                 free(selected);
             }
