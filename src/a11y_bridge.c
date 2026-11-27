@@ -36,6 +36,7 @@ enum {
     atspi_role_dialog = 16,
     atspi_role_frame = 23,
     atspi_role_icon = 26,
+    atspi_role_image = 27,
     atspi_role_label = 29,
     atspi_role_list = 31,
     atspi_role_list_item = 32,
@@ -109,13 +110,18 @@ typedef enum pt_a11y_obj_type {
     pt_a11y_obj_none = 0,
     pt_a11y_obj_app,
     pt_a11y_obj_window,
-    pt_a11y_obj_widget
+    pt_a11y_obj_widget,
+    /* A virtual inline-image child of a text widget. It is not a widget: it
+     * carries the owning widget and the sorted side-table index of the image
+     * run and is generated on demand by the tree queries. */
+    pt_a11y_obj_image
 } pt_a11y_obj_type;
 
 typedef struct pt_a11y_obj {
     pt_a11y_obj_type type;
     pt_window *window;
     pt_widget *widget;
+    uint32_t image_index;
 } pt_a11y_obj;
 
 typedef struct pt_a11y_bridge {
@@ -234,16 +240,30 @@ static pt_a11y_obj a11y_resolve(pt_app *app, const char *path) {
     }
     cursor += 2;
     uint32_t widget_id = 0;
-    if (!parse_uint32(&cursor, &widget_id) || *cursor != '\0') {
+    if (!parse_uint32(&cursor, &widget_id)) {
         return obj;
     }
     pt_widget *widget = a11y_find_widget(window, widget_id);
     if (!widget) {
         return obj;
     }
-    obj.type = pt_a11y_obj_widget;
     obj.window = window;
     obj.widget = widget;
+    if (*cursor == '\0') {
+        obj.type = pt_a11y_obj_widget;
+        return obj;
+    }
+    if (strncmp(cursor, "/i", 2) != 0) {
+        return obj;
+    }
+    cursor += 2;
+    uint32_t image_index = 0;
+    if (!parse_uint32(&cursor, &image_index) || *cursor != '\0' ||
+        image_index >= widget->image_count) {
+        return obj;
+    }
+    obj.type = pt_a11y_obj_image;
+    obj.image_index = image_index;
     return obj;
 }
 
@@ -258,6 +278,24 @@ static bool a11y_obj_path(const pt_a11y_obj *obj, char *buffer, size_t size) {
     case pt_a11y_obj_widget:
         a11y_widget_path(obj->widget, buffer, size);
         return true;
+    case pt_a11y_obj_image: {
+        char parent[256];
+        a11y_widget_path(obj->widget, parent, sizeof(parent));
+        char suffix[16];
+        int written = snprintf(suffix, sizeof(suffix), "/i%u", obj->image_index);
+        if (written < 0) {
+            return false;
+        }
+        size_t length = strlen(parent);
+        size_t suffix_length = (size_t)written;
+        if (length + suffix_length + 1 > size) {
+            snprintf(buffer, size, "%s", parent);
+            return true;
+        }
+        memcpy(buffer, parent, length);
+        memcpy(buffer + length, suffix, suffix_length + 1);
+        return true;
+    }
     default:
         snprintf(buffer, size, "%s", a11y_null_path);
         return false;
@@ -311,19 +349,34 @@ static bool a11y_child_is_real(const pt_widget *child) {
     }
 }
 
+static int a11y_widget_real_child_count(const pt_widget *widget) {
+    int count = 0;
+    for (pt_widget *child = widget ? widget->first_child : NULL; child;
+         child = child->next_sibling) {
+        if (a11y_child_is_real(child)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/* Inline images are virtual children appended after the real widget children. */
+static bool a11y_obj_has_images(const pt_a11y_obj *obj) {
+    return obj && obj->type == pt_a11y_obj_widget && obj->widget &&
+           pt_widget_supports_spans(obj->widget) && obj->widget->image_count > 0;
+}
+
+static uint32_t a11y_obj_image_count(const pt_a11y_obj *obj) {
+    return a11y_obj_has_images(obj) ? obj->widget->image_count : 0u;
+}
+
 static int a11y_child_count(const pt_a11y_obj *obj) {
     switch (obj->type) {
     case pt_a11y_obj_window:
         return (obj->window->root ? 1 : 0) + a11y_overlay_count(obj->window);
-    case pt_a11y_obj_widget: {
-        int count = 0;
-        for (pt_widget *child = obj->widget->first_child; child; child = child->next_sibling) {
-            if (a11y_child_is_real(child)) {
-                ++count;
-            }
-        }
-        return count;
-    }
+    case pt_a11y_obj_widget:
+        return a11y_widget_real_child_count(obj->widget) +
+               (int)a11y_obj_image_count(obj);
     default:
         return 0;
     }
@@ -379,6 +432,15 @@ static void a11y_append_children(DBusMessageIter *array, const pt_a11y_bridge *b
             }
             child.type = pt_a11y_obj_widget;
             child.widget = widget;
+            if (a11y_obj_path(&child, path, sizeof(path))) {
+                a11y_append_ref(array, bridge, path);
+            }
+        }
+        for (uint32_t i = 0; i < a11y_obj_image_count(obj); ++i) {
+            child.type = pt_a11y_obj_image;
+            child.window = obj->window;
+            child.widget = obj->widget;
+            child.image_index = i;
             if (a11y_obj_path(&child, path, sizeof(path))) {
                 a11y_append_ref(array, bridge, path);
             }
@@ -452,11 +514,20 @@ static pt_a11y_obj a11y_child_at(pt_app *app, const pt_a11y_obj *parent, int ind
         }
         break;
     case pt_a11y_obj_widget: {
-        pt_widget *widget = a11y_widget_child_at(parent->widget, index);
-        if (widget) {
-            child.type = pt_a11y_obj_widget;
+        uint32_t images = a11y_obj_image_count(parent);
+        int real = a11y_widget_real_child_count(parent->widget);
+        if (index < real) {
+            pt_widget *widget = a11y_widget_child_at(parent->widget, index);
+            if (widget) {
+                child.type = pt_a11y_obj_widget;
+                child.window = parent->window;
+                child.widget = widget;
+            }
+        } else if ((uint32_t)(index - real) < images) {
+            child.type = pt_a11y_obj_image;
             child.window = parent->window;
-            child.widget = widget;
+            child.widget = parent->widget;
+            child.image_index = (uint32_t)(index - real);
         }
         break;
     }
@@ -515,6 +586,13 @@ static int a11y_child_index(const pt_a11y_obj *obj) {
         }
         return -1;
     }
+    case pt_a11y_obj_image: {
+        pt_widget *widget = obj->widget;
+        if (!widget) {
+            return -1;
+        }
+        return a11y_widget_real_child_count(widget) + (int)obj->image_index;
+    }
     default:
         return -1;
     }
@@ -531,6 +609,18 @@ static void a11y_parent_ref(const pt_a11y_bridge *bridge, const pt_a11y_obj *obj
     if (obj->type == pt_a11y_obj_window) {
         snprintf(bus_buffer, bus_size, "%s", bridge->bus_name ? bridge->bus_name : "");
         snprintf(path_buffer, path_size, "%s", a11y_root_path);
+        return;
+    }
+    if (obj->type == pt_a11y_obj_image) {
+        if (!obj->widget) {
+            return;
+        }
+        pt_a11y_obj parent = {0};
+        parent.type = pt_a11y_obj_widget;
+        parent.window = obj->window;
+        parent.widget = obj->widget;
+        a11y_obj_path(&parent, path_buffer, path_size);
+        snprintf(bus_buffer, bus_size, "%s", bridge->bus_name ? bridge->bus_name : "");
         return;
     }
     if (obj->type != pt_a11y_obj_widget) {
@@ -1020,6 +1110,9 @@ static uint32_t a11y_role_number(const pt_a11y_obj *obj) {
     if (obj->type == pt_a11y_obj_window) {
         return atspi_role_frame;
     }
+    if (obj->type == pt_a11y_obj_image) {
+        return atspi_role_image;
+    }
     pt_widget *widget = obj->widget;
     if (widget->kind == pt_widget_entry && widget->password) {
         return atspi_role_password_text;
@@ -1161,6 +1254,8 @@ static const char *a11y_role_name(uint32_t role) {
         return "grouping";
     case atspi_role_icon:
         return "icon";
+    case atspi_role_image:
+        return "image";
     case atspi_role_page_tab:
         return "page tab";
     case atspi_role_page_tab_list:
@@ -1193,6 +1288,11 @@ static const char *a11y_obj_name(const pt_a11y_obj *obj) {
         return obj->window && obj->window->title ? obj->window->title : "";
     case pt_a11y_obj_widget:
         return pt_widget_get_a11y_name(obj->widget);
+    case pt_a11y_obj_image:
+        if (!obj->widget || obj->image_index >= obj->widget->image_count) {
+            return "";
+        }
+        return obj->widget->images[obj->image_index].alt;
     default:
         return "";
     }
@@ -1228,6 +1328,10 @@ static void a11y_obj_id_string(const pt_a11y_obj *obj, char *buffer, size_t size
         break;
     case pt_a11y_obj_widget:
         snprintf(buffer, size, "n%u", obj->widget->a11y_id);
+        break;
+    case pt_a11y_obj_image:
+        snprintf(buffer, size, "n%u/i%u", obj->widget ? obj->widget->a11y_id : 0u,
+                 obj->image_index);
         break;
     default:
         snprintf(buffer, size, "%s", "");
@@ -1273,7 +1377,7 @@ static void a11y_state_words(const pt_a11y_obj *obj, uint32_t words[2]) {
             a11y_set_state(atspi_state_active);
             a11y_set_state(atspi_state_focused);
         }
-    } else if (obj->type == pt_a11y_obj_widget) {
+    } else if (obj->type == pt_a11y_obj_widget || obj->type == pt_a11y_obj_image) {
         uint32_t state = pt_widget_get_a11y_state(obj->widget);
         pt_widget *widget = obj->widget;
         if (state & pt_a11y_state_visible) {
@@ -2596,7 +2700,13 @@ static void a11y_append_relations(DBusMessageIter *iter, const pt_a11y_bridge *b
                                   const pt_a11y_obj *obj) {
     DBusMessageIter array;
     dbus_message_iter_open_container(iter, DBUS_TYPE_ARRAY, "(ua(so))", &array);
-    if (obj && obj->type == pt_a11y_obj_widget) {
+    if (obj && obj->type == pt_a11y_obj_image) {
+        pt_a11y_obj parent = {0};
+        parent.type = pt_a11y_obj_widget;
+        parent.window = obj->window;
+        parent.widget = obj->widget;
+        a11y_relation_single(&array, bridge, atspi_relation_node_child_of, &parent);
+    } else if (obj && obj->type == pt_a11y_obj_widget) {
         pt_widget *widget = obj->widget;
         switch (widget->kind) {
         case pt_widget_table_cell: {
