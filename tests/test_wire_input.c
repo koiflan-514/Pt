@@ -119,7 +119,9 @@ static void test_facility_tables(void) {
 
     pt_check(FC_K_TABLET > FC_K_TABLET_SEAT);
     pt_check(FC_K_TABLET_TOOL > FC_K_TABLET);
-    pt_check(FC_K_COUNT == FC_K_TABLET_TOOL + 1);
+    /* M26 appends the activation/foreign kinds after FC_K_TABLET_TOOL; every
+     * pre-M26 kind value stays stable and FC_K_COUNT moves to the new tail. */
+    pt_check(FC_K_ACTIVATION == FC_K_TABLET_TOOL + 1 && FC_K_COUNT == FC_K_IMPORTED + 1);
 
     pt_check(fc_kind_from_name("wl_touch") == FC_K_TOUCH);
     pt_check(fc_kind_from_name("zwp_tablet_seat_v2") == FC_K_TABLET_SEAT);

@@ -79,6 +79,14 @@
  * of FC_OPT_ALL: it changes what the client binds, so existing consumers keep
  * the keyboard|pointer-only seat they were written against. */
 #define FC_OPT_TOUCH (1u << 10)
+/* xdg-activation-v1 (staging, M26). Advertises xdg_activation_v1 at version 1.
+ * Deliberately not part of FC_OPT_ALL so existing consumers see no new global
+ * and keep their exact bind set; opt in explicitly. */
+#define FC_OPT_ACTIVATION (1u << 11)
+/* xdg-foreign-unstable-v2 (M26). Advertises zxdg_exporter_v2 and
+ * zxdg_importer_v2 at version 1. Deliberately not part of FC_OPT_ALL, same
+ * reason as FC_OPT_ACTIVATION. */
+#define FC_OPT_FOREIGN (1u << 12)
 #define FC_OPT_ALL                                                                   \
     (FC_OPT_ICON | FC_OPT_DECORATION | FC_OPT_FRACTIONAL | FC_OPT_VIEWPORTER |       \
      FC_OPT_TEXT_INPUT | FC_OPT_GESTURES | FC_OPT_DATA_DEVICE | FC_OPT_PRIMARY |      \
@@ -131,6 +139,12 @@ typedef enum fc_kind {
     FC_K_TABLET_SEAT,
     FC_K_TABLET,
     FC_K_TABLET_TOOL,
+    FC_K_ACTIVATION,
+    FC_K_ACTIVATION_TOKEN,
+    FC_K_EXPORTER,
+    FC_K_EXPORTED,
+    FC_K_IMPORTER,
+    FC_K_IMPORTED,
     FC_K_COUNT,
     FC_K_UNKNOWN = 0xff
 } fc_kind;
@@ -154,6 +168,12 @@ typedef enum fc_kind {
 #define fc_kind_zwp_tablet_seat_v2 FC_K_TABLET_SEAT
 #define fc_kind_zwp_tablet_v2 FC_K_TABLET
 #define fc_kind_zwp_tablet_tool_v2 FC_K_TABLET_TOOL
+#define fc_kind_xdg_activation_v1 FC_K_ACTIVATION
+#define fc_kind_xdg_activation_token_v1 FC_K_ACTIVATION_TOKEN
+#define fc_kind_zxdg_exporter_v2 FC_K_EXPORTER
+#define fc_kind_zxdg_exported_v2 FC_K_EXPORTED
+#define fc_kind_zxdg_importer_v2 FC_K_IMPORTER
+#define fc_kind_zxdg_imported_v2 FC_K_IMPORTED
 
 /* ---------- recorded requests ---------- */
 
@@ -554,6 +574,35 @@ static const fc_req_desc fc_reqs_tablet_tool[] = {
     {"set_cursor", "uoii", 0, false},
     {"destroy", "", 0, true},
 };
+/* xdg-activation-v1 (protocols/xdg-activation-v1.xml). */
+static const fc_req_desc fc_reqs_activation[] = {
+    {"destroy", "", 0, true},
+    {"get_activation_token", "n", FC_K_ACTIVATION_TOKEN, false},
+    {"activate", "so", 0, false},
+};
+static const fc_req_desc fc_reqs_activation_token[] = {
+    {"set_serial", "uo", 0, false},
+    {"set_app_id", "s", 0, false},
+    {"set_surface", "o", 0, false},
+    {"commit", "", 0, false},
+    {"destroy", "", 0, true},
+};
+/* xdg-foreign-unstable-v2 (protocols/xdg-foreign-unstable-v2.xml). */
+static const fc_req_desc fc_reqs_exporter[] = {
+    {"destroy", "", 0, true},
+    {"export_toplevel", "no", FC_K_EXPORTED, false},
+};
+static const fc_req_desc fc_reqs_exported[] = {
+    {"destroy", "", 0, true},
+};
+static const fc_req_desc fc_reqs_importer[] = {
+    {"destroy", "", 0, true},
+    {"import_toplevel", "ns", FC_K_IMPORTED, false},
+};
+static const fc_req_desc fc_reqs_imported[] = {
+    {"destroy", "", 0, true},
+    {"set_parent_of", "o", 0, false},
+};
 
 #define FC_IFACE(k, nm, ver, tbl)                                                    \
     [(k)] = {nm, ver, tbl, (uint16_t)(sizeof(tbl) / sizeof((tbl)[0]))}
@@ -612,6 +661,13 @@ static const fc_iface_desc fc_ifaces[FC_K_COUNT] = {
     FC_IFACE(FC_K_TABLET_SEAT, "zwp_tablet_seat_v2", 1, fc_reqs_tablet_seat),
     FC_IFACE(FC_K_TABLET, "zwp_tablet_v2", 1, fc_reqs_tablet),
     FC_IFACE(FC_K_TABLET_TOOL, "zwp_tablet_tool_v2", 1, fc_reqs_tablet_tool),
+    FC_IFACE(FC_K_ACTIVATION, "xdg_activation_v1", 1, fc_reqs_activation),
+    FC_IFACE(FC_K_ACTIVATION_TOKEN, "xdg_activation_token_v1", 1,
+             fc_reqs_activation_token),
+    FC_IFACE(FC_K_EXPORTER, "zxdg_exporter_v2", 1, fc_reqs_exporter),
+    FC_IFACE(FC_K_EXPORTED, "zxdg_exported_v2", 1, fc_reqs_exported),
+    FC_IFACE(FC_K_IMPORTER, "zxdg_importer_v2", 1, fc_reqs_importer),
+    FC_IFACE(FC_K_IMPORTED, "zxdg_imported_v2", 1, fc_reqs_imported),
 };
 
 #undef FC_IFACE
@@ -1170,8 +1226,7 @@ static inline bool fake_compositor_popup_record_at(fake_compositor *fc, size_t i
 }
 
 /* Clears the request log and popup-record table; object state is retained. */
-static inline void fake_compositor_clear(fake_compositor *fc) {
-    pthread_mutex_lock(&fc->state_lock);
+static inline void fake_compositor_clear(fake_compositor *fc) {    pthread_mutex_lock(&fc->state_lock);
     fc->request_count = 0;
     fc->request_overflow = false;
     fc->popup_count = 0;
@@ -2257,6 +2312,51 @@ static inline bool fake_compositor_primary_source_cancelled(fake_compositor *fc)
     return fc_send_empty(fc, source, 1);
 }
 
+/* ---------- xdg-activation-v1 ---------- */
+
+/* xdg_activation_token_v1.done (event opcode 0) delivers the exported token.
+ * Targets the newest live activation token. `token` is the opaque string the
+ * compositor hands back; tests pass a fixed 32-character value (or "" for the
+ * invalid-token path). Returns false when no token object is live. */
+static inline bool fake_compositor_activation_token_done(fake_compositor *fc,
+                                                        const char *token) {
+    uint32_t object = fc_live_id(fc, FC_K_ACTIVATION_TOKEN);
+    if (!object) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, token ? token : "");
+    return fc_send(fc, object, 0, &builder);
+}
+
+/* ---------- xdg-foreign-unstable-v2 ---------- */
+
+/* zxdg_exported_v2.handle (event opcode 0) delivers the opaque handle for the
+ * export. Targets the newest live exported object. */
+static inline bool fake_compositor_exported_handle(fake_compositor *fc,
+                                                  const char *handle) {
+    uint32_t object = fc_live_id(fc, FC_K_EXPORTED);
+    if (!object) {
+        return false;
+    }
+    fc_builder builder;
+    fc_b_reset(&builder);
+    fc_b_string(&builder, handle ? handle : "");
+    return fc_send(fc, object, 0, &builder);
+}
+
+/* zxdg_imported_v2.destroyed (event opcode 0) invalidates an import, e.g. an
+ * invalid handle or a destroyed export. Targets the newest live imported
+ * object; the client must still destroy the object afterwards. */
+static inline bool fake_compositor_imported_destroyed(fake_compositor *fc) {
+    uint32_t object = fc_live_id(fc, FC_K_IMPORTED);
+    if (!object) {
+        return false;
+    }
+    return fc_send_empty(fc, object, 0);
+}
+
 /* ---------- receive path ---------- */
 
 static inline void fc_fd_push_locked(fake_compositor *fc, int fd) {
@@ -3069,6 +3169,13 @@ static inline void fc_send_globals(fake_compositor *fc) {
     }
     if (fc->options & FC_OPT_TABLET) {
         (void)fc_send_global(fc, name++, "zwp_tablet_manager_v2", 1);
+    }
+    if (fc->options & FC_OPT_ACTIVATION) {
+        (void)fc_send_global(fc, name++, "xdg_activation_v1", 1);
+    }
+    if (fc->options & FC_OPT_FOREIGN) {
+        (void)fc_send_global(fc, name++, "zxdg_exporter_v2", 1);
+        (void)fc_send_global(fc, name++, "zxdg_importer_v2", 1);
     }
 }
 
