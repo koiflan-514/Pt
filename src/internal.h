@@ -1000,6 +1000,9 @@ typedef struct pt_widget {
     uint32_t span_count;
     pt_text_image *images;
     uint32_t image_count;
+    /* Capacity of the most recent allocation, recorded for introspection. The
+     * setter allocates exactly image_count entries; there is no reserve
+     * policy. */
     uint32_t image_capacity;
     int32_t preedit_cursor_begin;
     int32_t preedit_cursor_end;

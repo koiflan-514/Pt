@@ -332,16 +332,22 @@ pt_api bool pt_widget_get_text_span(const pt_widget *widget, uint32_t index,
  * validates each start against the current text (a non-U+FFFC entry is
  * dropped), sorts by start, keeps the last entry for a duplicate placeholder,
  * takes references to non-NULL images and drops NULL entries. NULL or count 0
- * is equivalent to pt_widget_clear_text_images. A text set or a text edit that
- * removes a placeholder releases its image. The setter marks layout dirty and
- * emits a structure-changed accessibility event. Since 2.3. */
+ * is equivalent to pt_widget_clear_text_images. After a successful call the
+ * previous table's image handles may have been released (unless the new table
+ * still refers to them), so the old descriptor array must not be reused to
+ * restore the old images. A text set or a text edit that removes a placeholder
+ * releases its image. The setter marks layout dirty and emits a
+ * structure-changed accessibility event. Since 2.3. */
 pt_api bool pt_widget_set_text_images(pt_widget *widget, const pt_text_image *images,
                                       uint32_t count);
 /* Since 2.3. */
 pt_api void pt_widget_clear_text_images(pt_widget *widget);
 /* Since 2.3. */
 pt_api uint32_t pt_widget_get_text_image_count(const pt_widget *widget);
-/* Copies one descriptor; the returned image handle is borrowed. Since 2.3. */
+/* Copies one descriptor. The returned image handle is borrowed from the
+ * widget: it is valid only while the side table is alive and the entry has not
+ * been replaced or cleared. To keep it longer, call pt_icon_image_ref on the
+ * handle (it returns the same pointer with one more reference). Since 2.3. */
 pt_api bool pt_widget_get_text_image(const pt_widget *widget, uint32_t index,
                                      pt_text_image *image);
 
