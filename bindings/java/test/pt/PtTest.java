@@ -432,6 +432,9 @@ public final class PtTest {
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
             MethodHandle wdLiveId = bindSymbol(lookup, "wd_live_id",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+            MethodHandle wdWaitObject = bindSymbol(lookup, "wd_wait_object",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
             MethodHandle wdGlobalBound = bindSymbol(lookup, "wd_global_bound",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
             MethodHandle wdRequestCount = bindSymbol(lookup, "wd_request_count",
@@ -485,6 +488,12 @@ public final class PtTest {
             check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire token done sync");
             check(tokenCalls[0] == 1, "2.4 token delivered once");
             check("java-token".equals(tokenSeen[0]), "2.4 token string delivered");
+            /* The token destroy is queued while the done event dispatches, so
+             * it only reaches the fake server on a later flush. Wait for the
+             * live table before injecting the late event. */
+            check((int) wdWaitObject.invokeExact(wireApp, 45, 0, 8) == 1
+                    && (int) wdLiveId.invokeExact(45) == 0,
+                    "2.4 token object destroyed before late done");
             check((int) wdTokenDone.invokeExact(arena.allocateFrom("late-token")) == 0,
                     "2.4 late token done is a no-op");
             check((int) wdSync.invokeExact(wireApp) == 0, "2.4 wire late token sync");

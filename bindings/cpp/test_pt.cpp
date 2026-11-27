@@ -94,6 +94,7 @@ const char *wd_error(void);
 int wd_sync(void *app);
 int wd_settle(void *app);
 int wd_wait_configured(void *app, void *window, int attempts);
+int wd_wait_object(void *app, uint32_t kind, int present, int attempts);
 uint32_t wd_toplevel_surface(void);
 uint32_t wd_live_id(uint32_t kind);
 int wd_global_bound(uint32_t kind);
@@ -865,7 +866,12 @@ void run_activation_foreign_wire_test() {
             check(token_probe.window == wire_window.get());
             check(token_probe.token == "cpp-token");
             /* The token object is gone after delivery, so a late done event is
-             * a no-op rather than a stale callback. */
+             * a no-op rather than a stale callback. The destroy request is
+             * queued while the done event dispatches, so it only reaches the
+             * server on a later flush: wait for the live table first, then
+             * inject the late event. */
+            check(wd_wait_object(wire_application.get(), 45, 0, 8) == 1 &&
+                  wd_live_id(45) == 0);
             check(wd_activation_token_done("late-token") == 0);
             check(wd_sync(wire_application.get()) == 0);
             check(token_probe.calls == 1);

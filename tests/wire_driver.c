@@ -90,6 +90,23 @@ int wd_wait_configured(void *app, void *window, int attempts) {
     return client_window->configured ? 1 : 0;
 }
 
+/* Roundtrips until the server's live table has (present != 0) or no longer has
+ * (present == 0) an object of `kind`, up to `max_roundtrips` times. A destroy
+ * request can be queued while a roundtrip dispatches events (for example a
+ * token.done handler that destroys the token), so it only reaches the server
+ * on the next flush; one sync is not enough to observe the result. Returns 1
+ * when the requested state is observed, 0 when the attempts run out, -1 on a
+ * wire failure. */
+int wd_wait_object(void *app, uint32_t kind, int present, int max_roundtrips) {
+    if (!app) {
+        return -1;
+    }
+    return fake_compositor_wait_object(&g_fc, (pt_app *)app, kind, present != 0,
+                                       max_roundtrips)
+               ? 1
+               : 0;
+}
+
 /* ---------- query ---------- */
 
 uint32_t wd_toplevel_surface(void) {
