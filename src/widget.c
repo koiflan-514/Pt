@@ -770,14 +770,22 @@ static void entry_delete_range(pt_widget *entry, size_t start, size_t end) {
     if (end > len) {
         end = len;
     }
+    /* A programmatic or IME range may land inside U+FFFC; editing is atomic, so
+     * widen it to the object edges instead of leaving a broken sequence. */
+    pt_widget_images_snap_range(entry, &start, &end);
     if (start >= end) {
         return;
     }
+    uint32_t images_before = entry->image_count;
     entry_history_push(entry);
     pt_widget_spans_on_delete(entry, start, end);
+    pt_widget_images_on_delete(entry, start, end);
     memmove(entry->text + start, entry->text + end, len - end + 1);
     entry->cursor = start;
     entry->selection_anchor = start;
+    if (images_before != entry->image_count) {
+        pt_widget_a11y_emit(entry, pt_a11y_event_structure_changed);
+    }
     entry_after_edit(entry);
 }
 
@@ -858,12 +866,20 @@ static void entry_insert_text(pt_widget *entry, const char *text) {
     size_t end = start;
     if (entry_has_selection(entry)) {
         entry_selection_range(entry, &start, &end);
+        pt_widget_images_snap_range(entry, &start, &end);
+    } else {
+        /* A defensive programmatic caret inside U+FFFC keeps the object whole:
+         * leading affinity resolves after the image, trailing before it. */
+        start = pt_widget_images_snap_position(
+            entry, start, entry->caret_affinity == pt_text_bias_leading);
+        end = start;
     }
     size_t removed = end - start;
     if (len - removed + out >= pt_entry_max_bytes) {
         free(sanitized);
         return;
     }
+    uint32_t images_before = entry->image_count;
     entry_history_push(entry);
     char *next = pt_alloc(len - removed + out + 1);
     memcpy(next, entry->text ? entry->text : "", start);
@@ -871,13 +887,18 @@ static void entry_insert_text(pt_widget *entry, const char *text) {
     memcpy(next + start + out, (entry->text ? entry->text : "") + end, len - end + 1);
     if (removed > 0) {
         pt_widget_spans_on_delete(entry, start, end);
+        pt_widget_images_on_delete(entry, start, end);
     }
     pt_widget_spans_on_insert(entry, start, out);
+    pt_widget_images_on_insert(entry, start, out);
     free(entry->text);
     entry->text = next;
     entry->cursor = start + out;
     entry->selection_anchor = entry->cursor;
     free(sanitized);
+    if (images_before != entry->image_count) {
+        pt_widget_a11y_emit(entry, pt_a11y_event_structure_changed);
+    }
     entry_after_edit(entry);
 }
 
@@ -974,16 +995,24 @@ static bool entry_ime_delete_selection(pt_widget *widget) {
     size_t start = 0;
     size_t end = 0;
     entry_selection_range(widget, &start, &end);
+    /* A selection endpoint may sit inside a placeholder; widen it so IME never
+     * splits the object before deleting it. */
+    pt_widget_images_snap_range(widget, &start, &end);
     if (start >= end) {
         return false;
     }
+    uint32_t images_before = widget->image_count;
     entry_ime_history_push(widget);
     size_t len = entry_length(widget);
     pt_widget_spans_on_delete(widget, start, end);
+    pt_widget_images_on_delete(widget, start, end);
     memmove(widget->text + start, widget->text + end, len - end + 1);
     widget->cursor = start;
     widget->selection_anchor = start;
     widget->caret_affinity = pt_text_bias_leading;
+    if (images_before != widget->image_count) {
+        pt_widget_a11y_emit(widget, pt_a11y_event_structure_changed);
+    }
     /* Quiet: composition callers notify once they finished touching the widget. */
     return true;
 }
@@ -1111,6 +1140,7 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
     size_t anchor = entry_cursor_clamped(widget, widget->selection_anchor);
     size_t selection_start = cursor < anchor ? cursor : anchor;
     size_t selection_end = cursor < anchor ? anchor : cursor;
+    pt_widget_images_snap_range(widget, &selection_start, &selection_end);
 
     size_t before_start = cursor;
     size_t after_end = cursor;
@@ -1119,8 +1149,12 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
         after_end = selection_end;
     }
     before_start = before_start > delete_before ? before_start - delete_before : 0;
+    /* An object edge wins over the byte snapping: a delete range that lands
+     * inside U+FFFC widens to the whole placeholder. */
+    before_start = pt_widget_images_snap_position(widget, before_start, false);
     before_start = entry_snap_forward(text, len, before_start);
     after_end = len - after_end > delete_after ? after_end + delete_after : len;
+    after_end = pt_widget_images_snap_position(widget, after_end, true);
     after_end = entry_snap_backward(text, after_end);
 
     entry_deletion ranges[3];
@@ -1186,11 +1220,14 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
     }
     memcpy(next + out, text + source, len - source + 1);
     free(insert);
+    uint32_t images_before = widget->image_count;
     for (size_t i = range_count; i > 0; --i) {
         pt_widget_spans_on_delete(widget, ranges[i - 1].start, ranges[i - 1].end);
+        pt_widget_images_on_delete(widget, ranges[i - 1].start, ranges[i - 1].end);
     }
     if (insert_len > 0) {
         pt_widget_spans_on_insert(widget, insert_at, insert_len);
+        pt_widget_images_on_insert(widget, insert_at, insert_len);
     }
     free(widget->text);
     widget->text = next;
@@ -1199,6 +1236,9 @@ bool pt_widget_ime_apply(pt_widget *widget, const char *commit, uint32_t delete_
     if (finalize) {
         entry_ime_clear_preedit(widget);
         entry_ime_end_composition(widget);
+    }
+    if (images_before != widget->image_count) {
+        pt_widget_a11y_emit(widget, pt_a11y_event_structure_changed);
     }
     entry_after_edit(widget);
     if (submit_cb && pt_widget_attached(window, widget)) {
@@ -1273,6 +1313,10 @@ bool pt_widget_text_selection_set(pt_widget *widget, uint32_t start, uint32_t en
         a = b;
         b = swap;
     }
+    /* Selection is atomic over an inline image: an endpoint that lands inside
+     * the three-byte placeholder snaps outward to the object edge, so the
+     * painted range is always one whole rectangle. */
+    pt_widget_images_snap_range(widget, &a, &b);
     widget->selection_anchor = a;
     widget->cursor = b;
     widget->selecting = false;
@@ -2640,14 +2684,10 @@ bool pt_text_area_insert_image(pt_widget *area, const pt_text_image *image,
     if (len - removed + 3u >= pt_entry_max_bytes) {
         return false;
     }
-    /* The normal text insertion path owns the history snapshot, span shift,
-     * text-changed event and on_change callback. The image table is updated
-     * afterwards because the history snapshot is text-only in this wave. */
+    /* The normal text insertion path owns the history snapshot, span and image
+     * shift hooks, text-changed event and on_change callback. Only the new
+     * descriptor is attached here. */
     entry_insert_text(area, "\xEF\xBF\xBC");
-    if (removed > 0) {
-        pt_widget_images_on_delete(area, at, end);
-    }
-    pt_widget_images_on_insert(area, at, 3);
     pt_widget_images_attach(area, at, image);
     pt_widget_a11y_emit(area, pt_a11y_event_structure_changed);
     if (start) {

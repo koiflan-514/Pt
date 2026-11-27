@@ -646,12 +646,17 @@ static void test_insert_rejections(pt_widget *root) {
     pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder "cd") == 0);
     pt_check(pt_widget_get_text_image_count(area) == 1);
 
-    /* A selection endpoint inside the placeholder is rejected too. */
+    /* W3c makes a selection atomic: an endpoint that lands inside the
+     * placeholder snaps outward, so the whole object is selected and the
+     * insert helper replaces it instead of splitting its bytes. */
     pt_text_area_set_selection(area, 0, 3);
-    pt_check(!pt_text_area_insert_image(area, &entry, &start));
-    pt_text_area_set_selection(area, 0, 4);
-    pt_check(!pt_text_area_insert_image(area, &entry, &start));
-    pt_check(strcmp(pt_widget_get_text(area), "ab" placeholder "cd") == 0);
+    uint32_t snap_start = 1;
+    uint32_t snap_end = 1;
+    pt_check(pt_text_area_get_selection(area, &snap_start, &snap_end));
+    pt_check(snap_start == 0 && snap_end == 5);
+    pt_check(pt_text_area_insert_image(area, &entry, &start));
+    pt_check(start == 0);
+    pt_check(strcmp(pt_widget_get_text(area), placeholder "cd") == 0);
     pt_check(pt_widget_get_text_image_count(area) == 1);
     pt_text_area_set_selection(area, 5, 5);
 

@@ -206,6 +206,45 @@ void pt_widget_images_attach(pt_widget *widget, size_t start, const pt_text_imag
     ++widget->image_count;
 }
 
+/* ---------- atomic position snapping ---------- */
+
+static const pt_text_image *image_containing(const pt_widget *widget, size_t position) {
+    if (!widget || widget->image_count == 0) {
+        return NULL;
+    }
+    for (uint32_t i = 0; i < widget->image_count; ++i) {
+        size_t start = widget->images[i].start;
+        if (position > start && position < start + pt_image_placeholder_bytes) {
+            return &widget->images[i];
+        }
+    }
+    return NULL;
+}
+
+size_t pt_widget_images_snap_position(const pt_widget *widget, size_t position, bool toward_end) {
+    const pt_text_image *image = image_containing(widget, position);
+    if (!image) {
+        return position;
+    }
+    return toward_end ? (size_t)image->start + pt_image_placeholder_bytes
+                      : (size_t)image->start;
+}
+
+void pt_widget_images_snap_range(const pt_widget *widget, size_t *start, size_t *end) {
+    if (!widget || !start || !end || *start >= *end) {
+        return;
+    }
+    size_t a = pt_widget_images_snap_position(widget, *start, false);
+    size_t b = pt_widget_images_snap_position(widget, *end, true);
+    if (a > b) {
+        size_t swap = a;
+        a = b;
+        b = swap;
+    }
+    *start = a;
+    *end = b;
+}
+
 /* ---------- edit hooks ---------- */
 
 void pt_widget_images_on_insert(pt_widget *widget, size_t position, size_t length) {

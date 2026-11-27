@@ -435,6 +435,19 @@ void pt_widget_images_on_insert(pt_widget *widget, size_t position, size_t lengt
 void pt_widget_images_on_delete(pt_widget *widget, size_t start, size_t end);
 void pt_widget_images_attach(pt_widget *widget, size_t start, const pt_text_image *image);
 void pt_widget_images_clamp(pt_widget *widget);
+/* Snaps a byte position strictly inside a three-byte placeholder outward to the
+ * object edge: `toward_end` selects the end, otherwise the start. A position on
+ * a boundary or outside every image is returned unchanged. */
+size_t pt_widget_images_snap_position(const pt_widget *widget, size_t position, bool toward_end);
+/* Snaps a half-open range outward so it either contains a placeholder whole or
+ * not at all. No-op for an empty or invalid range. */
+void pt_widget_images_snap_range(const pt_widget *widget, size_t *start, size_t *end);
+/* Copies [start, end) with each fully contained descriptor replaced by its alt
+ * text (an empty alt keeps the raw U+FFFC); a partial overlap, defensive only,
+ * emits U+FFFC rather than dropping the object. Returns an allocated UTF-8
+ * string, or NULL for an empty range. */
+char *pt_widget_images_copy_text(const pt_widget *widget, size_t start, size_t end,
+                                 size_t *out_length);
 bool pt_text_runs_build(const pt_widget *widget, const pt_layout_ctx *ctx, pt_text_runs *out);
 /* Resolved paragraph base for single-line text without running the full UBA:
  * explicit/auto widget text direction, then P2 first strong, then the resolved
