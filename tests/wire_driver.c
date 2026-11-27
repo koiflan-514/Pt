@@ -120,6 +120,20 @@ int wd_pending_fd_count(void) {
     return fake_compositor_pending_fd_count(&g_fc);
 }
 
+/* ---------- injected 2.4 protocol events ---------- */
+
+/* xdg_activation_token_v1.done: delivers the opaque token the compositor
+ * generated. Returns 0 when the client has no live token object. */
+int wd_activation_token_done(const char *token) {
+    return fake_compositor_activation_token_done(&g_fc, token) ? 1 : 0;
+}
+
+/* zxdg_exported_v2.handle: delivers the opaque handle for the export.
+ * Returns 0 when the client has no live exported object. */
+int wd_exported_handle(const char *handle) {
+    return fake_compositor_exported_handle(&g_fc, handle) ? 1 : 0;
+}
+
 /* ---------- injected keyboard events ---------- */
 
 void wd_keyboard_enter(uint32_t serial, uint32_t surface) {

@@ -2915,6 +2915,8 @@ def _load_wire_driver() -> Any:
         "wd_request_count": (ctypes.c_int, [ctypes.c_uint32, ctypes.c_uint32]),
         "wd_request_overflowed": (ctypes.c_int, []),
         "wd_pending_fd_count": (ctypes.c_int, []),
+        "wd_activation_token_done": (ctypes.c_int, [ctypes.c_char_p]),
+        "wd_exported_handle": (ctypes.c_int, [ctypes.c_char_p]),
         "wd_keyboard_enter": (None, [ctypes.c_uint32, ctypes.c_uint32]),
         "wd_keyboard_leave": (None, [ctypes.c_uint32, ctypes.c_uint32]),
         "wd_keyboard_key": (None, [ctypes.c_uint32, ctypes.c_uint32,
@@ -3178,15 +3180,11 @@ class ActivationForeignBindingTests(unittest.TestCase):
 class ActivationForeignWireTests(unittest.TestCase):
     """2.4 wave over a fake compositor that advertises activation and foreign.
 
-    The token/handle delivery test needs the wire driver to forward the two
-    compositor events. tests/wire_driver.c does not yet export those helpers,
-    so the class probes for them and skips the delivery cases with a clear
-    message while still exercising the request path and rejection rules.
+    tests/wire_driver.c forwards the compositor's token-done and exported-handle
+    events, so these cases drive the real delivery path end to end: wire event
+    reaches libpt.so, the C layer hands the borrowed string to the Python
+    trampoline, and the binding copies it into an owned str.
     """
-
-    # Optional driver helpers; absent until tests/wire_driver.c forwards them.
-    _TOKEN_DONE = "wd_activation_token_done"
-    _EXPORTED_HANDLE = "wd_exported_handle"
 
     def setUp(self) -> None:
         self._headless = os.environ.pop("PT_HEADLESS", None)
@@ -3214,18 +3212,6 @@ class ActivationForeignWireTests(unittest.TestCase):
     def _sync(self) -> None:
         self.assertEqual(self.driver.wd_sync(self.app.raw), 0)
 
-    def _driver_helper(self, name: str, restype: Any, *argtypes: Any) -> Any:
-        """Binds an optional driver export or skips when it is absent."""
-        try:
-            function = getattr(self.driver, name)
-        except AttributeError:
-            self.skipTest(
-                f"wire driver does not export {name}; "
-                "tests/wire_driver.c must forward the 2.4 compositor events")
-        function.restype = restype
-        function.argtypes = list(argtypes)
-        return function
-
     def test_24_globals_bound(self) -> None:
         driver = self.driver
         self.assertEqual(driver.wd_global_bound(_FC_K_ACTIVATION), 1)
@@ -3234,8 +3220,6 @@ class ActivationForeignWireTests(unittest.TestCase):
 
     def test_24_activation_token_dispatch(self) -> None:
         driver = self.driver
-        token_done = self._driver_helper(
-            self._TOKEN_DONE, ctypes.c_int, ctypes.c_char_p)
         tokens: list[str] = []
         self.assertTrue(self.window.request_activation_token(
             "pt.tests.outer", lambda _w, token: tokens.append(token)))
@@ -3245,20 +3229,19 @@ class ActivationForeignWireTests(unittest.TestCase):
             driver.wd_request_count(_FC_K_ACTIVATION, 1), 1)  # get_activation_token
         self.assertNotEqual(driver.wd_live_id(_FC_K_ACTIVATION_TOKEN), 0)
         self.assertEqual(tokens, [])
-        self.assertEqual(token_done(b"outer-token"), 1)
+        self.assertEqual(driver.wd_activation_token_done(b"outer-token"), 1)
         self._sync()
         # The borrowed bytes were copied into an owned Python string.
         self.assertEqual(tokens, ["outer-token"])
         self.assertFalse(driver.wd_error())
 
     def test_24_activation_token_borrow_copied(self) -> None:
-        token_done = self._driver_helper(
-            self._TOKEN_DONE, ctypes.c_int, ctypes.c_char_p)
+        driver = self.driver
         kept: list[str] = []
         self.assertTrue(self.window.request_activation_token(
             None, lambda _w, token: kept.append(token)))
         self._sync()
-        self.assertEqual(token_done(b"borrow-token"), 1)
+        self.assertEqual(driver.wd_activation_token_done(b"borrow-token"), 1)
         self._sync()
         self.assertEqual(len(kept), 1)
         gc.collect()
@@ -3270,21 +3253,20 @@ class ActivationForeignWireTests(unittest.TestCase):
         self.assertTrue(self.window.request_activation_token(
             None, lambda _w, token: second.append(token)))
         self._sync()
-        self.assertEqual(token_done(b"second-token"), 1)
+        self.assertEqual(driver.wd_activation_token_done(b"second-token"), 1)
         self._sync()
         self.assertEqual(kept, ["borrow-token"])
         self.assertEqual(second, ["second-token"])
 
     def test_24_activation_invalid_token(self) -> None:
-        token_done = self._driver_helper(
-            self._TOKEN_DONE, ctypes.c_int, ctypes.c_char_p)
+        driver = self.driver
         tokens: list[str] = []
         self.assertTrue(self.window.request_activation_token(
             None, lambda _w, token: tokens.append(token)))
         self._sync()
         # An empty token means the compositor returned no usable token; it is
         # delivered as "" rather than None.
-        self.assertEqual(token_done(b""), 1)
+        self.assertEqual(driver.wd_activation_token_done(b""), 1)
         self._sync()
         self.assertEqual(tokens, [""])
 
@@ -3301,8 +3283,6 @@ class ActivationForeignWireTests(unittest.TestCase):
 
     def test_24_foreign_export_dispatch_and_release(self) -> None:
         driver = self.driver
-        exported = self._driver_helper(
-            self._EXPORTED_HANDLE, ctypes.c_int, ctypes.c_char_p)
         handles: list[str] = []
         self.assertTrue(self.window.export_foreign_handle(
             lambda _w, handle: handles.append(handle)))
@@ -3310,7 +3290,7 @@ class ActivationForeignWireTests(unittest.TestCase):
         self.assertEqual(driver.wd_request_count(_FC_K_EXPORTER, 1), 1)  # export_toplevel
         self.assertNotEqual(driver.wd_live_id(_FC_K_EXPORTED), 0)
         self.assertEqual(handles, [])
-        self.assertEqual(exported(b"exported-handle"), 1)
+        self.assertEqual(driver.wd_exported_handle(b"exported-handle"), 1)
         self._sync()
         self.assertEqual(handles, ["exported-handle"])
         # unexport destroys the object; a second unexport is a no-op.
@@ -3323,8 +3303,6 @@ class ActivationForeignWireTests(unittest.TestCase):
 
     def test_24_foreign_re_export_replaces(self) -> None:
         driver = self.driver
-        exported = self._driver_helper(
-            self._EXPORTED_HANDLE, ctypes.c_int, ctypes.c_char_p)
         first: list[str] = []
         second: list[str] = []
         self.assertTrue(self.window.export_foreign_handle(
@@ -3340,7 +3318,7 @@ class ActivationForeignWireTests(unittest.TestCase):
         self.assertNotEqual(second_id, 0)
         self.assertNotEqual(second_id, first_id)
         # Only the current export's callback receives the handle.
-        self.assertEqual(exported(b"second-handle"), 1)
+        self.assertEqual(driver.wd_exported_handle(b"second-handle"), 1)
         self._sync()
         self.assertEqual(first, [])
         self.assertEqual(second, ["second-handle"])
